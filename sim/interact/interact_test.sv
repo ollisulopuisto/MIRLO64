@@ -1,6 +1,6 @@
 // The interact side of mirlo_regs (rtl/soc/mirlo_regs.sv) under Icarus: the Pocket's writes of the core's settings -- the two slots'
-// fields (2-15) and the controller remap table (16-46) with its two actions (47) -- and what the CPU reads of them (INTERACT0-7),
-// against a model of the packing written here from docs/control.md.   sim/interact/run.sh
+// fields (2-15), the controller remap editor (16-20) and its actions (21) -- and what the CPU reads of them (INTERACT0-2), against a
+// model of the packing written here from docs/control.md.   sim/interact/run.sh
 `timescale 1ns/1ps
 module interact_test;
     `include "mirlo_regs.svh"
@@ -54,88 +54,78 @@ module interact_test;
         @(negedge clk); r_req = 1; r_we = 1; r_addr = addr; r_wdata = data;
         @(negedge clk); r_req = 0; r_we = 0;
     endtask
-    // the model: field f of the table (bus word 16 + f) is bits [5(f%6)+4 : 5(f%6)] of INTERACT2 + f/6 (docs/control.md)
-    logic [4:0] model [0:30];
-    function logic [31:0] packed_word(input int w);
-        packed_word = 0;
-        for (int i = 0; i < 6; i++) if (6 * w + i <= 30) packed_word |= 32'(model[6 * w + i]) << (5 * i);
+    // the model: bus words 16-20 are five-bit fields (layer, key, gives, or, Controls) in INTERACT2 [4:0], [9:5], [14:10], [19:15], [24:20];
+    // word 21 flips INTERACT2 [28] (value bit 0) and [29] (value bit 1)
+    logic [4:0]  model [0:4];
+    logic        act_a = 0, act_b = 0;
+    function logic [31:0] expected();
+        expected = 0;
+        for (int i = 0; i < 5; i++) expected |= 32'(model[i]) << (5 * i);
+        expected |= 32'(act_a) << 28 | 32'(act_b) << 29;
     endfunction
-    task check_table(input string when);
+    task check_regs(input string when);
         logic [31:0] q;
-        for (int w = 0; w < 5; w++) begin
-            csr_read(R_APF_INTERACT_INTERACT2 + 16'(4 * w), q);
-            check($sformatf("%s: INTERACT%0d", when, 2 + w), q, packed_word(w));
-        end
-        csr_read(R_APF_INTERACT_INTERACT7, q);
-        check($sformatf("%s: INTERACT7 controls", when), q & 32'h1F, 32'(model[30]));
+        csr_read(R_APF_INTERACT_INTERACT2, q);
+        check({when, ": INTERACT2"}, q, expected());
     endtask
 
     logic [31:0] q;
     initial begin
-        for (int i = 0; i <= 30; i++) model[i] = 0;
+        for (int i = 0; i < 5; i++) model[i] = 0;
         repeat (3) @(negedge clk);
         rst = 0;
         @(negedge clk);
-        // after reset: the table, the actions and the slots are 0
-        check_table("reset");
-        csr_read(R_APF_INTERACT_INTERACT7, q); check("reset: INTERACT7", q, 0);
+        check_regs("reset");
         csr_read(R_APF_INTERACT_INTERACT0, q); check("reset: INTERACT0", q, 0);
 
-        // every field of the table, a distinct value each (bits above [4:0] are ignored)
-        for (int f = 0; f <= 30; f++) begin
-            model[f] = 5'((f * 7 + 3) % 32);
+        // every field, a distinct value each (bits above [4:0] are ignored)
+        for (int f = 0; f < 5; f++) begin
+            model[f] = 5'(f * 7 + 3);
             ia_write(6'(16 + f), 32'hFFFF_FFE0 | 32'(model[f]));
         end
-        check_table("31 fields written");
-        // one field rewritten: only it changes
-        model[13] = 5'd30; ia_write(6'(16 + 13), 32'd30);
-        check_table("field 13 rewritten");
-        // words 48-63 are nobody's: nothing changes (the select is address[5] ^ address[4])
-        for (int w = 48; w < 64; w++) ia_write(6'(w), 32'h1F);
-        check_table("words 48-63 written");
-        // the CPU cannot write the table
+        check_regs("five fields written");
+        model[3] = 5'd31; ia_write(19, 32'd31);
+        check_regs("field 3 rewritten");
+        // words 22-63 are nobody's, and 21 is the actions': the fields do not change
+        for (int w = 22; w < 64; w++) ia_write(6'(w), 32'h1F);
+        check_regs("words 22-63 written");
+        // the CPU cannot write it
         csr_write(R_APF_INTERACT_INTERACT2, 32'hFFFF_FFFF);
-        csr_write(R_APF_INTERACT_INTERACT7, 32'hFFFF_FFFF);
-        check_table("CPU writes to INTERACT2 and 7");
-        csr_read(R_APF_INTERACT_INTERACT7, q); check("CPU write: no action bits", q & 32'h300, 0);
+        check_regs("CPU write to INTERACT2");
 
-        // the actions: 1 flips SAVE (bit 8), 2 flips FORGET (bit 9), in the value's low five bits as every field's; other values do
-        // nothing; the Controls field is untouched
-        ia_write(47, 1); csr_read(R_APF_INTERACT_INTERACT7, q); check("save pressed", q, 32'h100 | 32'(model[30]));
-        ia_write(47, 2); csr_read(R_APF_INTERACT_INTERACT7, q); check("forget pressed", q, 32'h300 | 32'(model[30]));
-        ia_write(47, 1); csr_read(R_APF_INTERACT_INTERACT7, q); check("save pressed again", q, 32'h200 | 32'(model[30]));
-        ia_write(47, 3); ia_write(47, 0); ia_write(47, 32'h20);
-        csr_read(R_APF_INTERACT_INTERACT7, q); check("other values written to 47", q, 32'h200 | 32'(model[30]));
-        ia_write(47, 2); csr_read(R_APF_INTERACT_INTERACT7, q); check("forget pressed again", q, 32'(model[30]));
-        check_table("after the actions");
+        // the actions: bit 0 of the value flips A (Apply), bit 1 flips B (Save); 3 flips both (Forget); 0 and the higher bits nothing
+        ia_write(21, 1); act_a = !act_a; check_regs("apply pressed");
+        ia_write(21, 2); act_b = !act_b; check_regs("save pressed");
+        ia_write(21, 3); act_a = !act_a; act_b = !act_b; check_regs("forget pressed");
+        ia_write(21, 1); act_a = !act_a; check_regs("apply pressed again");
+        ia_write(21, 0); ia_write(21, 32'h1C); check_regs("other values written to 21");
+        ia_write(21, 32'hFFFF_FFFD); act_a = !act_a; check_regs("a value with bit 0 set, bit 1 clear");
 
         // the Pocket reads none of 16-47 back (every entry is writeonly): 0
         for (int w = 16; w < 48; w++) begin ia_read(6'(w), q); check($sformatf("ia_q of word %0d", w), q, 0); end
 
-        // the legacy fields still work as before: Crop Vertical (3), the old C-layer bit (14), Show FPS (15), and their readback
+        // the legacy fields still work as before: Crop Vertical (3), Crop Right (5), Show FPS (15), and their readback
         ia_write(3, 8);  check("crop_v", 32'(ia_crop_v), 8);
         ia_write(5, 1);  check("crop_r", 32'(ia_crop_r), 1);
-        ia_write(14, 1); ia_write(15, 1); check("fps_en", 32'(ia_fps_en), 1);
+        ia_write(15, 1); check("fps_en", 32'(ia_fps_en), 1);
         ia_write(15, 0); check("fps_en off", 32'(ia_fps_en), 0);
         ia_read(3, q);  check("ia_q of field 3", q, 8);
-        ia_read(14, q); check("ia_q of field 14", q, 1);
         ia_write(4, 6);                                           // Modifier = Select
         csr_read(R_APF_INTERACT_INTERACT0, q); check("INTERACT0 fields", q, 32'd6 << 10 | 32'd8 << 5 | 32'd1 << 15);
-        csr_read(R_APF_INTERACT_INTERACT1, q); check("INTERACT1 fields", q, 32'd1 << 24);
         // a whole-slot write sets CHANGED, the CPU's read of the slot clears it
         ia_write(1, 32'h0123_4567);
         csr_read(R_APF_INTERACT_INTERACT_CHANGED1, q); check("CHANGED1 set", q, 1);
         csr_read(R_APF_INTERACT_INTERACT1, q);         check("INTERACT1 whole", q, 32'h0123_4567);
         csr_read(R_APF_INTERACT_INTERACT_CHANGED1, q); check("CHANGED1 cleared", q, 0);
         ia_read(1, q); check("ia_q of slot 1", q, 32'h0123_4567);
-        check_table("after the legacy fields");                   // (the slots and the table do not touch each other)
+        check_regs("after the legacy fields");                    // (the slots and the editor do not touch each other)
 
         // reset clears everything
-        ia_write(47, 1);
+        ia_write(21, 1);
         @(negedge clk); rst = 1; @(negedge clk); rst = 0; @(negedge clk);
-        for (int i = 0; i <= 30; i++) model[i] = 0;
-        check_table("second reset");
-        csr_read(R_APF_INTERACT_INTERACT7, q); check("second reset: INTERACT7", q, 0);
+        for (int i = 0; i < 5; i++) model[i] = 0;
+        act_a = 0; act_b = 0;
+        check_regs("second reset");
         csr_read(R_APF_INTERACT_INTERACT0, q); check("second reset: INTERACT0", q, 0);
 
         if (errors) begin $display("interact_test: FAIL (%0d)", errors); $finish(1); end

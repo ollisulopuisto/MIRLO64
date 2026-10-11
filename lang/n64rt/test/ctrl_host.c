@@ -15,6 +15,10 @@ int main(int argc, char **argv)
             n64rt_ctrl_preset(f, &c);
             printf("%u %x %x %x %x %x %x %x %x\n", f, c.set0, c.set1, c.m1, c.map[0], c.map[1], c.map[2], c.map[3], c.map[4]);
         }
+    } else if (argc == 6 && !strcmp(argv[1], "edit")) {            /* edit layer key gives special -> the changed flag and the table, from a zero one */
+        n64rt_ctrl_t c = { 0 };
+        const int r = n64rt_ctrl_edit(&c, (unsigned)atoi(argv[2]), (unsigned)atoi(argv[3]), (unsigned)atoi(argv[4]), (unsigned)atoi(argv[5]));
+        printf("%d %x %x %x %x %x\n", r, c.map[0], c.map[1], c.map[2], c.map[3], c.map[4]);
     } else if (argc == 3 && !strcmp(argv[1], "family")) {
         printf("%d\n", n64rt_ctrl_family((const unsigned char *)argv[2]));
     } else if (argc >= 9 && !strcmp(argv[1], "record")) {

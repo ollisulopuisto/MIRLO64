@@ -7,10 +7,10 @@
  * 30 fields (map[5]). Every other setting (crops, pak, Show FPS) stays the menu's. A family sets the Modifier and the table (and "C buttons"
  * where it says so), not "Stick" or "D-pad": the menu's choice of which analog stick moves stays; a game's saved layout has all of them.
  *
- * "Controls" (INTERACT7 [4:0], interact.json's first controller entry): 0 Menu (the menu's own table, as the Pocket wrote it), 1 Auto
+ * "Controls" (INTERACT2 [24:20], interact.json's first controller entry): 0 Menu (the live table: the menu's Remap entries edit it), 1 Auto
  * (the game's saved layout, else the family it is in, else the menu), 2.. a family, whatever the game: 2 Standard, 3 Platformer /
- * adventure, 4 Shooter, 5 Skate, 6 Racing, 7 Fighter; anything else the menu. The two actions: 1 save the menu's layout for this game,
- * 2 forget it. */
+ * adventure, 4 Shooter, 5 Skate, 6 Racing, 7 Fighter; anything else the menu. The actions: Apply (the editor's choice into the live table),
+ * Save (the live table and the menu's settings for this game), Forget. */
 #ifndef N64RT_CTRL_H
 #define N64RT_CTRL_H
 #include <stdint.h>
@@ -173,6 +173,31 @@ static inline const n64rt_ctrl_t *n64rt_ctrl_select(unsigned src, const n64rt_ct
     }
     if (src >= 2u && src < 2u + N64RT_FAMILIES) { n64rt_ctrl_preset(src - 2u, tmp); return tmp; }
     return 0;
+}
+/* ---- the menu's editor: five entries (interact.json has 16 at most) choose one field of the table and what to put in it ----
+ * layer 0 Base, 1 Held; key 0-14: A, B, X, Y, L, R, ZL, ZR, Select, Start, L3, R3, then the groups D-pad keys, Left stick, Right stick;
+ * gives (a key's output): 0 default, 31 none, 1-14 the outputs (A, B, Z, Start, L, R, C-up/down/left/right, D-up/down/left/right);
+ * special: 0 use "gives" (for a group: 0 default / 31 none only), 1 same as Base (the Held layer), 2 Stick, 3 Half stick, 4 N64 D-pad,
+ * 5 C buttons (the groups only). -> 1 if the table changed, 0 if the choice means nothing (a key with a group's target, "same as Base" in the
+ * Base layer, a group with a key's output) and nothing was written. */
+static inline int n64rt_ctrl_edit(n64rt_ctrl_t *c, unsigned layer, unsigned key, unsigned gives, unsigned special)
+{
+    if (layer > 1u || key >= 15u) return 0;
+    const unsigned f = (layer ? F_HELD : 0u) + key;
+    uint32_t v;
+    if (key >= F_DPAD) {                                /* a group: 0 settings, 1 stick, 2 half, 3 D-pad, 4 C buttons, 5 none, 6 same */
+        if (special == 1u) { if (!layer) return 0; v = G_SAME; }
+        else if (special >= 2u && special <= 5u) v = special - 1u;
+        else if (special == 0u && gives == O_DFLT) v = G_SETTINGS;
+        else if (special == 0u && gives == O_NONE) v = G_NONE;
+        else return 0;
+    } else {                                            /* a key: an output, or 15 (same as Base) */
+        if (special == 1u) { if (!layer) return 0; v = O_SAME; }
+        else if (special == 0u && (gives == O_DFLT || gives == O_NONE || (gives >= O_A && gives <= O_DR))) v = gives;
+        else return 0;
+    }
+    c->map[f / 6u] = (c->map[f / 6u] & ~(31u << (5u * (f % 6u)))) | (v << (5u * (f % 6u)));
+    return 1;
 }
 /* the settings the pad mapping reads: the menu's words with the layout's parts put in */
 static inline void n64rt_ctrl_apply(const n64rt_ctrl_t *c, uint32_t *set0, uint32_t *set1, uint32_t map[5])

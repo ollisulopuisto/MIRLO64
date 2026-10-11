@@ -187,35 +187,28 @@ end
 // Show FPS uses slot 1 bit 25 (field 15).
 logic [31:0] ia0, ia1;
 logic        ia_ch0, ia_ch1;
-// The controller remap table: interact bus words 16-46 are 31 five-bit fields (the Pocket writes each, never the CPU, and reads
-// none back: every entry of interact.json is writeonly, so ia_q is 0 for them). Word 47 is the Pocket's two actions (save, forget
-// this game's controls): a write of 1 flips ia_save, of 2 ia_forget, and the CPU compares the two bits with the ones it saw.
-// The index is wiring, not arithmetic: words 16-31 are {0, address[3:0]}, 32-47 {1, address[3:0]}. (Entry 31 is written by
-// word 47 and never read: synthesis drops it.)
-logic [4:0]  iaf [32];
-logic        ia_save, ia_forget;
-wire         iaf_sel = ia_address[5] ^ ia_address[4];
-wire  [4:0]  iaf_n   = {ia_address[5], ia_address[3:0]};
-wire  [31:0] iaw0 = {2'd0, iaf[5],  iaf[4],  iaf[3],  iaf[2],  iaf[1],  iaf[0]};
-wire  [31:0] iaw1 = {2'd0, iaf[11], iaf[10], iaf[9],  iaf[8],  iaf[7],  iaf[6]};
-wire  [31:0] iaw2 = {2'd0, iaf[17], iaf[16], iaf[15], iaf[14], iaf[13], iaf[12]};
-wire  [31:0] iaw3 = {2'd0, iaf[23], iaf[22], iaf[21], iaf[20], iaf[19], iaf[18]};
-wire  [31:0] iaw4 = {2'd0, iaf[29], iaf[28], iaf[27], iaf[26], iaf[25], iaf[24]};
-wire  [31:0] iaw5 = {22'd0, ia_forget, ia_save, 3'd0, iaf[30]};
+// The controller remap editor (interact.json has 16 entries at most, so the table is not one entry per field: the runtime keeps it in
+// RAM, and the Pocket writes what to change): bus words 16-20 are five-bit fields (layer, key, gives, special, and the "Controls"
+// source); word 21 is the Pocket's actions -- a write flips ia_act_a with bit 0 set (Apply), ia_act_b with bit 1 (Save; both: Forget) --
+// and the CPU compares the two bits with the ones it saw. Nothing is read back by the Pocket (every entry is writeonly: ia_q is 0).
+logic [4:0]  iaf [5];
+logic        ia_act_a, ia_act_b;
+wire         iaf_sel = ia_address[5:3] == 3'b010 && ia_address[2:0] < 3'd5;          // words 16-20
+wire  [31:0] iaw0 = {2'd0, ia_act_b, ia_act_a, 3'd0, iaf[4], iaf[3], iaf[2], iaf[1], iaf[0]};
 assign ia_crop_v = ia0[9:5];
 assign ia_crop_r = ia0[16:15];
 assign ia_fps_en = ia1[25];
 always_ff @(posedge clk) begin
-    if (rst) begin ia0 <= 0; ia1 <= 0; ia_ch0 <= 0; ia_ch1 <= 0; for (int i = 0; i < 32; i++) iaf[i] <= 5'd0; ia_save <= 0; ia_forget <= 0; end
+    if (rst) begin ia0 <= 0; ia1 <= 0; ia_ch0 <= 0; ia_ch1 <= 0; for (int i = 0; i < 5; i++) iaf[i] <= 5'd0; ia_act_a <= 0; ia_act_b <= 0; end
     else begin
         if (wr && a == R_APF_INTERACT_INTERACT0) ia0 <= r_wdata;
         if (wr && a == R_APF_INTERACT_INTERACT1) ia1 <= r_wdata;
         if (rd && a == R_APF_INTERACT_INTERACT0) ia_ch0 <= 0;
         if (rd && a == R_APF_INTERACT_INTERACT1) ia_ch1 <= 0;
-        if (ia_wr && iaf_sel) iaf[iaf_n] <= ia_data[4:0];
-        if (ia_wr && ia_address == 6'd47) begin
-            if (ia_data[4:0] == 5'd1) ia_save <= !ia_save;
-            if (ia_data[4:0] == 5'd2) ia_forget <= !ia_forget;
+        if (ia_wr && iaf_sel) iaf[ia_address[2:0]] <= ia_data[4:0];
+        if (ia_wr && ia_address == 6'd21) begin
+            if (ia_data[0]) ia_act_a <= !ia_act_a;
+            if (ia_data[1]) ia_act_b <= !ia_act_b;
         end
         if (ia_wr) case (ia_address)
             6'd0:  begin ia0 <= ia_data; ia_ch0 <= 1; end
@@ -408,11 +401,6 @@ always_ff @(posedge clk) begin
     R_APF_INTERACT_INTERACT1:           r_rdata <= ia1;
     R_APF_INTERACT_INTERACT_CHANGED1:   r_rdata <= {31'd0, ia_ch1};
     R_APF_INTERACT_INTERACT2:           r_rdata <= iaw0;
-    R_APF_INTERACT_INTERACT3:           r_rdata <= iaw1;
-    R_APF_INTERACT_INTERACT4:           r_rdata <= iaw2;
-    R_APF_INTERACT_INTERACT5:           r_rdata <= iaw3;
-    R_APF_INTERACT_INTERACT6:           r_rdata <= iaw4;
-    R_APF_INTERACT_INTERACT7:           r_rdata <= iaw5;
     R_APF_VIDEO_VIDEO:                  r_rdata <= {vb_count, vb_trig, vb_d};
     R_CTRL_SCRATCH:                     r_rdata <= scratch;
     R_CTRL_BUS_ERRORS:                  r_rdata <= {16'd0, bus_errors};

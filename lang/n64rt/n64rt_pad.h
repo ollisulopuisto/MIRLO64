@@ -5,8 +5,8 @@
  * buttons give, the runtime only sees these bits), the stick bytes are its four joystick bytes (left X, left Y, right X,
  * right Y, from the low byte up) and the settings are the two words of APF_INTERACT, as interact.json
  * (pkg/pocket/Cores/tortuga.Mirlo64/interact.json) writes them -- a field at a time, at the addresses 0x1000_0100 + 4 x n --
- * and the remap table (below), read from the five words INTERACT2..INTERACT6 (n64rt_ctrl.h picks which layout the settings and the table
- * are: the menu's, a game's own or a family's):
+ * and the remap table (below), five words the runtime keeps in RAM (the Pocket's menu has 16 entries at most: it edits the table one field at
+ * a time, n64rt_ctrl.h; which layout the settings and the table are -- the live one, a game's own or a family's -- is picked there):
  *
  *   word 0 [4:0]    n=2  "Controller 1 pak": n64rt_pak.c
  *          [9:5]    n=3  "Crop Vertical" (the video: rtl/soc/mirlo_regs.sv)
@@ -23,8 +23,8 @@
  *
  * A button code (the Modifier) is 0 none, 1 the Pocket's L, 2 R, 3 ZL (L2), 4 ZR (R2), 6 Select, anything else none.
  *
- * THE REMAP TABLE: 30 five-bit fields at the interact bus words 16 + f, six to a word (field f is bits [5(f%6)+4:5(f%6)] of
- * word f/6, the words being INTERACT2..INTERACT6, map[0..4] here). Two layers: Base (the Modifier key not held, or no Modifier)
+ * THE REMAP TABLE: 30 five-bit fields, six to a word (field f is bits [5(f%6)+4:5(f%6)] of
+ * word f/6, map[0..4] here). Two layers: Base (the Modifier key not held, or no Modifier)
  * and Held (held):
  *   fields 0-11   Base layer, one per key:  A, B, X, Y, L, R, ZL, ZR, Select, Start, L3, R3 (the Pocket's keys; L is KEY_L1,
  *                 ZL KEY_L2; L3, R3 only on a dock pad)
@@ -157,7 +157,7 @@ static inline uint32_t n64rt_pad_gsel(const uint32_t *map, unsigned g, int held,
     }
     return sel > 4u ? 5u : sel;
 }
-/* k: the key word, j: the four stick bytes, set0 / set1: the two interact words, map: the five remap words (INTERACT2-6) */
+/* k: the key word, j: the four stick bytes, set0 / set1: the two interact words, map: the five remap words (the runtime's table) */
 static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t set1, const uint32_t *map, uint16_t *button, int8_t *stick_x, int8_t *stick_y)
 {
     const uint32_t type = KEY_TYPE(k);

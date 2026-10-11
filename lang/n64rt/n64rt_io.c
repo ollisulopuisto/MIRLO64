@@ -494,11 +494,12 @@ s32 n64rt_osPiRawReadIo(u32 dev, u32 *data) { return io_read(0xB0000000u | dev, 
 #include "n64rt_pad.h"          /* the keys and the settings to the N64 controller (a pure function: host-tested) */
 #include "n64rt_ctrl.h"         /* the preset families, and a game's own layout (the Controls slot) that the "Controls" setting picks from */
 static n64rt_ctrl_t s_ctrl_saved;               /* this game's saved layout, if s_ctrl_saved_ok */
+static n64rt_ctrl_t s_ctrl_live;                /* the table the menu's Remap entries edit (zero: the defaults; not kept across a boot: Save keeps it) */
 static int s_ctrl_saved_ok;
 static int s_ctrl_family = -1;                  /* the cartridge's family (n64rt_ctrl_family), or -1 */
-static u32 s_ctrl_act;                          /* INTERACT7's SAVE and FORGET bits when last looked at (an action flips its bit) */
-#define CTRL_ACT_SAVE   (1u << CSR_APF_INTERACT_INTERACT7_SAVE_OFFSET)
-#define CTRL_ACT_FORGET (1u << CSR_APF_INTERACT_INTERACT7_FORGET_OFFSET)
+static u32 s_ctrl_act;                          /* INTERACT2's ACT_A and ACT_B bits when last looked at (an action flips its bits) */
+#define CTRL_ACT_A (1u << CSR_APF_INTERACT_INTERACT2_ACT_A_OFFSET)
+#define CTRL_ACT_B (1u << CSR_APF_INTERACT_INTERACT2_ACT_B_OFFSET)
 static u32 ctrl_slot_size(u32 want)             /* the Controls slot's file size in the core's table (0: no file); `want` sets it, so the Pocket writes the file */
 {
     u32 prev = apf_bridge_slot_id_read();
@@ -515,28 +516,30 @@ static void ctrl_init(void)
     const unsigned char id[4] = { (unsigned char)w, (unsigned char)(v >> 24), (unsigned char)(v >> 16), (unsigned char)(v >> 8) };
     s_ctrl_family = n64rt_ctrl_family(id);
     s_ctrl_saved_ok = n64rt_ctrl_load((const volatile u32 *)(uintptr_t)LAYOUT_CTRL, ctrl_slot_size(0), &s_ctrl_saved);
-    s_ctrl_act = apf_interact_interact7_read() & (CTRL_ACT_SAVE | CTRL_ACT_FORGET);
+    s_ctrl_act = apf_interact_interact2_read() & (CTRL_ACT_A | CTRL_ACT_B);
     n64rt_log("n64rt: controller layout: family %d, %s\n", s_ctrl_family, s_ctrl_saved_ok ? "saved for this game" : "none saved");
 }
-/* the Pocket's actions (the menu's "Save controls for this game" / "Forget ..."): each flips its bit of INTERACT7 when pressed. Both
- * flipped since the last look (two presses between two polls of a controller): the forget is done first, so the save stands. */
+/* the Pocket's actions (the menu's "Apply" / "Save controls for this game" / "Forget ..."): a press flips INTERACT2's ACT_A (Apply), ACT_B
+ * (Save) or both (Forget). Looked at at each poll of a controller; two actions between two polls are one (a forget; the Pocket's own
+ * menu does not let a person press two in a frame). */
 static void ctrl_poll(void)
 {
-    const u32 v = apf_interact_interact7_read() & (CTRL_ACT_SAVE | CTRL_ACT_FORGET);
-    const u32 flipped = v ^ s_ctrl_act;
+    const u32 v = apf_interact_interact2_read();
+    const u32 now = v & (CTRL_ACT_A | CTRL_ACT_B);
+    const u32 flipped = now ^ s_ctrl_act;
     if (!flipped) return;
-    s_ctrl_act = v;
-    if (flipped & CTRL_ACT_FORGET) {            /* forget */
+    s_ctrl_act = now;
+    if (flipped == (CTRL_ACT_A | CTRL_ACT_B)) {         /* forget */
         ((volatile u32 *)(uintptr_t)LAYOUT_CTRL)[0] = 0;
         s_ctrl_saved_ok = 0;
-    }
-    if (flipped & CTRL_ACT_SAVE) {              /* save: the menu's own layout */
-        n64rt_ctrl_t c;
+    } else if (flipped == CTRL_ACT_A) {                 /* apply: the editor's choice into the live table */
+        n64rt_ctrl_edit(&s_ctrl_live, apf_interact_interact2_layer_extract(v), apf_interact_interact2_key_extract(v),
+                        apf_interact_interact2_gives_extract(v), apf_interact_interact2_special_extract(v));
+    } else {                                            /* save: the live table and the menu's settings */
+        n64rt_ctrl_t c = s_ctrl_live;
         c.set0 = apf_interact_interact0_read() & N64RT_CTRL_MASK0;
         c.set1 = apf_interact_interact1_read() & N64RT_CTRL_MASK1;
         c.m1 = N64RT_CTRL_MASK1;
-        c.map[0] = apf_interact_interact2_read(); c.map[1] = apf_interact_interact3_read(); c.map[2] = apf_interact_interact4_read();
-        c.map[3] = apf_interact_interact5_read(); c.map[4] = apf_interact_interact6_read();
         n64rt_ctrl_store((volatile u32 *)(uintptr_t)LAYOUT_CTRL, &c);
         ctrl_slot_size(LAYOUT_CTRL_BYTES);
         s_ctrl_saved = c;
@@ -554,10 +557,10 @@ static void read_pad(OSContPad *p, int index)
     }
     ctrl_poll();
     u32 s0 = apf_interact_interact0_read(), s1 = apf_interact_interact1_read();
-    u32 map[5] = { apf_interact_interact2_read(), apf_interact_interact3_read(), apf_interact_interact4_read(), apf_interact_interact5_read(),
-                   apf_interact_interact6_read() };
+    u32 map[5];
+    memcpy(map, s_ctrl_live.map, sizeof map);                   /* the live table, unless the "Controls" setting picks another layout */
     n64rt_ctrl_t tmp;
-    n64rt_ctrl_apply(n64rt_ctrl_select(apf_interact_interact7_controls_read(), s_ctrl_saved_ok ? &s_ctrl_saved : 0, s_ctrl_family, &tmp), &s0, &s1, map);
+    n64rt_ctrl_apply(n64rt_ctrl_select(apf_interact_interact2_controls_read(), s_ctrl_saved_ok ? &s_ctrl_saved : 0, s_ctrl_family, &tmp), &s0, &s1, map);
     n64rt_pad_map(k, j, s0, s1, map, &p->button, &p->stick_x, &p->stick_y);
     p->errnum = 0;
 #ifdef N64RT_PADLOG

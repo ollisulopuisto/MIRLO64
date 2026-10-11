@@ -7,7 +7,7 @@
  *                                  (the N64 controller word), J the four stick bytes LX LY RX RY (0x80 is the centre,
  *                                  hex), S the N64 stick it makes (-80..+80)
  *   S0 / S1                       the two words of the core's settings (interact.json)
- *   (the five words of the remap table, INTERACT2-6, are read too but not printed)
+ *   (the remap table is the runtime's, in RAM: this shows the default one)
  * Bits of the key word, as the Analogue docs have them: 0 up, 1 down, 2 left, 3 right, 4 A, 5 B, 6 X, 7 Y, 8 L1, 9 R1, 10 L2,
  * 11 R2, 12 L3, 13 R3, 14 select, 15 start -- write down which bit each button of the pad lights.
  * The same on the JTAG UART when a pad's words change (tools/jtag/sfl_term.py).
@@ -52,8 +52,7 @@ int main(void)
     uint32_t lk[4] = { 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu }, lj[4] = { 0, 0, 0, 0 };
     for (;;) {
         const uint32_t s0 = apf_interact_interact0_read(), s1 = apf_interact_interact1_read();
-        const uint32_t map[5] = { apf_interact_interact2_read(), apf_interact_interact3_read(), apf_interact_interact4_read(), apf_interact_interact5_read(),
-                                  apf_interact_interact6_read() };      /* (the menu's own layout: not the "Controls" setting's pick) */
+        const uint32_t map[5] = { 0, 0, 0, 0, 0 };      /* (the default table: the runtime keeps the live one) */
         const uint64_t t = now();
         int n = snprintf(text, sizeof text, "PADTEST          T %05lu\nS0 %08lX S1 %08lX\n", (unsigned long)(t / CONFIG_CLOCK_FREQUENCY),
                          (unsigned long)s0, (unsigned long)s1);

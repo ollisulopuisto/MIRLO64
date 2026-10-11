@@ -72,7 +72,7 @@ See [the Analogue Docs](https://www.analogue.co/developer/docs/host-target-comma
 
 Base address (`APF_INTERACT` block): `0xF000_0300`
 
-This interface provides IO to the Pocket's `interact.json` (`Core Settings`) API. `interact.json` entries whose `address` lies in `0x1000_0100`..`0x1000_01FF` reach the SoC; the word index is `n = (address >> 2) & 63`. Two 32-bit slots hold the first values, 32 five-bit fields the controller remap table and the two settings that go with it:
+This interface provides IO to the Pocket's `interact.json` (`Core Settings`) API. `interact.json` entries whose `address` lies in `0x1000_0100`..`0x1000_01FF` reach the SoC; the word index is `n = (address >> 2) & 63`. Two 32-bit slots hold the first values, a few five-bit fields the controller remap editor and the settings that go with it:
 
 | `n`       | `address`                   | Maps to                                    |
 | --------- | --------------------------- | ------------------------------------------ |
@@ -83,9 +83,8 @@ This interface provides IO to the Pocket's `interact.json` (`Core Settings`) API
 | `13`      | `0x1000_0134`               | `interact1[23:22]`                         |
 | `14`      | `0x1000_0138`               | `interact1[24]`                            |
 | `15`      | `0x1000_013C`               | `interact1[25]` (Show FPS; see [FPS overlay](fps.md)) |
-| `16`..`45` | `0x1000_0140`..`0x1000_01B4` | the controller remap table: field `f = n-16`, five bits; the CPU reads six fields to a word in `interact2`..`interact6` (`interact2 + f/6`, bits `[5(f%6)+4 : 5(f%6)]`; read-only). The Pocket reads none of words 16-47 back (every entry is writeonly): they read as 0 on its side |
-| `46` | `0x1000_01B8` | "Controls" (where the layout comes from), `interact7[4:0]` |
-| `47` | `0x1000_01BC` | the Pocket's two actions (save / forget this game's controls): a write of 1 flips `interact7[8]`, of 2 `interact7[9]` (the value's low five bits, as every field's) |
+| `16`..`20` | `0x1000_0140`..`0x1000_0150` | the controller remap editor: five-bit fields -- layer, key, gives, or (what the menu's Remap entries chose) and "Controls" (the source of the layout); the CPU reads them in `interact2` `[4:0]`, `[9:5]`, `[14:10]`, `[19:15]`, `[24:20]`. The Pocket reads none of words 16-21 back (every entry is writeonly): they read as 0 on its side |
+| `21` | `0x1000_0154` | the Pocket's actions: a write with bit 0 set flips `interact2[28]` (Apply remap), with bit 1 set `interact2[29]` (Save; both: Forget) |
 
 A field address writes only its bits, so each `interact.json` setting can have its own address and needs no `mask`. [See the Analogue Docs](https://www.analogue.co/developer/docs/core-definition-files/interact-json) for more information.
 
@@ -95,8 +94,7 @@ A field address writes only its bits, so each `interact.json` setting can have i
 | `interact_changed0`   | `0x4`  | R   | 1     | 1 when slot 0 has been written by the Pocket since last read. |
 | `interact1`           | `0x8`  | RW  | 32    | Slot 1.                                                       |
 | `interact_changed1`   | `0xC`  | R   | 1     | 1 when slot 1 has been written by the Pocket since last read. |
-| `interact2`..`interact6` | `0x10`..`0x20` | R | 32 | The remap table's fields 0-29, six to a word. |
-| `interact7`          | `0x24` | R   | 32    | `[4:0]` Controls, `[8]` SAVE and `[9]` FORGET: each flips when its action is pressed. |
+| `interact2`          | `0x10` | R   | 32    | The editor: `[4:0]` layer, `[9:5]` key, `[14:10]` gives, `[19:15]` or, `[24:20]` Controls, `[28]` / `[29]` flip when Apply / Save are pressed (both: Forget). |
 
 # IO - Interfaces
 

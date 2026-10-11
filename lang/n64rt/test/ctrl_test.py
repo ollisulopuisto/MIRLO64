@@ -127,6 +127,41 @@ def main():
             fail('select %s: %s' % ((src_, saved, fam), got))
     if int(run(ctrl, 'select', '2', '1', '-1', 'x').split()[0], 16) != 0 or int(run(ctrl, 'select', '3', '1', '-1', 'x').split()[0], 16) != 6 << 10:
         fail('a family source gave the wrong Modifier')
+    # the menu's editor: each (layer, key, gives, special) the menu can send puts the right code in the right field and nothing else, or
+    # nothing (a choice that means nothing); then through the pad mapping the table does what was asked
+    def field_of(words, f): return (words[f // 6] >> (5 * (f % 6))) & 31
+    for layer in (0, 1):
+        for key in range(15):
+            for gives in [0, 31] + list(range(1, 15)):
+                for special in range(6):
+                    out = run(ctrl, 'edit', str(layer), str(key), str(gives), str(special)).split()
+                    changed, words = int(out[0]), [int(w, 16) for w in out[1:]]
+                    group = key >= 12
+                    if group:
+                        want = {0: {0: 0, 31: 5}.get(gives), 1: 6 if layer else None}.get(special, special - 1 if 2 <= special <= 5 else None)
+                    else:
+                        want = (gives if gives in [0, 31] + list(range(1, 15)) else None) if special == 0 else (15 if layer else None) if special == 1 else None
+                    f = (15 if layer else 0) + key
+                    if want is None:
+                        if changed or any(words): fail('edit %s: changed something that means nothing: %s' % ((layer, key, gives, special), words))
+                    elif not changed or field_of(words, f) != want or any(field_of(words, g) for g in range(30) if g != f):
+                        fail('edit %s: field %d is %d, expected %d (changed %d)' % ((layer, key, gives, special), f, field_of(words, f), want, changed))
+    for nonsense in ((2, 0, 1, 0), (0, 15, 1, 0), (0, 0, 15, 0), (0, 0, 20, 0), (0, 0, 1, 6)):
+        if int(run(ctrl, 'edit', *map(str, nonsense)).split()[0]) != 0: fail('edit %s was accepted' % (nonsense,))
+    # the menu file against the Pocket's limits (Analogue's docs: 16 entries shown, names 23 characters, a list 16 options, ids unique 16-bit):
+    # a longer file is "Load error in interact" at the core's start
+    import json
+    menu = json.load(open(os.path.join(root, 'pkg', 'pocket', 'Cores', 'tortuga.Mirlo64', 'interact.json')))['interact']['variables']
+    if len(menu) > 16: fail('interact.json has %d entries: the Pocket shows 16' % len(menu))
+    if len({v['id'] for v in menu}) != len(menu): fail('interact.json has duplicate ids')
+    for v in menu:
+        if len(v['name']) > 23: fail('interact.json name %r is over 23 characters' % v['name'])
+        if not 0 <= v['id'] <= 65535: fail('interact.json id %r' % v['id'])
+        if v['type'] not in ('radio', 'check', 'slider_u32', 'list', 'number_u32', 'action'): fail('interact.json type %r' % v['type'])
+        if len(v.get('options', [])) > 16: fail('interact.json list %r has over 16 options' % v['name'])
+        for o in v.get('options', []):
+            if len(o['name']) > 23: fail('interact.json option %r is over 23 characters' % o['name'])
+        if v['type'] == 'list' and not 0 <= v['defaultval'] < len(v['options']): fail('interact.json %r defaultval' % v['name'])
     print('ctrl_test: %s' % ('FAIL (%d)' % bad if bad else 'PASS'))
     return 1 if bad else 0
 

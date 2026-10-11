@@ -1002,45 +1002,45 @@ each button sends: the runtime only sees the Pocket's key bits.
 | D-pad | 226 | `0x1000_0134` (13: `interact1[23:22]`) | 0 None, 1 D-pad, 2 L stick, 3 R stick |
 | C buttons | 223 | `0x1000_0128` (10: `interact1[14:10]`) | 0 None, 1 Right stick |
 | Modifier | 228 | `0x1000_0110` (4: `interact0[14:10]`) | menu None, L, R, ZL, ZR, Select: values **0**, 1, 2, 3, 4, 6 |
-| Controls | 270 | `0x1000_01B8` (46: `interact7[4:0]`) | menu Menu, **Auto**, Standard, Platformer / adventure, Shooter, Skate / snowboard, Racing, Fighter: values 0-7 |
-| Save controls for this game, Forget this game's controls | 271, 272 | `0x1000_01BC` (47) | actions: write 1 / 2; each flips its bit, `interact7[8]` / `[9]` |
-| *key* (base / held), *group* (base / held) | 240-269 | `0x1000_0140` + 4 x field (16-45: the remap table, below) | 30 lists |
+| Controls | 270 | `0x1000_0150` (20: `interact2[24:20]`) | menu Menu, **Auto**, Standard, Platformer / adventure, Shooter, Skate / snowboard, Racing, Fighter: values 0-7 |
+| Remap: layer, key, gives, or | 240-243 | `0x1000_0140`..`0x1000_014C` (16-19: `interact2[19:0]`) | the editor: layer Base / Held, key (15), gives (16 outputs), or (6); not persisted |
+| Apply remap, Save for this game, Forget this game | 244, 271, 272 | `0x1000_0154` (21) | actions: write 1 / 2 / 3; `interact2[28]` flips with bit 0, `[29]` with bit 1 |
 
 (The bold value is the default; the lists' defaults are their value 0, so the fields' reset value, 0, which they hold until the Pocket
 has written them, is the default layout. The Analogue docs' own sample `interact.json` has `defaultval` 2 on a list's third option, and
 none of the docs says the default must be the first.)
 
 Fields 6, 7 (the old "L button" and "R button"), 8 (the old "EEPROM size": the save-type database decides now), 9 (the old "Z button"), 12
-(the old "Start button") and 14 (the old "C-button layer") are free: the remap table replaced them. **The remap table is RTL**: it
-needs 32 more five-bit fields, which `rtl/soc/mirlo_regs.sv` holds (the Pocket's interact bus is six bits wide, `mirlo_mips.sv` used
-to take four) and the CPU reads in `INTERACT2`..`INTERACT7` (`tools/mirlo_regs.py`); a bitstream built before this change lacks them.
-**The Pocket's Controls menu** (`input.json`) lists A, B, C-Down, C-Left, C-Right and C-Up only: Z and R are not there, so L and R reach
-the core as the Pocket's own L and R (the runtime reads the key word, whatever the menu says; Start, which is not listed either, has always
-arrived as it is).
+(the old "Start button") and 14 (the old "C-button layer") are free: the remap table replaced them. **The editor is RTL**: `rtl/soc/mirlo_regs.sv`
+holds five five-bit fields and two flip-flops (the Pocket's interact bus is six bits wide, `mirlo_mips.sv` used to take four) and the CPU reads them in
+`INTERACT2` (`tools/mirlo_regs.py`); a bitstream built before this change lacks them. **The Pocket's Controls menu** (`input.json`) lists A, B,
+C-Down, C-Left, C-Right and C-Up only: Z and R are not there, so L and R reach the core as the Pocket's own L and R (the runtime reads the key word, whatever
+the menu says; Start, which is not listed either, has always arrived as it is).
 
-**The remap table.** `interact.json` has, for each of twelve Pocket keys (A, B, X, Y, L, R, ZL, ZR, Select, Start, L3, R3), a *base* list and a *held*
-list (`tools/gen_interact.py` writes them), and the same for three groups: the four D-pad keys, the left and the right analog stick. The held ones do
-nothing with Modifier=None. A key list's value is the N64 output the key gives: A, B, Z, Start, L, R, C-up/down/left/right, D-up/down/left/right
-(codes 1-14), None (31), and in the held lists "Same as Base" (15); the code 0 is the list's own default, shown as the option that is the default (so the
-reset value 0 is the default layout). The lists stop at 16 options (stick directions are not among them: the groups reach the stick). The defaults,
-Base: A A, B B, X C-right, Y C-left, L Z, R R, ZL, ZR, L3 and R3 none, Select C-down, Start Start; Held: A C-right, B C-down, X C-up, Y C-left, the rest
-"Same as Base". A group's list: *Stick/D-pad settings* (0, default: the Stick, D-pad and C buttons settings below, with the Modifier's half stick / swap
-while held for the D-pad keys), *Stick* (the D-pad keys: full deflection; an analog stick: as it is), *Half stick*, *N64 D-pad* (an analog stick: its four
-directions past 64 of 127), *C buttons* (the same), *None*; held also *Same as Base* (the Base choice as if unheld). Any choice but the first takes the
-group's source away from those settings (an analog stick a group has is centred for them). Layout of the table: field f is the interact bus word
-16 + f; fields 0-11 Base keys, 12-14 Base groups (D-pad keys, left stick, right stick), 15-26 Held keys, 27-29 Held groups; six fields to a CSR word
-(`n64rt_pad.h` has the details). Nothing couples the keys: two keys may give one output. The Modifier key itself never reaches the table (it is consumed),
-so it cannot also be mapped.
+**Why an editor and not one entry per field.** The Pocket shows at most 16 entries of `interact.json` ("Up to 16 UI entries ... can be shown", Analogue's docs;
+a name is 23 characters at most, a list 16 options), and a longer file is a "Load error in interact" at the core's start -- the first remap builds, with 30
+entries, failed so on a Pocket. The menu has 16 entries: Show FPS, Crop Vertical, Crop Right, Controller 1 pak, Controls, Stick, D-pad, C buttons, Modifier,
+the editor (Remap: layer, key, gives, or), and the actions Apply remap, Save for this game, Forget this game. `tools/gen_interact.py` writes it and checks the limits.
+
+**The remap table.** 30 five-bit fields in the runtime's RAM (`n64rt_ctrl_t.map`; `n64rt_pad.h` has the layout): twelve Pocket keys (A, B, X, Y, L, R, ZL, ZR,
+Select, Start, L3, R3) and three groups (the four D-pad keys, the left and the right analog stick), each in two layers, Base and Held (the Modifier key held).
+It starts as the defaults at each start of the core. **Apply remap** (`n64rt_ctrl_edit`) puts the editor's choice in it: *layer* (Base, Held), *key* (the 15),
+*gives* (an output: A, B, Z, Start, L, R, C-up/down/left/right, D-up/down/left/right: codes 1-14; None: 31; Default: 0) and *or* (0 use *gives*; 1 Same as Base,
+the Held layer's; for a group: 2 Stick, 3 Half stick, 4 N64 D-pad, 5 C buttons). A choice that means nothing (a key with a group's target, Same as Base in
+the Base layer, a group with a key's output) changes nothing. The defaults, Base: A A, B B, X C-right, Y C-left, L Z, R R, ZL, ZR, L3 and R3 none, Select
+C-down, Start Start; Held: A C-right, B C-down, X C-up, Y C-left, the rest "Same as Base". A group's field: *Stick/D-pad settings* (0, default: the Stick, D-pad
+and C buttons settings below, with the Modifier's half stick / swap while held for the D-pad keys), *Stick* (the D-pad keys: full deflection; an analog stick:
+as it is), *Half stick*, *N64 D-pad* (an analog stick: its four directions past 64 of 127), *C buttons* (the same), *None*; held also *Same as Base* (the Base
+choice as if unheld). Any choice but the first takes the group's source away from those settings (an analog stick a group has is centred for them). Nothing
+couples the keys: two keys may give one output. The Modifier key itself never reaches the table (it is consumed), so it cannot also be mapped.
 
 **Per game** (`lang/n64rt/n64rt_ctrl.h`; `lang/n64rt/test/ctrl_test.py` checks it). The Pocket's menu is the core's, not a game's, so a game's own layout is
 the **Controls slot** (data.json slot 5, `LAYOUT_CTRL`, a nonvolatile slot of 64 bytes with the extension `.ctl`: the Pocket keeps a file of it per game, next
-to the game's `.sav`, loads it and writes it back when the core quits, as it does the Controller Pak). *Save controls for this game* is an action on bus
-word 47: a write of 1 flips `interact7[8]`, of 2 `interact7[9]` (two flip-flops, no counter; `sim/interact/run.sh` runs the register file's interact
-side under Icarus: the fields' packing, the actions, the legacy fields), the runtime compares the bits with the ones it saw at each poll
-of a controller, and a save copies the menu's own layout (the Modifier, "C buttons", "Stick", "D-pad" and the 30 fields) to the slot and gives the slot a file
-size, a forget clears the record's magic. The record is 16 words: "MCT1", set0 and set1 masked to those settings, the five table words, a checksum; a file
-that is short, has another magic or a bad checksum is no layout. **Controls** (bus word 46, `interact7[4:0]`) picks the layout the pad mapping uses:
-*Menu* the menu's own; *Auto* (the default) this game's saved layout, else its family (a table of cartridge IDs, three characters each, every one of
+to the game's `.sav`, loads it and writes it back when the core quits, as it does the Controller Pak). The three actions are bus word 21: a write with bit 0 set flips `interact2[28]` (Apply), with bit 1 set `interact2[29]` (Save), both is Forget (two flip-flops, no counter;
+`sim/interact/run.sh` runs the register file's interact side under Icarus), the runtime compares the bits with the ones it saw at each poll of a controller. A save
+copies the live table and the menu's Modifier, "C buttons", "Stick" and "D-pad" to the slot and gives the slot a file size; a forget clears the record's magic. The record is 16 words: "MCT1", set0 and set1 masked to those settings, the five table words, a checksum; a file
+that is short, has another magic or a bad checksum is no layout. **Controls** (bus word 20, `interact2[24:20]`) picks the layout the pad mapping uses:
+*Menu* the live table; *Auto* (the default) this game's saved layout, else its family (a table of cartridge IDs, three characters each, every one of
 them in `n64savedb.txt`), else the menu's; a family (*Standard*, *Platformer / adventure*, *Shooter*, *Skate / snowboard*, *Racing*, *Fighter*) that
 family whatever the game. A family sets the Modifier (Select, except Standard: none) and the table, and "C buttons" where it says so (Platformer, Shooter:
 the right stick of a dock pad); it leaves "Stick" and "D-pad" as the menu has them. The families:

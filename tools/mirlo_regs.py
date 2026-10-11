@@ -53,16 +53,11 @@ BLOCKS = [
         ("INTERACT_CHANGED0", 0x04, R,  1, []),
         ("INTERACT1",         0x08, RW, 1, []),
         ("INTERACT_CHANGED1", 0x0C, R,  1, []),
-        # the controller remap table: 30 five-bit fields (interact bus words 16-45), six to a word, field f in bits [5(f%6)+4:5(f%6)]
-        # of INTERACT2 + f/6; written only by the Pocket (interact.json), read-only here
-        ("INTERACT2",         0x10, R,  1, []),
-        ("INTERACT3",         0x14, R,  1, []),
-        ("INTERACT4",         0x18, R,  1, []),
-        ("INTERACT5",         0x1C, R,  1, []),
-        ("INTERACT6",         0x20, R,  1, []),
-        # bus word 46 ("Controls": which source the controller layout comes from) in [4:0]; word 47, the Pocket's two actions (save, forget
-        # this game's controls): a write of 1 flips SAVE, of 2 FORGET -- the CPU compares the bits with the ones it saw
-        ("INTERACT7",         0x24, R,  1, [("CONTROLS", 0, 5), ("SAVE", 8, 1), ("FORGET", 9, 1)]),
+        # the controller remap editor (bus words 16-21; mirlo_regs.sv): what the Pocket's menu last wrote -- the layer, the key, what it gives, the
+        # special choice, the "Controls" source -- and two bits that flip when its actions are pressed (Apply: bit 0 of the written value,
+        # Save: bit 1, Forget: both): the CPU compares ACT_A and ACT_B with the ones it saw
+        ("INTERACT2",         0x10, R,  1, [("LAYER", 0, 5), ("KEY", 5, 5), ("GIVES", 10, 5), ("SPECIAL", 15, 5), ("CONTROLS", 20, 5),
+                                            ("ACT_A", 28, 1), ("ACT_B", 29, 1)]),
     ]),
     ("APF_VIDEO", 0x0400, [
         # a read clears VBLANK_TRIGGERED (status register: the read strobe clears the flag)

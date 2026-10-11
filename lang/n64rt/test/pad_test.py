@@ -21,7 +21,7 @@ DEFAULT_MAP = [0] * 30
 
 
 def pack(fields):
-    """30 five-bit fields -> the five words INTERACT2..6, six to a word"""
+    """30 five-bit fields -> the five table words, six to a word"""
     return [sum((fields[6 * w + i] & 31) << (5 * i) for i in range(6)) for w in range(5)]
 
 

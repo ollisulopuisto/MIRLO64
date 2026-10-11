@@ -130,27 +130,20 @@
 #define CSR_APF_INTERACT_INTERACT2_OFS 0x310
 #define CSR_APF_INTERACT_INTERACT2_ADDR (CSR_BASE + 0x310)
 #define CSR_APF_INTERACT_INTERACT2_SIZE 1
-#define CSR_APF_INTERACT_INTERACT3_OFS 0x314
-#define CSR_APF_INTERACT_INTERACT3_ADDR (CSR_BASE + 0x314)
-#define CSR_APF_INTERACT_INTERACT3_SIZE 1
-#define CSR_APF_INTERACT_INTERACT4_OFS 0x318
-#define CSR_APF_INTERACT_INTERACT4_ADDR (CSR_BASE + 0x318)
-#define CSR_APF_INTERACT_INTERACT4_SIZE 1
-#define CSR_APF_INTERACT_INTERACT5_OFS 0x31c
-#define CSR_APF_INTERACT_INTERACT5_ADDR (CSR_BASE + 0x31c)
-#define CSR_APF_INTERACT_INTERACT5_SIZE 1
-#define CSR_APF_INTERACT_INTERACT6_OFS 0x320
-#define CSR_APF_INTERACT_INTERACT6_ADDR (CSR_BASE + 0x320)
-#define CSR_APF_INTERACT_INTERACT6_SIZE 1
-#define CSR_APF_INTERACT_INTERACT7_OFS 0x324
-#define CSR_APF_INTERACT_INTERACT7_ADDR (CSR_BASE + 0x324)
-#define CSR_APF_INTERACT_INTERACT7_SIZE 1
-#define CSR_APF_INTERACT_INTERACT7_CONTROLS_OFFSET 0
-#define CSR_APF_INTERACT_INTERACT7_CONTROLS_SIZE 5
-#define CSR_APF_INTERACT_INTERACT7_SAVE_OFFSET 8
-#define CSR_APF_INTERACT_INTERACT7_SAVE_SIZE 1
-#define CSR_APF_INTERACT_INTERACT7_FORGET_OFFSET 9
-#define CSR_APF_INTERACT_INTERACT7_FORGET_SIZE 1
+#define CSR_APF_INTERACT_INTERACT2_LAYER_OFFSET 0
+#define CSR_APF_INTERACT_INTERACT2_LAYER_SIZE 5
+#define CSR_APF_INTERACT_INTERACT2_KEY_OFFSET 5
+#define CSR_APF_INTERACT_INTERACT2_KEY_SIZE 5
+#define CSR_APF_INTERACT_INTERACT2_GIVES_OFFSET 10
+#define CSR_APF_INTERACT_INTERACT2_GIVES_SIZE 5
+#define CSR_APF_INTERACT_INTERACT2_SPECIAL_OFFSET 15
+#define CSR_APF_INTERACT_INTERACT2_SPECIAL_SIZE 5
+#define CSR_APF_INTERACT_INTERACT2_CONTROLS_OFFSET 20
+#define CSR_APF_INTERACT_INTERACT2_CONTROLS_SIZE 5
+#define CSR_APF_INTERACT_INTERACT2_ACT_A_OFFSET 28
+#define CSR_APF_INTERACT_INTERACT2_ACT_A_SIZE 1
+#define CSR_APF_INTERACT_INTERACT2_ACT_B_OFFSET 29
+#define CSR_APF_INTERACT_INTERACT2_ACT_B_SIZE 1
 
 /* APF_VIDEO */
 #define CSR_APF_VIDEO_BASE (CSR_BASE + 0x400)
@@ -445,17 +438,20 @@ static inline uint32_t apf_interact_interact1_read(void) { return csr_read_simpl
 static inline void apf_interact_interact1_write(uint32_t v) { csr_write_simple(v, CSR_APF_INTERACT_INTERACT1_ADDR); }
 static inline uint32_t apf_interact_interact_changed1_read(void) { return csr_read_simple(CSR_APF_INTERACT_INTERACT_CHANGED1_ADDR); }
 static inline uint32_t apf_interact_interact2_read(void) { return csr_read_simple(CSR_APF_INTERACT_INTERACT2_ADDR); }
-static inline uint32_t apf_interact_interact3_read(void) { return csr_read_simple(CSR_APF_INTERACT_INTERACT3_ADDR); }
-static inline uint32_t apf_interact_interact4_read(void) { return csr_read_simple(CSR_APF_INTERACT_INTERACT4_ADDR); }
-static inline uint32_t apf_interact_interact5_read(void) { return csr_read_simple(CSR_APF_INTERACT_INTERACT5_ADDR); }
-static inline uint32_t apf_interact_interact6_read(void) { return csr_read_simple(CSR_APF_INTERACT_INTERACT6_ADDR); }
-static inline uint32_t apf_interact_interact7_read(void) { return csr_read_simple(CSR_APF_INTERACT_INTERACT7_ADDR); }
-static inline uint32_t apf_interact_interact7_controls_extract(uint32_t r) { return (r >> 0) & 0x1fu; }
-static inline uint32_t apf_interact_interact7_controls_read(void) { return apf_interact_interact7_controls_extract(apf_interact_interact7_read()); }
-static inline uint32_t apf_interact_interact7_save_extract(uint32_t r) { return (r >> 8) & 0x1u; }
-static inline uint32_t apf_interact_interact7_save_read(void) { return apf_interact_interact7_save_extract(apf_interact_interact7_read()); }
-static inline uint32_t apf_interact_interact7_forget_extract(uint32_t r) { return (r >> 9) & 0x1u; }
-static inline uint32_t apf_interact_interact7_forget_read(void) { return apf_interact_interact7_forget_extract(apf_interact_interact7_read()); }
+static inline uint32_t apf_interact_interact2_layer_extract(uint32_t r) { return (r >> 0) & 0x1fu; }
+static inline uint32_t apf_interact_interact2_layer_read(void) { return apf_interact_interact2_layer_extract(apf_interact_interact2_read()); }
+static inline uint32_t apf_interact_interact2_key_extract(uint32_t r) { return (r >> 5) & 0x1fu; }
+static inline uint32_t apf_interact_interact2_key_read(void) { return apf_interact_interact2_key_extract(apf_interact_interact2_read()); }
+static inline uint32_t apf_interact_interact2_gives_extract(uint32_t r) { return (r >> 10) & 0x1fu; }
+static inline uint32_t apf_interact_interact2_gives_read(void) { return apf_interact_interact2_gives_extract(apf_interact_interact2_read()); }
+static inline uint32_t apf_interact_interact2_special_extract(uint32_t r) { return (r >> 15) & 0x1fu; }
+static inline uint32_t apf_interact_interact2_special_read(void) { return apf_interact_interact2_special_extract(apf_interact_interact2_read()); }
+static inline uint32_t apf_interact_interact2_controls_extract(uint32_t r) { return (r >> 20) & 0x1fu; }
+static inline uint32_t apf_interact_interact2_controls_read(void) { return apf_interact_interact2_controls_extract(apf_interact_interact2_read()); }
+static inline uint32_t apf_interact_interact2_act_a_extract(uint32_t r) { return (r >> 28) & 0x1u; }
+static inline uint32_t apf_interact_interact2_act_a_read(void) { return apf_interact_interact2_act_a_extract(apf_interact_interact2_read()); }
+static inline uint32_t apf_interact_interact2_act_b_extract(uint32_t r) { return (r >> 29) & 0x1u; }
+static inline uint32_t apf_interact_interact2_act_b_read(void) { return apf_interact_interact2_act_b_extract(apf_interact_interact2_read()); }
 
 /* APF_VIDEO */
 static inline uint32_t apf_video_video_read(void) { return csr_read_simple(CSR_APF_VIDEO_VIDEO_ADDR); }
