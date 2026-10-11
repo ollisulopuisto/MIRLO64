@@ -72,7 +72,7 @@ See [the Analogue Docs](https://www.analogue.co/developer/docs/host-target-comma
 
 Base address (`APF_INTERACT` block): `0xF000_0300`
 
-This interface provides IO to the Pocket's `interact.json` (`Core Settings`) API. `interact.json` entries whose `address` lies in `0x1000_0100`..`0x1000_01FF` reach the SoC; the word index is `n = (address >> 2) & 63`. Two 32-bit slots hold the values:
+This interface provides IO to the Pocket's `interact.json` (`Core Settings`) API. `interact.json` entries whose `address` lies in `0x1000_0100`..`0x1000_01FF` reach the SoC; the word index is `n = (address >> 2) & 63`. Two 32-bit slots hold the first values, 24 five-bit fields the controller remap table:
 
 | `n`       | `address`                   | Maps to                                    |
 | --------- | --------------------------- | ------------------------------------------ |
@@ -83,6 +83,7 @@ This interface provides IO to the Pocket's `interact.json` (`Core Settings`) API
 | `13`      | `0x1000_0134`               | `interact1[23:22]`                         |
 | `14`      | `0x1000_0138`               | `interact1[24]`                            |
 | `15`      | `0x1000_013C`               | `interact1[25]` (Show FPS; see [FPS overlay](fps.md)) |
+| `16`..`39` | `0x1000_0140`..`0x1000_019C` | the controller remap table: field `f = n-16`, five bits; the CPU reads six fields to a word in `interact2`..`interact5` (`interact2 + f/6`, bits `[5(f%6)+4 : 5(f%6)]`; read-only) |
 
 A field address writes only its bits, so each `interact.json` setting can have its own address and needs no `mask`. [See the Analogue Docs](https://www.analogue.co/developer/docs/core-definition-files/interact-json) for more information.
 
@@ -92,6 +93,7 @@ A field address writes only its bits, so each `interact.json` setting can have i
 | `interact_changed0`   | `0x4`  | R   | 1     | 1 when slot 0 has been written by the Pocket since last read. |
 | `interact1`           | `0x8`  | RW  | 32    | Slot 1.                                                       |
 | `interact_changed1`   | `0xC`  | R   | 1     | 1 when slot 1 has been written by the Pocket since last read. |
+| `interact2`..`interact5` | `0x10`..`0x1C` | R | 32 | The remap table's fields 0-23, six to a word. |
 
 # IO - Interfaces
 

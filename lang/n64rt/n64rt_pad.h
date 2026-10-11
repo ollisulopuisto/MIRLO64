@@ -1,41 +1,47 @@
 /* The N64 controller from the Pocket's (or the dock's) keys and the core's settings: n64rt_pad_map(), a pure function (no
- * hardware), so that lang/n64rt/test/pad_test.py can run every combination of settings against the spec on the host.
+ * hardware), so that lang/n64rt/test/pad_test.py can run the combinations of settings against the spec on the host.
  *
  * The keys are APF_INPUT's (docs/control.md: Controller/Joystick Bitmap; the Pocket's own Controls menu remaps what the
  * buttons give, the runtime only sees these bits), the stick bytes are its four joystick bytes (left X, left Y, right X,
- * right Y, from the low byte up; 0x80 centred) and the settings are the two words of APF_INTERACT, as interact.json
- * (pkg/pocket/Cores/tortuga.Mirlo64/interact.json) writes them -- a field at a time, at the addresses 0x1000_0100 + 4 x n:
+ * right Y, from the low byte up) and the settings are the two words of APF_INTERACT, as interact.json
+ * (pkg/pocket/Cores/tortuga.Mirlo64/interact.json) writes them -- a field at a time, at the addresses 0x1000_0100 + 4 x n --
+ * and the remap table (below), read from the four words INTERACT2..INTERACT5:
  *
  *   word 0 [4:0]    n=2  "Controller 1 pak": n64rt_pak.c
  *          [9:5]    n=3  "Crop Vertical" (the video: rtl/soc/mirlo_regs.sv)
- *          [14:10]  n=4  "Modifier": which Pocket key (a button code, below; 0 none) turns the face buttons into the C buttons where
- *                        they sit (X up, B down, Y left, A right) and the D-pad into half a stick while held (the layer settings below can change this); that key never reaches
- *                        the game (so not as the Z, L or R button either)
+ *          [14:10]  n=4  "Modifier": which Pocket key (a button code, below; 0 none) selects the Held layer of the remap table while
+ *                        it is held; that key never reaches the game (so not as any mapped button either)
  *          [19:15]  n=5  "Crop Right" (the video; a list: 0 none, 1 pixel)
- *          [24:20]  n=6  "L button": which Pocket key is the N64's L
- *          [29:25]  n=7  "R button": which Pocket key is the N64's R
- *   word 1 [4:0]    n=8  free (was "EEPROM size": the save-type database decides now)
- *          [9:5]    n=9  "Z button": which Pocket key is the N64's Z
- *          [14:10]  n=10 "C buttons": 0 none (the face buttons only), 1 also the right stick
+ *          [29:20]  n=6,7 free (were "L button" and "R button": the remap table has them now)
+ *   word 1 [14:10]  n=10 "C buttons": 0 none, 1 also the right stick (as C buttons)
  *          [19:15]  n=11 "Stick": 0 the D-pad (full deflection), 1 the left analog stick, 2 the right analog stick; any other
  *                        value is the D-pad
- *          [21:20]  n=12 "Start": 0 the Pocket's Start, 1 Select and Start together (neither counts for anything else then),
- *                        2 (or 3) none
  *          [23:22]  n=13 "D-pad": 0 none, 1 the D-pad, 2 the left analog stick, 3 the right analog stick
- *          [24]     n=14 "C-button layer": 0 the original face mapping, 1 C buttons unheld and A/B held
- *          [25]     n=15 free (was "Start = Select+Start")
+ *          [25]     n=15 "Show FPS" (the video)
+ *          the rest free (n=8, 9, 12, 14 were "EEPROM size", "Z button", "Start" and "C-button layer")
  *
- * A button setting (Z, L, R, Modifier) is a code, 0 the setting's own default (so that the word's reset value, 0, is the default
- * layout before the Pocket has written anything): 1 the Pocket's L, 2 R, 3 ZL (L2), 4 ZR (R2), 5 none (anything else is none too).
- *   Z button: 0 = L      L button: 0 = ZL      R button: 0 = R      Modifier: 0 = none
- * Nothing couples them: a key may serve two N64 buttons if asked to, and the Modifier key never reaches the game.
+ * A button code (the Modifier) is 0 none, 1 the Pocket's L, 2 R, 3 ZL (L2), 4 ZR (R2), anything else none.
  *
- * With "C-button layer" off, the C buttons are on the face buttons: C-left on Y, C-right on X, C-down on Select, C-up through the Modifier (its key held
- * turns X, B, Y, A into C-up, C-down, C-left, C-right where they sit). "C buttons" = 1 adds the right analog stick as another
- * source (ORed): past +-64 of 127 it is C-left / C-right / C-up / C-down.
+ * THE REMAP TABLE: 24 five-bit fields at n = 16 + f, six to a word (field f is bits [5(f%6)+4:5(f%6)] of word f/6, the words
+ * being INTERACT2..INTERACT5, map[0..3] here). Two layers: Base (the Modifier key not held, or no Modifier) and Held (held):
+ *   fields 0-9    Base layer, one per key:  A, B, X, Y, L, R, ZL, ZR, Select, Start (the Pocket's keys; L is KEY_L1, ZL KEY_L2)
+ *   field 10      Base layer, the four D-pad keys together
+ *   fields 11-20  Held layer, the same ten keys
+ *   field 21      Held layer, the D-pad keys together     (fields 22, 23: free)
+ * A key field's code (an N64 output; each key gives one): 0 the entry's own default (the reset value, 0, is the default layout),
+ *   1 A  2 B  3 Z  4 Start  5 L  6 R  7 C-up  8 C-down  9 C-left  10 C-right  11 D-up  12 D-down  13 D-left  14 D-right
+ *   15 "same as Base" (the Held layer: what the key does in the Base layer; in the Base layer, none)   anything else: none
+ * The defaults: Base: A A, B B, X C-right, Y C-left, L Z, R R, ZL none, ZR none, Select C-down, Start Start (the N64's L is on
+ * nothing: set ZL or ZR to it); Held: A C-right, B C-down, X C-up, Y C-left, all others same as Base.
+ * The D-pad field's code: 0 the "Stick" and "D-pad" settings (below; Held: with their Modifier effects: half a stick, or the N64's
+ * D-pad swapped for the stick), 1 the stick (full), 2 half a stick, 3 the N64's D-pad, 4 the C buttons, 5 none; 6 same as Base
+ * (the Base layer's, as if unheld; in the Base layer, none); anything else none. Any other code than 0 takes the D-pad keys away from the
+ * "Stick" and "D-pad" settings (the analog sticks they name still count).
+ * Nothing couples the fields: two keys may give the same output (an N64 button is down while any of its keys is). The keys that give
+ * a stick direction through the D-pad group add; the sum is clamped to +-80.
  *
- * "C-button layer" = 1 swaps the face layers: unheld X/B/Y/A give C-up/down/left/right, held A/B give N64 A/B
- * (X/Y do nothing). Select is an unheld C-down alternate; the right-stick C option is unchanged.
+ * "C buttons" = 1 adds the right analog stick as another source of the C buttons (ORed): past +-64 of 127 it is C-left / C-right /
+ * C-up / C-down.
  *
  * Analog sticks. The dock says a pad has them with KEY_TYPE 3; the Pocket's own controls (type 1) have none. The pad of a type
  * the docs call "without analog" (2) is believed, for its stick bytes, when they are not 0x00000000 or 0xFFFFFFFF (a pad with
@@ -103,49 +109,83 @@ static inline uint32_t n64rt_pad_key(uint32_t code, uint32_t dflt)
     default: return 0;
     }
 }
-static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t set1, uint16_t *button, int8_t *stick_x, int8_t *stick_y)
+/* the remap table */
+#define PAD_KEYS 10
+#define PAD_SAME 15u
+static const uint32_t n64rt_pad_keys[PAD_KEYS] = { KEY_A, KEY_B, KEY_X, KEY_Y, KEY_L1, KEY_R1, KEY_L2, KEY_R2, KEY_SELECT, KEY_START };
+static const uint8_t n64rt_pad_base_dflt[PAD_KEYS] = { 1, 2, 10, 9, 3, 6, 31, 31, 8, 4 };
+static const uint8_t n64rt_pad_held_dflt[PAD_KEYS] = { 10, 8, 7, 9, 15, 15, 15, 15, 15, 15 };
+static inline uint32_t n64rt_pad_field(const uint32_t *map, unsigned f)
+{
+    return (map[f / 6u] >> (5u * (f % 6u))) & 31u;
+}
+/* the output (a code of 1-14, or 0: none) key i gives in a layer */
+static inline uint32_t n64rt_pad_target(const uint32_t *map, unsigned i, int held)
+{
+    uint32_t c = n64rt_pad_field(map, held ? 11u + i : i);
+    if (c == 0u) c = held ? n64rt_pad_held_dflt[i] : n64rt_pad_base_dflt[i];
+    if (c == PAD_SAME) {
+        c = held ? n64rt_pad_field(map, i) : 0u;
+        if (held && c == 0u) c = n64rt_pad_base_dflt[i];
+    }
+    return c >= 1u && c <= 14u ? c : 0u;
+}
+static inline uint16_t n64rt_pad_out(uint32_t c)
+{
+    static const uint16_t bit[15] = { 0, CONT_A, CONT_B, CONT_G, CONT_START, CONT_L, CONT_R, CONT_E, CONT_D, CONT_C, CONT_F,
+                                      CONT_UP, CONT_DOWN, CONT_LEFT, CONT_RIGHT };
+    return c < 15u ? bit[c] : 0u;
+}
+/* k: the key word, j: the four stick bytes, set0 / set1: the two interact words, map: the four remap words (INTERACT2-5) */
+static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t set1, const uint32_t *map, uint16_t *button, int8_t *stick_x, int8_t *stick_y)
 {
     const uint32_t type = KEY_TYPE(k);
     /* stick bytes to believe: a type 3 pad's always, a type 2 pad's unless they are what a pad with none would send */
     const int analog = type == 3u || (type == 2u && j != 0u && j != 0xFFFFFFFFu);
     uint16_t b = 0;
+    int tx = 0, ty = 0;                                            /* the stick, from the D-pad keys given to it */
 
     const uint32_t mkey = n64rt_pad_key((set0 >> 10) & 31u, 0u);     /* Modifier */
     const int rmod = (k & mkey) != 0u;
     k &= ~mkey;
-    const int c_layer = (set1 >> 24) & 1u;                        /* C-button layer */
-    if (rmod != c_layer) {                                      /* C layer: held normally, unheld when swapped */
-        if (k & KEY_X) b |= CONT_E;
-        if (k & KEY_B) b |= CONT_D;
-        if (k & KEY_Y) b |= CONT_C;
-        if (k & KEY_A) b |= CONT_F;
-        k &= ~(KEY_A | KEY_B | KEY_X | KEY_Y);
-    }
-    switch ((set1 >> 20) & 3u) {                                      /* Start */
-    case 0:
-        if (k & KEY_START) b |= CONT_START;
-        break;
-    case 1: {
-        const uint32_t chord = KEY_SELECT | KEY_START;
-        if ((k & chord) == chord) { b |= CONT_START; k &= ~chord; }
-        break;
-    }
-    default: break;
-    }
-    if (k & KEY_A) b |= CONT_A;
-    if (k & KEY_B) b |= CONT_B;
-    if (k & n64rt_pad_key((set1 >> 5) & 31u, KEY_L1)) b |= CONT_G;           /* Z button */
-    if (k & n64rt_pad_key((set0 >> 20) & 31u, KEY_L2)) b |= CONT_L;              /* L button */
-    if (k & n64rt_pad_key((set0 >> 25) & 31u, KEY_R1)) b |= CONT_R;          /* R button */
+    for (unsigned i = 0; i < PAD_KEYS; i++)                         /* the keys' table, in the layer the Modifier selects */
+        if (k & n64rt_pad_keys[i]) b |= n64rt_pad_out(n64rt_pad_target(map, i, rmod));
 
-    if (!c_layer) {                                             /* original base C buttons */
-        if (k & KEY_SELECT) b |= CONT_D;
-        if (k & KEY_Y) b |= CONT_C;
-        if (k & KEY_X) b |= CONT_F;
-    } else if (!rmod && (k & KEY_SELECT)) {
-        b |= CONT_D;                                           /* unheld alternate for C-down */
+    /* the D-pad keys' group: 0 the "Stick" / "D-pad" settings, else its own target */
+    uint32_t dsel = n64rt_pad_field(map, 10u);
+    int lmod = 0;                                                   /* the Modifier's effects in the "Stick" / "D-pad" settings */
+    if (rmod) {
+        const uint32_t h = n64rt_pad_field(map, 21u);
+        if (h == 0u) { dsel = 0u; lmod = 1; }
+        else if (h != 6u) dsel = h;
     }
-    if (((set1 >> 10) & 31u) == 1u && analog) {          /* and with "C buttons" = right stick, that too */
+    if (dsel > 4u) dsel = 5u;
+    if (dsel != 0u) {
+        const int dx = ((k & KEY_DPAD_RIGHT) != 0u) - ((k & KEY_DPAD_LEFT) != 0u);
+        const int dy = ((k & KEY_DPAD_UP) != 0u) - ((k & KEY_DPAD_DOWN) != 0u);
+        switch (dsel) {
+        case 1: tx = 80 * dx; ty = 80 * dy; break;
+        case 2:
+            if (dx && dy) { tx = 28 * dx; ty = 28 * dy; } else { tx = 40 * dx; ty = 40 * dy; }
+            break;
+        case 3:
+            if (k & KEY_DPAD_UP) b |= CONT_UP;
+            if (k & KEY_DPAD_DOWN) b |= CONT_DOWN;
+            if (k & KEY_DPAD_LEFT) b |= CONT_LEFT;
+            if (k & KEY_DPAD_RIGHT) b |= CONT_RIGHT;
+            break;
+        case 4:
+            if (k & KEY_DPAD_UP) b |= CONT_E;
+            if (k & KEY_DPAD_DOWN) b |= CONT_D;
+            if (k & KEY_DPAD_LEFT) b |= CONT_C;
+            if (k & KEY_DPAD_RIGHT) b |= CONT_F;
+            break;
+        default: break;
+        }
+        k &= ~(KEY_DPAD_UP | KEY_DPAD_DOWN | KEY_DPAD_LEFT | KEY_DPAD_RIGHT);
+    }
+
+    if (((set1 >> 10) & 31u) == 1u && analog) {          /* "C buttons" = right stick: that too */
         const int rx = (int)((j >> 16) & 0xFFu) - 128, ry = (int)((j >> 24) & 0xFFu) - 128;
         if (rx < -64) b |= CONT_C;
         if (rx > 64) b |= CONT_F;
@@ -167,15 +207,15 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
         sx = x; sy = y;
         if (type != 3u && sx == 0 && sy == 0) from_dpad = 1;       /* (a pad without a deflected stick, or none: the D-pad) */
     }
-    if (from_dpad && !(dpad_swap && rmod)) {
-        const int8_t d = rmod ? 40 : 80;
+    if (from_dpad && !(dpad_swap && lmod)) {
+        const int8_t d = lmod ? 40 : 80;
         if (k & KEY_DPAD_LEFT) sx -= d;
         if (k & KEY_DPAD_RIGHT) sx += d;
         if (k & KEY_DPAD_UP) sy += d;
         if (k & KEY_DPAD_DOWN) sy -= d;
-        if (rmod && sx && sy) { sx = (int8_t)(sx < 0 ? -28 : 28); sy = (int8_t)(sy < 0 ? -28 : 28); }
+        if (lmod && sx && sy) { sx = (int8_t)(sx < 0 ? -28 : 28); sy = (int8_t)(sy < 0 ? -28 : 28); }
     }
-    if (dp == 1u && (!dpad_swap || rmod)) {
+    if (dp == 1u && (!dpad_swap || lmod)) {
         if (k & KEY_DPAD_UP) b |= CONT_UP;
         if (k & KEY_DPAD_DOWN) b |= CONT_DOWN;
         if (k & KEY_DPAD_LEFT) b |= CONT_LEFT;
@@ -188,8 +228,9 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
         if (y < -64) b |= CONT_UP;
         if (y > 64) b |= CONT_DOWN;
     }
+    int ox = sx + tx, oy = sy + ty;
     *button = b;
-    *stick_x = sx;
-    *stick_y = sy;
+    *stick_x = (int8_t)(ox > 80 ? 80 : ox < -80 ? -80 : ox);
+    *stick_y = (int8_t)(oy > 80 ? 80 : oy < -80 ? -80 : oy);
 }
 #endif

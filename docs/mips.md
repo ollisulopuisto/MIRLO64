@@ -1000,52 +1000,51 @@ each button sends: the runtime only sees the Pocket's key bits.
 | Controller 1 pak | 214 | `0x1000_0108` (2: `interact0[4:0]`) | 0 None, 1 Controller Pak, 2 Transfer Pak |
 | Stick | 225 | `0x1000_012C` (11: `interact1[19:15]`) | 0 D-pad, 1 L stick, 2 R stick |
 | D-pad | 226 | `0x1000_0134` (13: `interact1[23:22]`) | 0 None, 1 D-pad, 2 L stick, 3 R stick |
-| Z button | 230 | `0x1000_0124` (9: `interact1[9:5]`) | menu None, L, R, ZL, ZR: values 5, **0**, 2, 3, 4 |
-| L button | 234 | `0x1000_0118` (6: `interact0[24:20]`) | menu **None**, L, R, ZL, ZR: values 5, 1, 2, 0, 4 |
-| R button | 232 | `0x1000_011C` (7: `interact0[29:25]`) | menu None, L, R, ZL, ZR: values 5, 1, **0**, 3, 4 |
 | C buttons | 223 | `0x1000_0128` (10: `interact1[14:10]`) | 0 None, 1 Right stick |
-| C-button layer | 237 | `0x1000_0138` (14: `interact1[24]`) | check: 0 Off (default), 1 On |
-| Start button | 233 | `0x1000_0130` (12: `interact1[21:20]`) | menu None, Start, Select+Start: values 2, **0**, 1 |
 | Modifier | 228 | `0x1000_0110` (4: `interact0[14:10]`) | menu None, L, R, ZL, ZR: values **0**, 1, 2, 3, 4 |
+| *key* (base), *key* (held), D-pad keys (base), D-pad keys (held) | 240-261 | `0x1000_0140` + 4 x field (16-39: the remap table, below) | 22 lists |
 
-(The bold value is the default, except 'L button', whose default is its None (value 5); the other lists' defaults are their value 0, so the fields' reset value, 0, which they hold until the Pocket
-has written them, is the default layout for them. The Analogue docs' own sample `interact.json` has `defaultval` 2 on a list's third option, and
-none of the docs says the default must be the first; the core's earlier "R" list shipped with `defaultval` 0 on its second option.)
+(The bold value is the default; the lists' defaults are their value 0, so the fields' reset value, 0, which they hold until the Pocket
+has written them, is the default layout. The Analogue docs' own sample `interact.json` has `defaultval` 2 on a list's third option, and
+none of the docs says the default must be the first.)
 
-Fields 8 (`0x1000_0120`, `interact1[4:0]`, the old "EEPROM size": the save-type database decides now) and 15
-(`interact1[25]`, the old "Start = Select+Start" check) are free. Field 14, formerly the unused "Show FPS", now holds C-button layer. None of this is RTL: the fields
-were already there (`rtl/soc/mirlo_regs.sv` decodes every address 2-15 into its own bits), only `interact.json` and the runtime changed,
-so a bitstream built before is unchanged (no fit). **The Pocket's Controls menu** (`input.json`) lists A, B, C-Down, C-Left, C-Right
-and C-Up only: Z and R are not there, so L and R reach the core as the Pocket's own L and R (the runtime reads the key word, whatever
-the menu says; Start, which is not listed either, has always arrived as it is).
+Fields 6, 7 (the old "L button" and "R button"), 8 (the old "EEPROM size": the save-type database decides now), 9 (the old "Z button"), 12
+(the old "Start button") and 14 (the old "C-button layer") are free: the remap table replaced them. **The remap table is RTL**: it
+needs 24 more five-bit fields, which `rtl/soc/mirlo_regs.sv` holds (the Pocket's interact bus is six bits wide, `mirlo_mips.sv` used
+to take four) and the CPU reads in `INTERACT2`..`INTERACT5` (`tools/mirlo_regs.py`); a bitstream built before this change lacks them.
+**The Pocket's Controls menu** (`input.json`) lists A, B, C-Down, C-Left, C-Right and C-Up only: Z and R are not there, so L and R reach
+the core as the Pocket's own L and R (the runtime reads the key word, whatever the menu says; Start, which is not listed either, has always
+arrived as it is).
 
-**The button codes** (Z, L, R, Modifier): the code 0 is the setting's own default (so the register's reset value is the default layout),
-1 is the Pocket's L, 2 R, 3 ZL (L2), 4 ZR (R2), 5 (or any other) none; the menus show None, L, R, ZL, ZR in that order whatever the
-codes. The defaults (the `defaultval` of a list is the option's INDEX in the Analogue docs): **Z on the Pocket's L, the N64's L on nothing (None; the code 5), R on the Pocket's R, no Modifier.** (Until the Pocket writes the fields, the register's reset value 0 reads L as ZL: it is written at start.)
-Nothing couples them: a key serves two N64 buttons if you ask for it (L button on L with Z button left on L: both follow the one key).
+**The remap table.** `interact.json` has, for each of ten Pocket keys (A, B, X, Y, L, R, ZL, ZR, Select, Start), a *base* list and a *held*
+list (`tools/gen_interact.py` writes them), and the same for the four D-pad keys together. The held ones do nothing with Modifier=None.
+A key list's value is the N64 output the key gives: A, B, Z, Start, L, R, C-up/down/left/right, D-up/down/left/right (codes 1-14), None
+(31), and in the held lists "Same as Base" (15); the code 0 is the list's own default, shown as the option that is the default (so
+the reset value 0 is the default layout). The lists stop at 16 options (stick directions are not among them: the D-pad keys' lists reach the
+stick). The defaults, Base: A A, B B, X C-right, Y C-left, L Z, R R, ZL and ZR none, Select C-down, Start Start; Held: A C-right,
+B C-down, X C-up, Y C-left, the rest "Same as Base". The D-pad keys' list: *Stick/D-pad settings* (0, default: the Stick and D-pad
+settings below, with the Modifier's half stick / swap while held), *Stick* (full deflection), *Half stick*, *N64 D-pad*, *C buttons*, *None*;
+held also *Same as Base* (the Base choice as if unheld). Any choice but the first takes the D-pad keys away from the Stick and D-pad
+settings; the analog sticks those name still count. Layout of the table: field f is the interact bus word 16 + f; fields 0-9 Base keys,
+10 Base D-pad keys, 11-20 Held keys, 21 Held D-pad keys; six fields to a CSR word (`n64rt_pad.h` has the details).
+Nothing couples the keys: two keys may give one output. The Modifier key itself never reaches the table (it is consumed), so it cannot also be mapped.
 
-**Start button**: *Start* (the default) is the Pocket's Start; *Select+Start* is the two together (then neither counts for anything else: Select
-is not C-down while Start is held with it); *None*: the Pocket's Start does nothing for the N64's Start.
+**Button codes** (Modifier): the code 0 is no key, 1 is the Pocket's L, 2 R, 3 ZL (L2), 4 ZR (R2), anything else none; the menu shows
+None, L, R, ZL, ZR in that order.
 
-**Modifier**: the chosen Pocket key (None, L, R, ZL or ZR) turns, while held, X, B, Y, A into C-up, C-down, C-left, C-right where they sit
-and the D-pad into half a stick by default; C-button layer reverses the face layers, and configuring both Stick and D-pad as D-pad
-selects digital D-pad instead of half a stick while held. The key never reaches the game. If it is also the key of the Z, L or R button, that button loses it
-(the mapping never sees it).
+**Modifier**: the chosen Pocket key turns, while held, the Held layer of the table on: the default Held layer is X, B, Y, A as C-up,
+C-down, C-left, C-right where they sit (as before), the rest as Base, and the D-pad into half a stick (or the N64's D-pad instead of the
+stick, when Stick and D-pad are both D-pad). A "Tony Hawk" layout: Base X/B/Y/A as C buttons, Held A/B as A/B (Held X, Y as you like).
+The key never reaches the game.
 
-**C buttons (C-button layer Off, the default).** The face-button mapping is: C-left on Y, C-right on X, C-down on Select, C-up through the Modifier
-(its key held turns X, B, Y, A into C-up, C-down, C-left, C-right where they sit). "C buttons" = *Right stick* adds the right analog stick
-as another source (ORed with them): past 64 of 127 from the centre it is C-left / C-right / C-up / C-down. *None*: the face buttons only.
+**C buttons**: the setting *Right stick* adds the right analog stick as another source of the C buttons (ORed with the table): past 64 of
+127 from the centre it is C-left / C-right / C-up / C-down. *None*: the table only.
 
-**C-button layer On.** Unheld, X/B/Y/A give only C-up/C-down/C-left/C-right, not N64 A/B. Held, A/B give N64 A/B and X/Y
-are unmapped. Select is an unheld C-down alternate, except when consumed by the Select+Start chord. The original Y/X C-left/right
-mapping is disabled in this mode. The right-stick C option remains an independent source in either layer. Choose a Modifier key
-to reach A/B; with Modifier=None the C layer remains active all the time.
-
-**Stick** (the N64's stick). *D-pad* (the default): the D-pad keys are the stick at full deflection (half of it with the Modifier held).
+**Stick** (the N64's stick). *D-pad* (the default): the D-pad keys are the stick at full deflection (half of it with the Modifier held, unless the D-pad keys' list says otherwise).
 *L stick*, *R stick*: that analog stick of the pad (bytes 0-1 / 2-3 of `cont*_joy`, 0x80 the centre, a dead zone of 12, 80 at the end
 of the range). **D-pad** (the N64's D-pad): *None* (the default), *D-pad* (the keys), *L stick* or *R stick* (past 64 of 127, the four
 directions). With **Stick=D-pad and D-pad=D-pad**, the physical D-pad drives only the stick unheld, at full deflection;
-while the Modifier is held it drives only the digital D-pad and the stick vector is zero. This swap does not depend on C-button layer.
+while the Modifier is held it drives only the digital D-pad and the stick vector is zero.
 With Modifier=None it remains stick-only. With D-pad=None, the original half-stick behavior remains; when Stick is L/R stick,
 D-pad=D-pad keeps its original simultaneous digital behavior, including analog-mode fallback to the D-pad. The stick bytes are believed for a pad the dock calls type 3 (with analog) and also for **type 2 ("without analog")
 unless they are all 0x00 or all 0xFF**, in case the dock reports a pad with a stick so. With L or R stick a type 3 pad gives the stick

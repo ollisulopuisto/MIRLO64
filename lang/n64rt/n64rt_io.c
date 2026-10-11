@@ -501,7 +501,8 @@ static void read_pad(OSContPad *p, int index)
     case 2:  k = apf_input_cont3_key_read(); j = apf_input_cont3_joy_read(); break;
     default: k = apf_input_cont4_key_read(); j = apf_input_cont4_joy_read(); break;
     }
-    n64rt_pad_map(k, j, apf_interact_interact0_read(), apf_interact_interact1_read(), &p->button, &p->stick_x, &p->stick_y);
+    const u32 map[4] = { apf_interact_interact2_read(), apf_interact_interact3_read(), apf_interact_interact4_read(), apf_interact_interact5_read() };
+    n64rt_pad_map(k, j, apf_interact_interact0_read(), apf_interact_interact1_read(), map, &p->button, &p->stick_x, &p->stick_y);
     p->errnum = 0;
 #ifdef N64RT_PADLOG
     /* (make PADLOG=1) what the dock sends and what the game gets, on the JTAG UART whenever a pad's words change, at most every 20 reads

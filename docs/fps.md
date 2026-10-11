@@ -1,8 +1,8 @@
 # Optional FPS overlay
 
 Core Settings > **Show FPS** is a default-off checkbox (id 238), written to
-`0x1000_013C`, field 15, `interact1[25]`. It uses a different bit and ID from
-the independent C-button layer patch (`interact1[24]`, id 237).
+`0x1000_013C`, field 15, `interact1[25]`. Field 14 (`interact1[24]`, id 237) was the C-button
+layer, now replaced by the remap table (docs/mips.md).
 
 The menu pattern comes from the related [MIRLO core](https://github.com/tortugaveloz/MIRLO)
 and its [Super Mirlo 64 port](https://github.com/tortugaveloz/supermirlo64).

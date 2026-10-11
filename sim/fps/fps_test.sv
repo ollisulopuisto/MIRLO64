@@ -6,12 +6,12 @@ module fps_test;
     logic rst = 1, rst_vid = 1, fps_en = 0;
     logic [25:0] origin = 0;
     logic ia_wr = 0;
-    logic [3:0] ia_address = 0;
+    logic [5:0] ia_address = 0;
     logic [31:0] ia_data = 0;
     wire ia_fps_en;
     mirlo_regs regs (.clk, .rst, .r_req(1'b0), .r_we(1'b0), .r_addr(16'd0), .r_wdata(32'd0),
         .ia_address, .ia_data, .ia_wr, .ia_fps_en);
-    task write_field(input logic [3:0] address, input logic [31:0] data);
+    task write_field(input logic [5:0] address, input logic [31:0] data);
         @(negedge clk); ia_address = address; ia_data = data; ia_wr = 1;
         @(negedge clk); ia_wr = 0;
     endtask

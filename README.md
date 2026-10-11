@@ -84,15 +84,14 @@ The core's menu (`interact.json`; the Pocket's own Controls menu still remaps ea
 | Controller 1 pak | **None**, Controller Pak, Transfer Pak | the accessory in controller 1 |
 | Stick | **D-pad**, L stick, R stick | what drives the N64's analog stick |
 | D-pad | **None**, D-pad, L stick, R stick | what drives the N64's D-pad |
-| Z button | None, **L**, R, ZL, ZR | the Pocket's key for Z |
-| L button | **None**, L, R, ZL, ZR | the Pocket's key for the N64's L |
-| R button | None, L, **R**, ZL, ZR | the Pocket's key for the N64's R |
-| C buttons | **None**, Right stick | the right stick as the C buttons, besides the face buttons |
-| Start button | None, **Start**, Select+Start | the Pocket's key for Start |
-| Modifier | **None**, L, R, ZL, ZR | selects the held face-button and D-pad layers; its key never reaches the game |
-| C-button layer | **Off**, On | On: X/B/Y/A are C-up/down/left/right unheld; A/B are N64 A/B held (X/Y unmapped) |
+| C buttons | **None**, Right stick | the right stick as the C buttons, besides the keys below |
+| Modifier | **None**, L, R, ZL, ZR | while held, the Held layer of the remap table applies; its key never reaches the game |
+| *key* (base) | per key, see below | the N64 output of that Pocket key (A, B, X, Y, L, R, ZL, ZR, Select, Start) |
+| D-pad keys (base) | **Stick/D-pad settings**, Stick, Half stick, N64 D-pad, C buttons, None | what the four D-pad keys do |
+| *key* (held) | per key, see below | the same, with the Modifier held; **Same as Base** unless noted |
+| D-pad keys (held) | **Stick/D-pad settings**, Stick, Half stick, N64 D-pad, C buttons, None, Same as Base | the D-pad keys, Modifier held |
 
-With C-button layer Off, the face buttons are A and B as they are, and C-left on Y, C-right on X, C-down on Select (C-up is through the Modifier). With it On, Select is C-down only unheld; the right-stick C option still works in either layer. When Stick and D-pad are both set to D-pad, the physical D-pad drives only the stick unheld and only the N64 digital D-pad held. With D-pad=None, the original half-stick modifier behavior is unchanged. Controllers 2-4 come and go with the dock: a pad plugged in while a game runs answers from the game's next poll. The layout is described in docs/mips.md, "The core's settings for the controller".
+**Remapping every control.** Each of the ten Pocket keys has a *base* entry and a *held* entry (the held ones do nothing with Modifier = None). Each entry gives the key one N64 output: A, B, Z, Start, L, R, C-up/down/left/right, D-up/down/left/right, or None; the held entries also have **Same as Base**. The defaults reproduce the earlier layout. Base: A is A, B is B, X is C-right, Y is C-left, L is Z, R is R, Select is C-down, Start is Start, ZL and ZR nothing (the N64's L is on nothing until you give it a key). Held: A is C-right, B is C-down, X is C-up, Y is C-left, the rest as Base. For Tony Hawk style layouts set the base face keys to the C buttons and the held ones to A and B (or the reverse). The old Z button, L button, R button, Start button and C-button layer settings are gone: the table covers them (the Select+Start chord went with them). The D-pad keys' default, **Stick/D-pad settings**, is the earlier behavior: when Stick and D-pad are both D-pad, the physical D-pad drives only the stick unheld and only the N64 digital D-pad held; with D-pad=None, half a stick held. Controllers 2-4 come and go with the dock: a pad plugged in while a game runs answers from the game's next poll. The layout is described in docs/mips.md, "The core's settings for the controller".
 
 ### Saves
 
