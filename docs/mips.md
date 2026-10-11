@@ -1035,7 +1035,8 @@ so it cannot also be mapped.
 **Per game** (`lang/n64rt/n64rt_ctrl.h`; `lang/n64rt/test/ctrl_test.py` checks it). The Pocket's menu is the core's, not a game's, so a game's own layout is
 the **Controls slot** (data.json slot 5, `LAYOUT_CTRL`, a nonvolatile slot of 64 bytes with the extension `.ctl`: the Pocket keeps a file of it per game, next
 to the game's `.sav`, loads it and writes it back when the core quits, as it does the Controller Pak). *Save controls for this game* is an action on bus
-word 47: a write of 1 flips `interact7[8]`, of 2 `interact7[9]` (two flip-flops, no counter), the runtime compares the bits with the ones it saw at each poll
+word 47: a write of 1 flips `interact7[8]`, of 2 `interact7[9]` (two flip-flops, no counter; `sim/interact/run.sh` runs the register file's interact
+side under Icarus: the fields' packing, the actions, the legacy fields), the runtime compares the bits with the ones it saw at each poll
 of a controller, and a save copies the menu's own layout (the Modifier, "C buttons", "Stick", "D-pad" and the 30 fields) to the slot and gives the slot a file
 size, a forget clears the record's magic. The record is 16 words: "MCT1", set0 and set1 masked to those settings, the five table words, a checksum; a file
 that is short, has another magic or a bad checksum is no layout. **Controls** (bus word 46, `interact7[4:0]`) picks the layout the pad mapping uses:

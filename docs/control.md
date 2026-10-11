@@ -85,7 +85,7 @@ This interface provides IO to the Pocket's `interact.json` (`Core Settings`) API
 | `15`      | `0x1000_013C`               | `interact1[25]` (Show FPS; see [FPS overlay](fps.md)) |
 | `16`..`45` | `0x1000_0140`..`0x1000_01B4` | the controller remap table: field `f = n-16`, five bits; the CPU reads six fields to a word in `interact2`..`interact6` (`interact2 + f/6`, bits `[5(f%6)+4 : 5(f%6)]`; read-only). The Pocket reads none of words 16-47 back (every entry is writeonly): they read as 0 on its side |
 | `46` | `0x1000_01B8` | "Controls" (where the layout comes from), `interact7[4:0]` |
-| `47` | `0x1000_01BC` | the Pocket's two actions (save / forget this game's controls): a write of 1 flips `interact7[8]`, of 2 `interact7[9]` |
+| `47` | `0x1000_01BC` | the Pocket's two actions (save / forget this game's controls): a write of 1 flips `interact7[8]`, of 2 `interact7[9]` (the value's low five bits, as every field's) |
 
 A field address writes only its bits, so each `interact.json` setting can have its own address and needs no `mask`. [See the Analogue Docs](https://www.analogue.co/developer/docs/core-definition-files/interact-json) for more information.
 
