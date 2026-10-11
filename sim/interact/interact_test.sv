@@ -75,8 +75,9 @@ module interact_test;
         repeat (3) @(negedge clk);
         rst = 0;
         @(negedge clk);
+        for (int i = 0; i < 5; i++) model[i] = (i == 4) ? 5'd1 : 5'd0;     // (the reset values are the menu's defaults: Controls = Auto)
         check_regs("reset");
-        csr_read(R_APF_INTERACT_INTERACT0, q); check("reset: INTERACT0", q, 0);
+        csr_read(R_APF_INTERACT_INTERACT0, q); check("reset: INTERACT0", q, 32'd8 << 5 | 32'd1 << 15);     // Crop Vertical 8 lines, Crop Right 1 column
 
         // every field, a distinct value each (bits above [4:0] are ignored)
         for (int f = 0; f < 5; f++) begin
@@ -101,8 +102,8 @@ module interact_test;
         ia_write(21, 0); ia_write(21, 32'h1C); check_regs("other values written to 21");
         ia_write(21, 32'hFFFF_FFFD); act_a = !act_a; check_regs("a value with bit 0 set, bit 1 clear");
 
-        // the Pocket reads none of 16-47 back (every entry is writeonly): 0
-        for (int w = 16; w < 48; w++) begin ia_read(6'(w), q); check($sformatf("ia_q of word %0d", w), q, 0); end
+        // the Pocket reads the editor's fields back (16-20), as it reads 2-15; the actions (21) and the rest read 0
+        for (int w = 16; w < 64; w++) begin ia_read(6'(w), q); check($sformatf("ia_q of word %0d", w), q, (w < 21) ? 32'(model[w - 16]) : 32'd0); end
 
         // the legacy fields still work as before: Crop Vertical (3), Crop Right (5), Show FPS (15), and their readback
         ia_write(3, 8);  check("crop_v", 32'(ia_crop_v), 8);
@@ -111,7 +112,7 @@ module interact_test;
         ia_write(15, 0); check("fps_en off", 32'(ia_fps_en), 0);
         ia_read(3, q);  check("ia_q of field 3", q, 8);
         ia_write(4, 6);                                           // Modifier = Select
-        csr_read(R_APF_INTERACT_INTERACT0, q); check("INTERACT0 fields", q, 32'd6 << 10 | 32'd8 << 5 | 32'd1 << 15);
+        csr_read(R_APF_INTERACT_INTERACT0, q); check("INTERACT0 fields", q, 32'd6 << 10 | 32'd8 << 5 | 32'd1 << 15 | 32'd0 << 15);
         // a whole-slot write sets CHANGED, the CPU's read of the slot clears it
         ia_write(1, 32'h0123_4567);
         csr_read(R_APF_INTERACT_INTERACT_CHANGED1, q); check("CHANGED1 set", q, 1);
@@ -123,10 +124,10 @@ module interact_test;
         // reset clears everything
         ia_write(21, 1);
         @(negedge clk); rst = 1; @(negedge clk); rst = 0; @(negedge clk);
-        for (int i = 0; i < 5; i++) model[i] = 0;
+        for (int i = 0; i < 5; i++) model[i] = (i == 4) ? 5'd1 : 5'd0;
         act_a = 0; act_b = 0;
         check_regs("second reset");
-        csr_read(R_APF_INTERACT_INTERACT0, q); check("second reset: INTERACT0", q, 0);
+        csr_read(R_APF_INTERACT_INTERACT0, q); check("second reset: INTERACT0", q, 32'd8 << 5 | 32'd1 << 15);
 
         if (errors) begin $display("interact_test: FAIL (%0d)", errors); $finish(1); end
         $display("interact_test: PASS");

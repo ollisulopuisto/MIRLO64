@@ -33,6 +33,10 @@ jobs:
         run: |
           sh sim/interact/run.sh 2>&1 | grep -v 'sorry.*constant selects' | tee -a pad_test.log
           grep -q "interact_test: PASS" pad_test.log
+      - name: interact_bridge_test (the Pocket's read-modify-write cycle on the settings)
+        run: |
+          SPACINGS="24 40 100" sh sim/interact_bridge/run.sh 2>&1 | grep -v "^  S=\|^      op\|sorry" | tee -a pad_test.log
+          grep -q "^interact_bridge: PASS" pad_test.log
       - name: Runtime
         run: |
           make -C lang/n64rt

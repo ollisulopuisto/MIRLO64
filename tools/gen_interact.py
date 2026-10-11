@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Writes pkg/pocket/Cores/tortuga.Mirlo64/interact.json: the core's settings menu.
 
+The lists and the check are readable: the Pocket reads each entry's register every frame, applies the user's change and writes it back
+(Analogue's docs), and shows the value it read as the selected option (rtl/soc/mirlo_regs.sv answers the reads; sim/interact_bridge runs
+the Pocket's cycle against it). Only the actions are writeonly.
+
 The Pocket shows at most 16 entries of interact.json (Analogue's docs: "Up to 16 UI entries ... can be shown"; a longer file is a load
 error), a name is at most 23 characters, a list has at most 16 options. So the controller remap table is not one entry per field: five
 entries are an editor -- Remap: layer, key, gives, or -- and Apply puts the choice in the table (lang/n64rt/n64rt_ctrl.h, n64rt_ctrl_edit); the
@@ -12,7 +16,7 @@ def lst(name, ident, address, options, dflt=0, persist=True):
     e = {"name": name, "id": ident, "type": "list", "enabled": True}
     if persist:
         e["persist"] = True
-    e.update({"address": address, "defaultval": dflt, "options": [{"value": v, "name": n} for v, n in options], "writeonly": True})
+    e.update({"address": address, "defaultval": dflt, "options": [{"value": v, "name": n} for v, n in options]})
     return e
 
 def action(name, ident, value):
@@ -23,7 +27,7 @@ OUTPUTS = [(1, "A"), (2, "B"), (3, "Z"), (4, "Start"), (5, "L"), (6, "R"), (7, "
            (11, "D-up"), (12, "D-down"), (13, "D-left"), (14, "D-right")]
 
 ENTRIES = [
- {"name":"Show FPS","id":238,"type":"check","enabled":True,"persist":True,"address":"0x1000013C","defaultval":0,"value":1,"value_off":0,"writeonly":True},
+ {"name":"Show FPS","id":238,"type":"check","enabled":True,"persist":True,"address":"0x1000013C","defaultval":0,"value":1,"value_off":0},
  lst("Crop Vertical", 235, "0x1000010C", [(0, "None"), (8, "8 lines"), (12, "12 lines")], 1),
  lst("Crop Right", 236, "0x10000114", [(0, "None"), (1, "1 column")], 1),
  lst("Controller 1 pak", 214, "0x10000108", [(0, "None"), (1, "Controller Pak"), (2, "Transfer Pak")]),

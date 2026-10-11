@@ -190,7 +190,9 @@ logic        ia_ch0, ia_ch1;
 // The controller remap editor (interact.json has 16 entries at most, so the table is not one entry per field: the runtime keeps it in
 // RAM, and the Pocket writes what to change): bus words 16-20 are five-bit fields (layer, key, gives, special, and the "Controls"
 // source); word 21 is the Pocket's actions -- a write flips ia_act_a with bit 0 set (Apply), ia_act_b with bit 1 (Save; both: Forget) --
-// and the CPU compares the two bits with the ones it saw. Nothing is read back by the Pocket (every entry is writeonly: ia_q is 0).
+// and the CPU compares the two bits with the ones it saw. The Pocket reads the fields back (ia_q: words 16-20, as it reads words 2-15);
+// the actions are writeonly and read as 0. The reset values are the menu's defaults (the Pocket shows what it reads): "Controls" Auto,
+// "Crop Vertical" 8 lines, "Crop Right" 1 column.
 logic [4:0]  iaf [5];
 logic        ia_act_a, ia_act_b;
 wire         iaf_sel = ia_address[5:3] == 3'b010 && ia_address[2:0] < 3'd5;          // words 16-20
@@ -199,7 +201,11 @@ assign ia_crop_v = ia0[9:5];
 assign ia_crop_r = ia0[16:15];
 assign ia_fps_en = ia1[25];
 always_ff @(posedge clk) begin
-    if (rst) begin ia0 <= 0; ia1 <= 0; ia_ch0 <= 0; ia_ch1 <= 0; for (int i = 0; i < 5; i++) iaf[i] <= 5'd0; ia_act_a <= 0; ia_act_b <= 0; end
+    if (rst) begin
+        ia0 <= 32'(8) << 5 | 32'(1) << 15; ia1 <= 0; ia_ch0 <= 0; ia_ch1 <= 0;
+        for (int i = 0; i < 5; i++) iaf[i] <= (i == 4) ? 5'd1 : 5'd0;
+        ia_act_a <= 0; ia_act_b <= 0;
+    end
     else begin
         if (wr && a == R_APF_INTERACT_INTERACT0) ia0 <= r_wdata;
         if (wr && a == R_APF_INTERACT_INTERACT1) ia1 <= r_wdata;
@@ -247,7 +253,7 @@ always_ff @(posedge clk) begin
     6'd13: ia_q <= {30'd0, ia1[23:22]};
     6'd14: ia_q <= {31'd0, ia1[24]};
     6'd15: ia_q <= {31'd0, ia1[25]};
-    default: ia_q <= 32'd0;
+    default: ia_q <= iaf_sel ? {27'd0, iaf[ia_address[2:0]]} : 32'd0;
     endcase
 end
 
