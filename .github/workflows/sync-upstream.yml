@@ -1,0 +1,19 @@
+name: Sync upstream
+# Fast-forwards this fork's main to tortugaveloz/MIRLO64 main every day. The fork's own work lives on other branches
+# (patched-v0.1, ...), so main stays a plain mirror; merge it into them by hand. The workflow is here, not on main, because a
+# scheduled workflow runs from the default branch (patched-v0.1) and a file on main would make main differ from upstream.
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fast-forward main from upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/merge-upstream" -f branch=main | tee out.json
