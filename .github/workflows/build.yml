@@ -30,7 +30,9 @@ jobs:
       - name: ctrl_test
         run: python3 lang/n64rt/test/ctrl_test.py | tee -a pad_test.log
       - name: interact_test (mirlo_regs under Icarus)
-        run: sh sim/interact/run.sh 2>&1 | grep -v 'sorry: constant selects' | tee -a pad_test.log
+        run: |
+          sh sim/interact/run.sh 2>&1 | grep -v 'sorry.*constant selects' | tee -a pad_test.log
+          grep -q "interact_test: PASS" pad_test.log
       - name: Runtime
         run: |
           make -C lang/n64rt
