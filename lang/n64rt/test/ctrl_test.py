@@ -170,6 +170,42 @@ def main():
                                         (0, 2, 0, -1, 0), (l1, 2, 0, -1, l1)):
         got = ap(menu, src, saved, fam)
         if got != want: fail('apply menu %x src %d saved %d family %d: %x, expected %x' % (menu, src, saved, fam, got, want))
+    # the session: Apply edits the layout in use (a family's, a game's saved one, or the menu's table), the edit is what the pad mapping gets
+    # until "Controls" changes, and Save keeps the layout in use
+    def session(saved, fam, script):
+        out = run(ctrl, 'session', str(saved), str(fam), stdin=script).splitlines()
+        return [[int(x, 16) if x not in ('applied', 'eff', 'cap') else x for x in line.split()] for line in out]
+    def fld(words, f): return (words[f // 6] >> (5 * (f % 6))) & 31
+    # Auto in a Skate game (family 3, no saved layout): the family's Modifier (Select, code 6), Base A is C-right (10)
+    r = session(0, 3, 'src 1\nmenu 0 0\neff\napply 0 0 1 0\neff\nmenu 400 0\neff\n')
+    if r[0][1] != 6 << 10 or fld(r[0][3:], 0) != 10: fail('session: the family layout is not in use under Auto: %s' % (r[0],))
+    if r[1] != ['applied', 1]: fail('session: the first Apply under Auto was refused: %s' % (r[1],))
+    if r[2][1] != 6 << 10 or fld(r[2][3:], 0) != 1 or fld(r[2][3:], 1) != 8: fail('session: the edit did not take effect on a copy of the family: %s' % (r[2],))
+    if r[3][1] != 0x400: fail('session: the menu Modifier (L, code 1) lost to the family copy: %s' % (r[3],))
+    # the "Controls" setting moving ends the edit: the family decides again, and the edit is the Menu table
+    r = session(0, 3, 'src 1\nmenu 0 0\napply 0 0 1 0\nsrc 0\neff\nsrc 1\neff\nsrc 4\neff\n')
+    if fld(r[1][3:], 0) != 1 or r[1][1] != 0: fail('session: the edit was not kept in the Menu table after Controls moved: %s' % (r[1],))
+    if fld(r[2][3:], 0) != 10 or r[2][1] != 6 << 10: fail('session: Auto did not return to the family after Controls moved back: %s' % (r[2],))
+    # (Controls moved away and back: the first edit's session ended, the live table still holds the edit, but Auto uses the family)
+    # under Menu: the live table, under the menu's own settings
+    r = session(0, -1, 'src 0\nmenu 800 1c00\napply 1 3 1 0\neff\n')
+    if r[1][1] != 0x800 or r[1][2] != 0x1c00 or fld(r[1][3:], 15 + 3) != 1: fail('session: a Menu edit changed the menu settings or missed: %s' % (r[1],))
+    # a game's saved layout (Modifier code 3) is what Auto uses, and an edit starts from it
+    r = session(1, 3, 'src 1\nmenu 0 0\neff\napply 0 5 31 0\neff\n')
+    if r[0][1] != 3 << 10 or r[0][3] != 0x1234: fail('session: the saved layout is not in use under Auto: %s' % (r[0],))
+    if r[2][1] != 3 << 10 or fld(r[2][3:], 5) != 31 or r[2][3] & ~(31 << 25) != 0x1234 & ~(31 << 25): fail('session: an edit of the saved layout lost its other fields: %s' % (r[2],))
+    # Save keeps the layout in use: a family's, edited or not
+    r = session(0, 3, 'src 1\nmenu 0 0\ncap\napply 0 2 4 0\ncap\n')
+    if r[0][1] != 6 << 10 or fld(r[0][3:], 0) != 10: fail('session: Save of an unedited family layout: %s' % (r[0],))
+    if fld(r[2][3:], 2) != 4 or r[2][1] != 6 << 10: fail('session: Save of an edited family layout: %s' % (r[2],))
+    # and what was saved is what Auto then uses, with the edit session over
+    r = session(0, 3, 'src 1\nmenu 0 0\napply 0 0 1 0\nsave\nsrc 4\neff\nsrc 1\neff\n')
+    if fld(r[2][3:], 0) != 1: fail('session: a saved edit is not used by Auto afterwards: %s' % (r[2],))
+    r = session(0, 3, 'src 1\nmenu 0 0\napply 0 0 1 0\nsave\nsrc 4\neff\nsrc 1\nforget\neff\n')
+    if fld(r[2][3:], 0) != 10: fail('session: Forget did not return Auto to the family: %s' % (r[2],))
+    # nonsense changes nothing and does not start an edit that hides the family
+    r = session(0, 3, 'src 1\nmenu 0 0\napply 0 0 1 3\neff\n')
+    if r[0] != ['applied', 0] or fld(r[1][3:], 0) != 10: fail('session: a choice that means nothing: %s' % (r,))
     print('ctrl_test: %s' % ('FAIL (%d)' % bad if bad else 'PASS'))
     return 1 if bad else 0
 

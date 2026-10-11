@@ -211,4 +211,50 @@ static inline void n64rt_ctrl_apply(const n64rt_ctrl_t *c, uint32_t *set0, uint3
     *set1 = (*set1 & ~c->m1) | (c->set1 & c->m1);
     for (int i = 0; i < 5; i++) map[i] = c->map[i];
 }
+
+/* ---- the session: what the pad mapping uses at this moment, and what the menu's Remap entries edit ----
+ * Without an edit, the layout is the one "Controls" picks (n64rt_ctrl_select) over the menu's own settings and the live table (the
+ * menu's table: it starts as the defaults). The first Apply starts an edit of the layout in use: a copy of a family's or of the game's
+ * saved one (the live table, with its Modifier and the rest), or, under Menu, the live table itself; from then on the edited copy is what
+ * is used, until the "Controls" setting changes (then Controls decides again; the live table stays as it was edited). */
+typedef struct {
+    n64rt_ctrl_t live, saved;
+    int saved_ok, family, editing;
+    unsigned edit_src;                           /* "Controls" when the edit began */
+} n64rt_ctrl_state_t;
+
+/* the settings and the table for the pad mapping, given the menu's words and "Controls" (src) */
+static inline void n64rt_ctrl_effective(n64rt_ctrl_state_t *st, unsigned src, uint32_t *set0, uint32_t *set1, uint32_t map[5])
+{
+    n64rt_ctrl_t tmp;
+    if (st->editing && src != st->edit_src) st->editing = 0;        // the "Controls" setting moved: it decides again
+    for (int i = 0; i < 5; i++) map[i] = st->live.map[i];
+    const n64rt_ctrl_t *c = st->editing ? &st->live : n64rt_ctrl_select(src, st->saved_ok ? &st->saved : 0, st->family, &tmp);
+    n64rt_ctrl_apply(c, set0, set1, map);
+}
+/* Apply: the editor's choice into the layout in use */
+static inline int n64rt_ctrl_apply_edit(n64rt_ctrl_state_t *st, unsigned src, unsigned layer, unsigned key, unsigned gives, unsigned special)
+{
+    if (st->editing && src != st->edit_src) st->editing = 0;
+    if (!st->editing) {
+        n64rt_ctrl_t tmp;
+        const n64rt_ctrl_t *c = n64rt_ctrl_select(src, st->saved_ok ? &st->saved : 0, st->family, &tmp);
+        if (c) st->live = *c;                                       // a copy of the layout in use
+        else { st->live.set0 = 0; st->live.set1 = 0; st->live.m1 = 0; st->live.mod_default = 1; }   // Menu: the table, under the menu's own settings
+        st->editing = 1;
+        st->edit_src = src;
+    }
+    return n64rt_ctrl_edit(&st->live, layer, key, gives, special);
+}
+/* Save: the layout in use (what the pad mapping gets from the menu's words) as a game's record */
+static inline void n64rt_ctrl_capture(n64rt_ctrl_state_t *st, unsigned src, uint32_t menu0, uint32_t menu1, n64rt_ctrl_t *rec)
+{
+    uint32_t s0 = menu0, s1 = menu1, map[5];
+    n64rt_ctrl_effective(st, src, &s0, &s1, map);
+    memset(rec, 0, sizeof *rec);
+    rec->set0 = s0 & N64RT_CTRL_MASK0;
+    rec->set1 = s1 & N64RT_CTRL_MASK1;
+    rec->m1 = N64RT_CTRL_MASK1;
+    for (int i = 0; i < 5; i++) rec->map[i] = map[i];
+}
 #endif

@@ -1024,7 +1024,7 @@ the editor (Remap: layer, key, gives, or), and the actions Apply remap, Save for
 
 **The remap table.** 30 five-bit fields in the runtime's RAM (`n64rt_ctrl_t.map`; `n64rt_pad.h` has the layout): twelve Pocket keys (A, B, X, Y, L, R, ZL, ZR,
 Select, Start, L3, R3) and three groups (the four D-pad keys, the left and the right analog stick), each in two layers, Base and Held (the Modifier key held).
-It starts as the defaults at each start of the core. **Apply remap** (`n64rt_ctrl_edit`) puts the editor's choice in it: *layer* (Base, Held), *key* (the 15),
+It starts as the defaults at each start of the core. **Apply remap** (`n64rt_ctrl_apply_edit`) puts the editor's choice in the layout in use: the first Apply copies it (a family's or the game's saved layout, with its Modifier; under Menu, the table itself) and the copy is used until the "Controls" setting changes (`n64rt_ctrl_state_t`; `ctrl_test.py` runs scripted sessions through `ctrl_host session`). `n64rt_ctrl_edit` does the field change: *layer* (Base, Held), *key* (the 15),
 *gives* (an output: A, B, Z, Start, L, R, C-up/down/left/right, D-up/down/left/right: codes 1-14; None: 31; Default: 0) and *or* (0 use *gives*; 1 Same as Base,
 the Held layer's; for a group: 2 Stick, 3 Half stick, 4 N64 D-pad, 5 C buttons). A choice that means nothing (a key with a group's target, Same as Base in
 the Base layer, a group with a key's output) changes nothing. The defaults, Base: A A, B B, X C-right, Y C-left, L Z, R R, ZL, ZR, L3 and R3 none, Select
