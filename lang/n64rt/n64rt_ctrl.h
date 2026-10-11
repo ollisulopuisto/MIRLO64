@@ -3,9 +3,9 @@
  * which of the three the "Controls" setting picks. Pure functions of their arguments (no hardware), so that test/ctrl_host.c can run
  * them on the host (test/ctrl_test.py).
  *
- * A layout is: the Modifier (set0 [14:10]), the "C buttons" [14:10], "Stick" [19:15] and "D-pad" [23:22] settings (set1) and the table's
- * 30 fields (map[5]). Every other setting (crops, pak, Show FPS) stays the menu's. A family sets the Modifier and the table (and "C buttons"
- * where it says so), not "Stick" or "D-pad": the menu's choice of which analog stick moves stays; a game's saved layout has all of them.
+ * A layout is: the Modifier (set0 [14:10]), the stick's dead zone and range (set0 [29:20]), the D-pad ramp (set1 [4:0]) and the table's
+ * 30 fields (map[5]). Every other setting (crops, pak, Show FPS) stays the menu's. A family sets the Modifier and the table, not the stick's feel
+ * (dead zone, range, ramp): those are the player's; a game's saved layout has all of them.
  *
  * "Controls" (INTERACT2 [24:20], interact.json's first controller entry): 0 Menu (the live table: the menu's Remap entries edit it), 1 Auto
  * (the game's saved layout, else the family it is in, else the menu), 2.. a family, whatever the game: 2 Standard, 3 Platformer /
@@ -16,10 +16,11 @@
 #include <stdint.h>
 #include <string.h>
 
-typedef struct { uint32_t set0, set1, m1, map[5]; int mod_default; } n64rt_ctrl_t;   /* m1: which bits of set1 the layout owns (a family's: only "C buttons", and only
-                                                                                        * when it sets it); mod_default: its Modifier is a default, the menu's wins if it names one */
-#define N64RT_CTRL_MASK0 (31u << 10)
-#define N64RT_CTRL_MASK1 ((31u << 10) | (31u << 15) | (3u << 22))
+typedef struct { uint32_t set0, set1, m0, m1, map[5]; int mod_default; } n64rt_ctrl_t;   /* m0, m1: which bits of set0 / set1 the layout owns (a family's: the Modifier only);
+                                                                                          * mod_default: its Modifier is a default, the menu's wins if it names one */
+#define N64RT_CTRL_MOD   (31u << 10)                 /* set0: the Modifier */
+#define N64RT_CTRL_MASK0 (N64RT_CTRL_MOD | (0x3FFu << 20))   /* ... and the stick's dead zone [24:20] and range [29:25] */
+#define N64RT_CTRL_MASK1 0x1Fu                       /* set1: the D-pad ramp [4:0] */
 #define N64RT_CTRL_BYTES 64u                     /* the Controls slot's file */
 #define N64RT_CTRL_MAGIC 0x4D435431u             /* "MCT1" */
 
@@ -49,12 +50,12 @@ static inline void n64rt_ctrl_preset(unsigned fam, n64rt_ctrl_t *c)
     uint8_t f[30];
     memset(f, 0, sizeof f);
     memset(c, 0, sizeof *c);
+    c->m0 = N64RT_CTRL_MOD;                      /* a family owns the Modifier, and only that: the stick's feel is the player's */
     c->mod_default = 1;                          /* the family's Modifier (Select) is for a player who has not chosen one in the menu */
     switch (fam) {
     case N64RT_FAM_PLATFORMER:                   /* Mario 64, Banjo, Zelda ... : A, B, C-left (Y), C-right (X); Select + X / Y / D-pad: the rest */
     case N64RT_FAM_SHOOTER:                      /* the same, and the trigger on R (Z), L is the N64's R (aim) */
         c->set0 = N64RT_MOD_SELECT << 10;
-        c->set1 = 1u << 10; c->m1 = 31u << 10;   /* the right stick of a dock pad is the C buttons too */
         f[F_HELD + F_X] = O_CU;
         f[F_HELD + F_Y] = O_CD;
         f[F_HELD + F_A] = O_SAME; f[F_HELD + F_B] = O_SAME;      /* (the Held layer's own A, B are C-right, C-down) */
@@ -158,6 +159,7 @@ static inline int n64rt_ctrl_load(const volatile uint32_t *mem, unsigned file_by
     if (w[0] != N64RT_CTRL_MAGIC || w[8] != n64rt_ctrl_sum(w)) return 0;
     c->set0 = w[1] & N64RT_CTRL_MASK0;
     c->set1 = w[2] & N64RT_CTRL_MASK1;
+    c->m0 = N64RT_CTRL_MASK0;
     c->m1 = N64RT_CTRL_MASK1;
     c->mod_default = 0;
     for (int i = 0; i < 5; i++) c->map[i] = w[3 + i];
@@ -206,8 +208,9 @@ static inline int n64rt_ctrl_edit(n64rt_ctrl_t *c, unsigned layer, unsigned key,
 static inline void n64rt_ctrl_apply(const n64rt_ctrl_t *c, uint32_t *set0, uint32_t *set1, uint32_t map[5])
 {
     if (!c) return;
-    if (!(c->mod_default && ((*set0 >> 10) & 31u) != 0u))      /* (the menu's Modifier, if it names a key, over a family's) */
-        *set0 = (*set0 & ~N64RT_CTRL_MASK0) | c->set0;
+    uint32_t m0 = c->m0;
+    if (c->mod_default && ((*set0 >> 10) & 31u) != 0u) m0 &= ~N64RT_CTRL_MOD;      /* (the menu's Modifier, if it names a key, over a family's) */
+    *set0 = (*set0 & ~m0) | (c->set0 & m0);
     *set1 = (*set1 & ~c->m1) | (c->set1 & c->m1);
     for (int i = 0; i < 5; i++) map[i] = c->map[i];
 }
@@ -240,7 +243,7 @@ static inline int n64rt_ctrl_apply_edit(n64rt_ctrl_state_t *st, unsigned src, un
         n64rt_ctrl_t tmp;
         const n64rt_ctrl_t *c = n64rt_ctrl_select(src, st->saved_ok ? &st->saved : 0, st->family, &tmp);
         if (c) st->live = *c;                                       // a copy of the layout in use
-        else { st->live.set0 = 0; st->live.set1 = 0; st->live.m1 = 0; st->live.mod_default = 1; }   // Menu: the table, under the menu's own settings
+        else { st->live.set0 = 0; st->live.set1 = 0; st->live.m0 = 0; st->live.m1 = 0; st->live.mod_default = 0; }   // Menu: the table, under the menu's own settings
         st->editing = 1;
         st->edit_src = src;
     }
@@ -254,6 +257,7 @@ static inline void n64rt_ctrl_capture(n64rt_ctrl_state_t *st, unsigned src, uint
     memset(rec, 0, sizeof *rec);
     rec->set0 = s0 & N64RT_CTRL_MASK0;
     rec->set1 = s1 & N64RT_CTRL_MASK1;
+    rec->m0 = N64RT_CTRL_MASK0;
     rec->m1 = N64RT_CTRL_MASK1;
     for (int i = 0; i < 5; i++) rec->map[i] = map[i];
 }

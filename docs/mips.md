@@ -998,9 +998,9 @@ each button sends: the runtime only sees the Pocket's key bits.
 | Crop Vertical | 235 | `0x1000_010C` (3: `interact0[9:5]`) | None, 8 lines (**default**), 12 lines (the scan-out: `docs/rdp.md`) |
 | Crop Right | 236 | `0x1000_0114` (5: `interact0[19:15]`) | a list: 0 None, 1 1 column (**default**; the field is read as a 2-bit pixel count) |
 | Controller 1 pak | 214 | `0x1000_0108` (2: `interact0[4:0]`) | 0 None, 1 Controller Pak, 2 Transfer Pak |
-| Stick | 225 | `0x1000_012C` (11: `interact1[19:15]`) | 0 D-pad, 1 L stick, 2 R stick |
-| D-pad | 226 | `0x1000_0134` (13: `interact1[23:22]`) | 0 None, 1 D-pad, 2 L stick, 3 R stick |
-| C buttons | 223 | `0x1000_0128` (10: `interact1[14:10]`) | 0 None, 1 Right stick |
+| Stick dead zone | 273 | `0x1000_0118` (6: `interact0[24:20]`) | menu **Default (12)**, None, Small (6), Large (20), Huge (30): values 0-4 (the units: of 127 from the centre) |
+| Stick range | 274 | `0x1000_011C` (7: `interact0[29:25]`) | menu **Default (80)**, Wide (85), 75, 70, Small (60): values 0-4 |
+| D-pad ramp | 275 | `0x1000_0120` (8: `interact1[4:0]`) | menu **Off**, Fast, Medium, Slow: values 0-3 (at most 40 / 20 / 10 per poll of the pad) |
 | Modifier | 228 | `0x1000_0110` (4: `interact0[14:10]`) | menu None, L, R, ZL, ZR, Select: values **0**, 1, 2, 3, 4, 6 |
 | Controls | 270 | `0x1000_0150` (20: `interact2[24:20]`) | menu Menu, **Auto**, Standard, Platformer / adventure, Shooter, Skate / snowboard, Racing, Fighter: values 0-7 |
 | 1. which layer, 2. which button, 3. it sends, 3b. or (special) | 240-243 | `0x1000_0140`..`0x1000_014C` (16-19: `interact2[19:0]`) | the editor: layer Base / Held, key (15), gives (16 outputs), or (6); not persisted |
@@ -1036,8 +1036,7 @@ It starts as the defaults at each start of the core. **Apply remap** (`n64rt_ctr
 *gives* (an output: A, B, Z, Start, L, R, C-up/down/left/right, D-up/down/left/right: codes 1-14; None: 31; Default: 0) and *or* (0 use *gives*; 1 Same as Base,
 the Held layer's; for a group: 2 Stick, 3 Half stick, 4 N64 D-pad, 5 C buttons). A choice that means nothing (a key with a group's target, Same as Base in
 the Base layer, a group with a key's output) changes nothing. The defaults, Base: A A, B B, X C-right, Y C-left, L Z, R R, ZL, ZR, L3 and R3 none, Select
-C-down, Start Start; Held: A C-right, B C-down, X C-up, Y C-left, the rest "Same as Base". A group's field: *Stick/D-pad settings* (0, default: the Stick, D-pad
-and C buttons settings below, with the Modifier's half stick / swap while held for the D-pad keys), *Stick* (the D-pad keys: full deflection; an analog stick:
+C-down, Start Start; Held: A C-right, B C-down, X C-up, Y C-left, the rest "Same as Base". A group's field: *default* (0: see "Sticks and the D-pad keys by default" below), *Stick* (the D-pad keys: full deflection; an analog stick:
 as it is), *Half stick*, *N64 D-pad* (an analog stick: its four directions past 64 of 127), *C buttons* (the same), *None*; held also *Same as Base* (the Base
 choice as if unheld). Any choice but the first takes the group's source away from those settings (an analog stick a group has is centred for them). Nothing
 couples the keys: two keys may give one output. The Modifier key itself never reaches the table (it is consumed), so it cannot also be mapped.
@@ -1057,17 +1056,18 @@ Shooter, the same with Z on R and the N64's R on L; Skate, the C buttons on the 
 Select + X / Y as C-up / C-down and Select + D-pad half a stick; Fighter, C-up on X, Z on Y and L (the N64's L on a dock pad's ZL), no Modifier. They are
 starting points chosen for the Pocket's keys: no game's own controls were checked.
 
-**Stick** (the N64's stick). *D-pad* (the default): the D-pad keys are the stick at full deflection (half of it with the Modifier held, unless the D-pad keys' list says otherwise).
-*L stick*, *R stick*: that analog stick of the pad (bytes 0-1 / 2-3 of `cont*_joy`, 0x80 the centre, a dead zone of 12, 80 at the end
-of the range). **D-pad** (the N64's D-pad): *None* (the default), *D-pad* (the keys), *L stick* or *R stick* (past 64 of 127, the four
-directions). With **Stick=D-pad and D-pad=D-pad**, the physical D-pad drives only the stick unheld, at full deflection;
-while the Modifier is held it drives only the digital D-pad and the stick vector is zero.
-With Modifier=None it remains stick-only. With D-pad=None, the original half-stick behavior remains; when Stick is L/R stick,
-D-pad=D-pad keeps its original simultaneous digital behavior, including analog-mode fallback to the D-pad. The stick bytes are believed for a pad the dock calls type 3 (with analog) and also for **type 2 ("without analog")
-unless they are all 0x00 or all 0xFF**, in case the dock reports a pad with a stick so. With L or R stick a type 3 pad gives the stick
-(centred: zero), and any other pad gives the stick when it is deflected and, when it is not, the D-pad keys at full deflection -- so the
-Pocket's own controls, or a pad whose stick bytes the dock never fills, still move Mario. A stick can drive the stick, the D-pad and the C
-buttons at once if asked to. `lang/mips/test/padtest.c` shows on the screen what the dock sends of each pad (below).
+**The stick's feel (no RTL: the interact fields 6, 7 and 8 were free).** *Stick dead zone* and *Stick range* are `n64rt_pad_axis`'s: an analog stick's byte is 0x80 at the centre,
+the dead zone drops what is closer than that many of 127, the range scales the rest to 0..range; a digital stick (the D-pad keys) is the range (half of it, 0.35 of it on a diagonal, for
+the half stick). *D-pad ramp* (`n64rt_pad_ramp`, applied by `n64rt_io.c`'s `read_pad` to a stick `n64rt_pad_map` reports as digital): a stick that grows moves by at most the step per poll of
+the pad toward its target (40, 20 or 10, of the 80): from rest to full is 2, 4 or 8 polls; one that shrinks, reverses or is released goes where it is going at once. It is per pad and per poll
+(a game that polls twice a frame ramps twice as fast). All three are part of a game's saved layout (`MASK0`, `MASK1` in `n64rt_ctrl.h`); a family leaves them alone.
+
+**Sticks and the D-pad keys by default.** The groups' code 0 is: the D-pad keys the N64's stick at full deflection (half with the Modifier held; with the D-pad keys group set to Stick / Half
+stick / N64 D-pad / C buttons / None the group's own); **a dock pad's left analog stick the N64's stick, its right stick the C buttons** (`n64rt_pad_map`: the groups 1 and 2). The analog
+sticks are believed for a pad the dock calls type 3 (with analog) and also for **type 2 ("without analog") unless the four bytes are all 0x00 or all 0xFF**, in case the dock reports a pad
+with a stick so (a type 1 pad, the Pocket's own controls, has none: nothing to give). The D-pad keys and the left stick add (clamped to the range). The old **Stick**, **D-pad** and **C
+buttons** settings (interact1 fields 11, 13, 10) are gone from the menu -- the Pocket shows 16 entries -- and read 0 (their defaults); `n64rt_pad_map` still has their code, which is dead
+in the shipped menu and tested against the spec. `lang/mips/test/padtest.c` shows on the screen what the dock sends of each pad (below).
 
 **The Switch Online N64 controller through the dock** is not documented: the Analogue docs (the bus: `cont*_key` bits 0-15 the d-pad,
 A, B, X, Y, L1, R1, L2, R2, L3, R3, Select, Start; `cont*_joy` four bytes; KEY_TYPE 2 or 3 for a docked pad) say nothing about it, and

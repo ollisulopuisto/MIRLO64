@@ -75,12 +75,10 @@ def main():
     # fighter: C-up (jump) on X, Z on Y and L, L on a dock pad's ZL
     expect('fighter', ['X'], ['CUP']); expect('fighter', ['Y'], ['Z']); expect('fighter', ['L1'], ['Z']); expect('fighter', ['L2'], ['L'])
     expect('fighter', ['select'], ['CDOWN']); expect('fighter', ['A'], ['A'])
-    # a family sets the Modifier and (platformer, shooter) "C buttons", never "Stick" / "D-pad"
+    # a family owns the Modifier and the table, nothing of the stick's feel (dead zone, range, ramp are the player's)
     for f, p in presets.items():
-        if p['m1'] & ~(31 << 10):
-            fail('family %d owns more of set1 than "C buttons": %x' % (f, p['m1']))
-        if f not in (1, 2) and p['m1']:
-            fail('family %d owns set1 bits without setting them' % f)
+        if p['m1'] or p['s1']:
+            fail('family %d owns set1 bits: %x / %x' % (f, p['m1'], p['s1']))
         if p['s0'] & ~(31 << 10):
             fail('family %d sets more of set0 than the Modifier: %x' % (f, p['s0']))
 
@@ -103,9 +101,9 @@ def main():
             fail('family %s: %d, expected %d' % (i, got, want))
 
     # a game's saved layout: it comes back, and any damage to it, or a short file, refuses it
-    s0, s1, m = 6 << 10 | 0x7FFF, 1 << 10 | 2 << 15 | 1 << 22 | 0x3FFF000, [0x12345678 & 0x3FFFFFFF, 1, 2, 3, 0x3FFFFFFF]
+    s0, s1, m = 6 << 10 | 0x7FFF | 0x2AA << 20, 3 | 0x3FFF000, [0x12345678 & 0x3FFFFFFF, 1, 2, 3, 0x3FFFFFFF]
     args = ['%x' % s0, '%x' % s1, *('%x' % w for w in m)]
-    want = '1 %x %x %s' % (s0 & (31 << 10), s1 & (31 << 10 | 31 << 15 | 3 << 22), ' '.join('%x' % w for w in m))
+    want = '1 %x %x %s' % (s0 & (31 << 10 | 0x3FF << 20), s1 & 0x1F, ' '.join('%x' % w for w in m))
     got = run(ctrl, 'record', *args).strip()
     if got != want:
         fail('record: %s, expected %s' % (got, want))
@@ -118,7 +116,7 @@ def main():
     if run(ctrl, 'record', *args, '8', '0', '35').strip() != '0':
         fail('a record of 35 bytes was accepted')
     # the "Controls" setting: src, saved?, family
-    for src_, saved, fam, want in ((0, 1, 1, 'menu'), (1, 1, 1, '1800 0 %x 1234' % (31 << 10 | 31 << 15 | 3 << 22)), (1, 0, 1, None), (1, 0, -1, 'menu'),
+    for src_, saved, fam, want in ((0, 1, 1, 'menu'), (1, 1, 1, '1800 0 %x 1234' % 0x1F), (1, 0, 1, None), (1, 0, -1, 'menu'),
                                    (2, 1, 1, None), (3, 1, -1, None), (7, 0, 0, None), (8, 1, 1, 'menu'), (31, 1, 1, 'menu')):
         got = run(ctrl, 'select', str(src_), str(saved), str(fam), 'x').strip()
         if want is not None and got != want:
@@ -206,6 +204,24 @@ def main():
     # nonsense changes nothing and does not start an edit that hides the family
     r = session(0, 3, 'src 1\nmenu 0 0\napply 0 0 1 3\neff\n')
     if r[0] != ['applied', 0] or fld(r[1][3:], 0) != 10: fail('session: a choice that means nothing: %s' % (r,))
+    # the stick's feel is kept by a family, a game's saved layout carries it; the menu's own Modifier still wins over a family's
+    feel = 2 << 20 | 3 << 25                          # dead zone code 2, range code 3
+    if ap(feel, 3, 0, -1) != feel | 6 << 10: fail('a family changed the stick\'s feel: %x' % ap(feel, 3, 0, -1))
+    if ap(feel | 1 << 10, 3, 0, -1) != feel | 1 << 10: fail('a family overrode the menu Modifier with the feel set')
+    if ap(feel, 1, 1, 3) != 3 << 10: fail('a game\'s saved layout kept the menu\'s feel: %x' % ap(feel, 1, 1, 3))
+    # the D-pad ramp: grows by the step, never past the target; a release, a reversal or a smaller target is at once; off is the target
+    ramp = lambda c, t, st: int(run(ctrl, 'ramp', str(c), str(t), str(st)).strip())
+    for cur, tgt, step, want in ((0, 80, 20, 20), (20, 80, 20, 40), (70, 80, 20, 80), (0, -80, 40, -40), (-40, -80, 40, -80), (60, 0, 20, 0),
+                                 (60, -80, 20, -80), (80, 40, 20, 40), (0, 80, 0, 80), (0, 40, 10, 10), (5, 3, 10, 3), (0, 80, -5, 80)):
+        if ramp(cur, tgt, step) != want:
+            fail('ramp %d -> %d by %d: %d, expected %d' % (cur, tgt, step, ramp(cur, tgt, step), want))
+    for step in (10, 20, 40):                        # from rest to full: the polls the step implies, no overshoot, no stall
+        v, n = 0, 0
+        while v != 80 and n < 100:
+            nv = ramp(v, 80, step)
+            if not v < nv <= 80: fail('ramp stalled or overshot at %d (step %d)' % (v, step)); break
+            v, n = nv, n + 1
+        if n != -(-80 // step): fail('ramp with step %d took %d polls' % (step, n))
     print('ctrl_test: %s' % ('FAIL (%d)' % bad if bad else 'PASS'))
     return 1 if bad else 0
 

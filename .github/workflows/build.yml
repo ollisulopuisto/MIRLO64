@@ -2,6 +2,11 @@ name: Build MIRLO64 (patched v0.1)
 
 on:
   workflow_dispatch:
+    inputs:
+      reuse_run:
+        description: "Run id whose closed bitstream (its mirlo64-release artifact) to reuse: no fits, only the runtime and the package (for a change with no RTL in it)"
+        required: false
+        default: ""
   push:
     branches: [patched-v0.1]
 
@@ -52,6 +57,7 @@ jobs:
 
   quartus-cache:
     name: Download and cache Quartus installers
+    if: ${{ inputs.reuse_run == '' }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -69,6 +75,7 @@ jobs:
   fit:
     name: Fit seed ${{ matrix.seed }}
     needs: quartus-cache
+    if: ${{ inputs.reuse_run == '' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 300
     strategy:
@@ -144,10 +151,20 @@ jobs:
           name: runtime
           path: runtime
       - uses: actions/download-artifact@v4
+        if: ${{ inputs.reuse_run == '' }}
         with:
           pattern: fit-*-closed-true
           path: fits
+      - name: Reuse the bitstream of another run
+        if: ${{ inputs.reuse_run != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: mirlo64-release
+          run-id: ${{ inputs.reuse_run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: prev
       - name: Pick the closing seed with the best slack
+        if: ${{ inputs.reuse_run == '' }}
         run: |
           ls -R fits || true
           best=""; bw=-999
@@ -163,7 +180,12 @@ jobs:
           { echo "seed: $(cat $best/seed.txt)"; echo "worst slack (ns, all corners): $bw"; cat "$best/closure.txt"; } > release/BUILD_INFO.txt
       - name: Package
         run: |
-          python3 tools/package_bitstream.py mirlo.rbf mirlo.rev
+          if [ -n "${{ inputs.reuse_run }}" ]; then
+            mkdir -p release; cp prev/mirlo.rev mirlo.rev
+            { echo "bitstream reused from run ${{ inputs.reuse_run }} (no fits in this run):"; cat prev/BUILD_INFO.txt; } > release/BUILD_INFO.txt
+          else
+            python3 tools/package_bitstream.py mirlo.rbf mirlo.rev
+          fi
           cp runtime/n64rt.sys .
           python3 tools/make_release.py mirlo.rev n64rt.sys tortuga.Mirlo64_0.1.zip
           cp mirlo.rev n64rt.sys tortuga.Mirlo64_0.1.zip release/
