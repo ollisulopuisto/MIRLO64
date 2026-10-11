@@ -22,7 +22,8 @@ def spec(keys, joy, s0, s1):
     rmod = mod_key is not None and mod_key in held
     if mod_key:
         held.discard(mod_key)                     # the modifier key never reaches the game
-    if rmod:                                      # face buttons become the C buttons where they sit; the pad becomes half a stick
+    c_layer = bool(s1 & (1 << 24))               # C-button layer: C unheld, A/B held
+    if rmod != c_layer:                          # original: C held; new layer: C unheld
         for face, c in (('X', 'CUP'), ('B', 'CDOWN'), ('Y', 'CLEFT'), ('A', 'CRIGHT')):
             if face in held:
                 out.add(c)
@@ -44,7 +45,8 @@ def spec(keys, joy, s0, s1):
     # joystick bytes: left X, left Y, right X, right Y (0x80 centre)
     lx, ly, rx, ry = (joy >> 0) & 255, (joy >> 8) & 255, (joy >> 16) & 255, (joy >> 24) & 255
     # the C buttons are on the face buttons always (Y left, X right, Select down; up only through the R modifier) ...
-    for key, c in (('Y', 'CLEFT'), ('X', 'CRIGHT'), ('select', 'CDOWN')):
+    base_c = (('Y', 'CLEFT'), ('X', 'CRIGHT'), ('select', 'CDOWN')) if not c_layer else (() if rmod else (('select', 'CDOWN'),))
+    for key, c in base_c:
         if key in held: out.add(c)
     # ... and "C buttons" 1 adds the right stick
     if (s1 >> 10) & 31 == 1 and analog:
@@ -78,7 +80,10 @@ def spec(keys, joy, s0, s1):
     else:
         sx, sy = dpad_stick()                     # D-pad, or an unknown value
     dmode = (s1 >> 22) & 3                        # the N64's D-pad: 0 none, 1 the D-pad, 2 L stick, 3 R stick
-    if dmode == 1:
+    dpad_swap = dmode == 1 and smode not in (1, 2)
+    if dpad_swap and rmod:
+        sx = sy = 0
+    if dmode == 1 and (not dpad_swap or rmod):
         for key, c in (('up', 'DUP'), ('down', 'DDOWN'), ('left', 'DLEFT'), ('right', 'DRIGHT')):
             if key in held: out.add(c)
     elif dmode in (2, 3) and analog:
@@ -92,11 +97,11 @@ def spec(keys, joy, s0, s1):
 
 def settings():
     """every combination of the settings' values (valid ones, and invalid codes)"""
-    for mod, z, l, r, c, stick, dpad, start in itertools.product(
+    for mod, z, l, r, c, stick, dpad, start, c_layer in itertools.product(
             (0, 1, 2, 3, 4, 5, 9), (0, 1, 2, 3, 4, 5, 31), (0, 1, 2, 3, 4, 5, 9), (0, 1, 2, 3, 4, 5, 7),
-            (0, 1, 2), (0, 1, 2, 9), (0, 1, 2, 3), (0, 1, 2, 3)):
+            (0, 1, 2), (0, 1, 2, 9), (0, 1, 2, 3), (0, 1, 2, 3), (0, 1)):
         s0 = mod << 10 | l << 20 | r << 25 | 3 << 5 | 1 << 15 | 2             # (crop, pak: other fields, ignored here)
-        s1 = 1 | z << 5 | c << 10 | stick << 15 | start << 20 | dpad << 22 | 1 << 24 | 1 << 25   # (the free fields: EEPROM size, the old FPS and chord bits)
+        s1 = 1 | z << 5 | c << 10 | stick << 15 | start << 20 | dpad << 22 | c_layer << 24 | 1 << 25   # free fields: EEPROM size and the old chord bit
         yield s0, s1
 
 
@@ -126,24 +131,29 @@ def main():
     rng = random.Random(64)
     ws = list(words(rng))
     sets = list(settings())
-    # all settings with a sample of words; all words with the default and a few others
+    # Stream bounded batches: testing both layers doubles the settings space.
+    bad = total = 0
+    def check(cases):
+        nonlocal bad, total
+        inp = ''.join('%x %x %x %x\n' % c for c in cases)
+        res = subprocess.run([exe], input=inp, capture_output=True, text=True, check=True).stdout.splitlines()
+        assert len(res) == len(cases), 'host harness did not return every case'
+        total += len(cases)
+        for c, line in zip(cases, res):
+            b, x, y = line.split()
+            want = spec(*c)
+            if (int(b, 16), int(x), int(y)) != want:
+                bad += 1
+                if bad <= 10:
+                    print('MISMATCH keys %08x joy %08x set0 %08x set1 %08x: C %s %s %s, spec %04x %d %d' % (*c, b, x, y, *want))
     cases = []
     for s0, s1 in sets:
-        for k, j in rng.sample(ws, 14):
-            cases.append((k, j, s0, s1))
-    for k, j in ws:
-        for s0, s1 in rng.sample(sets, 6) + [(0, 0)]:
-            cases.append((k, j, s0, s1))
-    inp = ''.join('%x %x %x %x\n' % c for c in cases)
-    res = subprocess.run([exe], input=inp, capture_output=True, text=True, check=True).stdout.split('\n')
-    bad = 0
-    for c, line in zip(cases, res):
-        b, x, y = line.split()
-        want = spec(*c)
-        if (int(b, 16), int(x), int(y)) != want:
-            bad += 1
-            if bad <= 10:
-                print('MISMATCH keys %08x joy %08x set0 %08x set1 %08x: C %s %s %s, spec %04x %d %d' % (*c, b, x, y, *want))
+        cases.extend((k, j, s0, s1) for k, j in rng.sample(ws, 14))
+        if len(cases) >= 16384:
+            check(cases)
+            cases = []
+    check(cases)
+    check([(k, j, s0, s1) for k, j in ws for s0, s1 in rng.sample(sets, 6) + [(0, 0)]])
     # the defaults: Z on L, L button on ZL, R on R, face-button C buttons, the D-pad is the stick, Start is Start, no modifier
     d = lambda k: spec(k | 1 << 28, 0x80808080, 0, 0)
     assert d(1 << K['L1']) == (N['Z'], 0, 0)
@@ -154,7 +164,46 @@ def main():
     assert d(1 << K['left']) == (0, -80, 0)
     assert spec(3 << 28 | 1 << K['Y'], 0x80808080, 0, 1 << 10) == (N['CLEFT'], 0, 0)      # the face buttons stay with the right stick on
     assert spec(3 << 28 | 1 << K['left'], 0x80808080, 0, 0) == (0, -80, 0)      # the default Stick is the D-pad whatever the pad
-    print('pad_test: %d cases, %d settings x words: %s' % (len(cases), len(sets), 'FAIL (%d)' % bad if bad else 'PASS'))
+    # Exact expected results go through BOTH the independent spec and the C harness.
+    # R is the modifier; its usual N64 R mapping must be consumed.
+    regressions = []
+    def expect(names, s1, want, held=False, mod=2, typ=1, joy=0x80808080):
+        k = typ << 28 | sum(1 << K[n] for n in names)
+        if held: k |= 1 << K[CODE[mod]]
+        c = (k, joy, mod << 10, s1)
+        assert spec(*c) == want, (names, s1, held, want, spec(*c))
+        regressions.append(c)
+    layer = 1 << 24
+    for mod in (1, 2, 3, 4):
+        for face, c in (('X', 'CUP'), ('B', 'CDOWN'), ('Y', 'CLEFT'), ('A', 'CRIGHT')):
+            expect([face], layer, (N[c], 0, 0), mod=mod)
+            expect([face], layer, (N.get(face, 0), 0, 0), held=True, mod=mod)
+            expect([face], 0, (N[c], 0, 0), held=True, mod=mod)
+    expect(['A', 'B', 'X', 'Y'], layer, (15, 0, 0))
+    expect(['A', 'B', 'X', 'Y'], layer, (N['A'] | N['B'], 0, 0), held=True)
+    expect(['select'], layer, (N['CDOWN'], 0, 0))
+    expect(['select'], layer, (0, 0, 0), held=True)
+    expect(['select', 'start'], layer | 1 << 20, (N['START'], 0, 0))
+    expect(['select', 'start'], layer | 1 << 20, (N['START'], 0, 0), held=True)
+    expect(['X'], layer | 1 << 10, (N['CRIGHT'], 0, 0), held=True, typ=3, joy=0x80FF8080)
+    for face, c in (('A', 'A'), ('B', 'B'), ('X', 'CRIGHT'), ('Y', 'CLEFT')):
+        expect([face], 0, (N[c], 0, 0))
+    for layer_bit in (0, layer):                 # D-pad swap is independent of the face option
+        for typ in (1, 2, 3):
+            for key, digital, xy in (('up', 'DUP', (0, 80)), ('down', 'DDOWN', (0, -80)),
+                                     ('left', 'DLEFT', (-80, 0)), ('right', 'DRIGHT', (80, 0))):
+                expect([key], layer_bit | 1 << 22, (0, *xy), typ=typ)
+                expect([key], layer_bit | 1 << 22, (N[digital], 0, 0), held=True, typ=typ)
+            expect(['up', 'left'], layer_bit | 1 << 22, (0, -80, 80), typ=typ)
+            expect(['up', 'left'], layer_bit | 1 << 22, (N['DUP'] | N['DLEFT'], 0, 0), held=True, typ=typ)
+        expect(['left'], layer_bit, (0, -40, 0), held=True)
+        expect(['up', 'left'], layer_bit, (0, -28, 28), held=True)
+        expect(['left'], layer_bit | 1 << 15 | 1 << 22, (N['DLEFT'], 0, 0), typ=3)
+        expect(['left'], layer_bit | 1 << 15 | 1 << 22, (N['DLEFT'], 0, 0), held=True, typ=3)
+        expect(['left'], layer_bit | 1 << 15 | 1 << 22, (N['DLEFT'], -40, 0), held=True)
+        expect(['left'], layer_bit | 2 << 22, (0, -40, 0), held=True)
+    check(regressions)
+    print('pad_test: %d cases, %d settings x words: %s' % (total, len(sets), 'FAIL (%d)' % bad if bad else 'PASS'))
     return 1 if bad else 0
 
 

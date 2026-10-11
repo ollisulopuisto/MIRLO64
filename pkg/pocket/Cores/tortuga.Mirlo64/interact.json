@@ -8,6 +8,7 @@
 {"name":"L button","id":234,"type":"list","enabled":true,"persist":true,"address":"0x10000118","defaultval":0,"options":[{"value":5,"name":"None"},{"value":1,"name":"L"},{"value":2,"name":"R"},{"value":0,"name":"ZL"},{"value":4,"name":"ZR"}],"writeonly":true},
 {"name":"R button","id":232,"type":"list","enabled":true,"persist":true,"address":"0x1000011C","defaultval":2,"options":[{"value":5,"name":"None"},{"value":1,"name":"L"},{"value":0,"name":"R"},{"value":3,"name":"ZL"},{"value":4,"name":"ZR"}],"writeonly":true},
 {"name":"C buttons","id":223,"type":"list","enabled":true,"persist":true,"address":"0x10000128","defaultval":0,"options":[{"value":0,"name":"None"},{"value":1,"name":"Right stick"}],"writeonly":true},
+{"name":"C-button layer","id":237,"type":"check","enabled":true,"persist":true,"address":"0x10000138","defaultval":0,"value":1,"value_off":0,"writeonly":true},
 {"name":"Start button","id":233,"type":"list","enabled":true,"persist":true,"address":"0x10000130","defaultval":1,"options":[{"value":2,"name":"None"},{"value":0,"name":"Start"},{"value":1,"name":"Select+Start"}],"writeonly":true},
 {"name":"Modifier","id":228,"type":"list","enabled":true,"persist":true,"address":"0x10000110","defaultval":0,"options":[{"value":0,"name":"None"},{"value":1,"name":"L"},{"value":2,"name":"R"},{"value":3,"name":"ZL"},{"value":4,"name":"ZR"}],"writeonly":true}
 ],"messages":[]}}

@@ -89,9 +89,10 @@ The core's menu (`interact.json`; the Pocket's own Controls menu still remaps ea
 | R button | None, L, **R**, ZL, ZR | the Pocket's key for the N64's R |
 | C buttons | **None**, Right stick | the right stick as the C buttons, besides the face buttons |
 | Start button | None, **Start**, Select+Start | the Pocket's key for Start |
-| Modifier | **None**, L, R, ZL, ZR | held, turns the face buttons X, B, Y, A into C-up, C-down, C-left, C-right and the D-pad into half a stick |
+| Modifier | **None**, L, R, ZL, ZR | selects the held face-button and D-pad layers; its key never reaches the game |
+| C-button layer | **Off**, On | On: X/B/Y/A are C-up/down/left/right unheld; A/B are N64 A/B held (X/Y unmapped) |
 
-The face buttons are A and B as they are, and C-left on Y, C-right on X, C-down on Select (C-up is through the Modifier). Controllers 2-4 come and go with the dock: a pad plugged in while a game runs answers from the game's next poll. The layout is described in docs/mips.md, "The core's settings for the controller".
+With C-button layer Off, the face buttons are A and B as they are, and C-left on Y, C-right on X, C-down on Select (C-up is through the Modifier). With it On, Select is C-down only unheld; the right-stick C option still works in either layer. When Stick and D-pad are both set to D-pad, the physical D-pad drives only the stick unheld and only the N64 digital D-pad held. With D-pad=None, the original half-stick modifier behavior is unchanged. Controllers 2-4 come and go with the dock: a pad plugged in while a game runs answers from the game's next poll. The layout is described in docs/mips.md, "The core's settings for the controller".
 
 ### Saves
 
