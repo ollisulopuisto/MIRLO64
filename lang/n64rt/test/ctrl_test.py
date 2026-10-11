@@ -162,6 +162,14 @@ def main():
         for o in v.get('options', []):
             if len(o['name']) > 23: fail('interact.json option %r is over 23 characters' % o['name'])
         if v['type'] == 'list' and not 0 <= v['defaultval'] < len(v['options']): fail('interact.json %r defaultval' % v['name'])
+    # a family's Modifier is a default: the menu's own (any key) wins; a game's saved layout has its own Modifier, which is the game's
+    ap = lambda menu, src, saved, fam: int(run(ctrl, 'apply', '%x' % menu, str(src), str(saved), str(fam)).strip(), 16)
+    sel6, l1 = 6 << 10, 1 << 10
+    for menu, src, saved, fam, want in ((0, 3, 0, -1, sel6), (l1, 3, 0, -1, l1), (2 << 10, 5, 0, -1, 2 << 10), (0, 1, 0, 3, sel6),
+                                        (l1, 1, 0, 3, l1), (l1, 1, 1, 3, 3 << 10), (0, 1, 1, 3, 3 << 10), (l1, 0, 0, 3, l1), (0, 0, 0, 3, 0),
+                                        (0, 2, 0, -1, 0), (l1, 2, 0, -1, l1)):
+        got = ap(menu, src, saved, fam)
+        if got != want: fail('apply menu %x src %d saved %d family %d: %x, expected %x' % (menu, src, saved, fam, got, want))
     print('ctrl_test: %s' % ('FAIL (%d)' % bad if bad else 'PASS'))
     return 1 if bad else 0
 

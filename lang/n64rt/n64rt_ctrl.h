@@ -16,7 +16,8 @@
 #include <stdint.h>
 #include <string.h>
 
-typedef struct { uint32_t set0, set1, m1, map[5]; } n64rt_ctrl_t;      /* m1: which bits of set1 the layout owns (a family's: only "C buttons", and only when it sets it) */
+typedef struct { uint32_t set0, set1, m1, map[5]; int mod_default; } n64rt_ctrl_t;   /* m1: which bits of set1 the layout owns (a family's: only "C buttons", and only
+                                                                                        * when it sets it); mod_default: its Modifier is a default, the menu's wins if it names one */
 #define N64RT_CTRL_MASK0 (31u << 10)
 #define N64RT_CTRL_MASK1 ((31u << 10) | (31u << 15) | (3u << 22))
 #define N64RT_CTRL_BYTES 64u                     /* the Controls slot's file */
@@ -48,6 +49,7 @@ static inline void n64rt_ctrl_preset(unsigned fam, n64rt_ctrl_t *c)
     uint8_t f[30];
     memset(f, 0, sizeof f);
     memset(c, 0, sizeof *c);
+    c->mod_default = 1;                          /* the family's Modifier (Select) is for a player who has not chosen one in the menu */
     switch (fam) {
     case N64RT_FAM_PLATFORMER:                   /* Mario 64, Banjo, Zelda ... : A, B, C-left (Y), C-right (X); Select + X / Y / D-pad: the rest */
     case N64RT_FAM_SHOOTER:                      /* the same, and the trigger on R (Z), L is the N64's R (aim) */
@@ -157,6 +159,7 @@ static inline int n64rt_ctrl_load(const volatile uint32_t *mem, unsigned file_by
     c->set0 = w[1] & N64RT_CTRL_MASK0;
     c->set1 = w[2] & N64RT_CTRL_MASK1;
     c->m1 = N64RT_CTRL_MASK1;
+    c->mod_default = 0;
     for (int i = 0; i < 5; i++) c->map[i] = w[3 + i];
     return 1;
 }
@@ -203,7 +206,8 @@ static inline int n64rt_ctrl_edit(n64rt_ctrl_t *c, unsigned layer, unsigned key,
 static inline void n64rt_ctrl_apply(const n64rt_ctrl_t *c, uint32_t *set0, uint32_t *set1, uint32_t map[5])
 {
     if (!c) return;
-    *set0 = (*set0 & ~N64RT_CTRL_MASK0) | c->set0;
+    if (!(c->mod_default && ((*set0 >> 10) & 31u) != 0u))      /* (the menu's Modifier, if it names a key, over a family's) */
+        *set0 = (*set0 & ~N64RT_CTRL_MASK0) | c->set0;
     *set1 = (*set1 & ~c->m1) | (c->set1 & c->m1);
     for (int i = 0; i < 5; i++) map[i] = c->map[i];
 }

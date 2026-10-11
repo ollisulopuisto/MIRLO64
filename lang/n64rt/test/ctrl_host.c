@@ -15,6 +15,12 @@ int main(int argc, char **argv)
             n64rt_ctrl_preset(f, &c);
             printf("%u %x %x %x %x %x %x %x %x\n", f, c.set0, c.set1, c.m1, c.map[0], c.map[1], c.map[2], c.map[3], c.map[4]);
         }
+    } else if (argc == 6 && !strcmp(argv[1], "apply")) {           /* apply menu_set0 src saved family -> the set0 the pad mapping gets */
+        n64rt_ctrl_t saved = { 0 }, tmp;
+        saved.set0 = 3u << 10; saved.m1 = N64RT_CTRL_MASK1;
+        uint32_t s0 = (uint32_t)strtoul(argv[2], 0, 16), s1 = 0, map[5] = { 0 };
+        n64rt_ctrl_apply(n64rt_ctrl_select((unsigned)atoi(argv[3]), atoi(argv[4]) ? &saved : 0, atoi(argv[5]), &tmp), &s0, &s1, map);
+        printf("%x\n", s0);
     } else if (argc == 6 && !strcmp(argv[1], "edit")) {            /* edit layer key gives special -> the changed flag and the table, from a zero one */
         n64rt_ctrl_t c = { 0 };
         const int r = n64rt_ctrl_edit(&c, (unsigned)atoi(argv[2]), (unsigned)atoi(argv[3]), (unsigned)atoi(argv[4]), (unsigned)atoi(argv[5]));

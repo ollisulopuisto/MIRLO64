@@ -1042,7 +1042,7 @@ copies the live table and the menu's Modifier, "C buttons", "Stick" and "D-pad" 
 that is short, has another magic or a bad checksum is no layout. **Controls** (bus word 20, `interact2[24:20]`) picks the layout the pad mapping uses:
 *Menu* the live table; *Auto* (the default) this game's saved layout, else its family (a table of cartridge IDs, three characters each, every one of
 them in `n64savedb.txt`), else the menu's; a family (*Standard*, *Platformer / adventure*, *Shooter*, *Skate / snowboard*, *Racing*, *Fighter*) that
-family whatever the game. A family sets the Modifier (Select, except Standard: none) and the table, and "C buttons" where it says so (Platformer, Shooter:
+family whatever the game. A family sets the Modifier (Select, except Standard: none) as a default -- a key chosen in the menu's Modifier setting wins, `mod_default` in `n64rt_ctrl_t` -- and the table, and "C buttons" where it says so (Platformer, Shooter:
 the right stick of a dock pad); it leaves "Stick" and "D-pad" as the menu has them. The families:
 Standard, the defaults; Platformer, A, B, C-left (Y), C-right (X) unheld and Select + X / Y / D-pad as C-up / C-down / the C buttons, Select + L the N64's L;
 Shooter, the same with Z on R and the N64's R on L; Skate, the C buttons on the face keys and Select + A / B the N64's A / B; Racing, the defaults with
