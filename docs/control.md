@@ -83,8 +83,8 @@ This interface provides IO to the Pocket's `interact.json` (`Core Settings`) API
 | `13`      | `0x1000_0134`               | `interact1[23:22]`                         |
 | `14`      | `0x1000_0138`               | `interact1[24]`                            |
 | `15`      | `0x1000_013C`               | `interact1[25]` (Show FPS; see [FPS overlay](fps.md)) |
-| `16`..`20` | `0x1000_0140`..`0x1000_0150` | the controller remap editor: five-bit fields -- layer, key, gives, or (what the menu's Remap entries chose) and "Controls" (the source of the layout); the CPU reads them in `interact2` `[4:0]`, `[9:5]`, `[14:10]`, `[19:15]`, `[24:20]`. The Pocket reads none of words 16-21 back (every entry is writeonly): they read as 0 on its side |
-| `21` | `0x1000_0154` | the Pocket's actions: a write with bit 0 set flips `interact2[28]` (Apply remap), with bit 1 set `interact2[29]` (Save; both: Forget) |
+| `16`..`19` | `0x1000_0140`..`0x1000_014C` | the controller layout lists, five-bit fields: Normal, Shift, Shift: D-pad and D-pad keys (each 0 = Auto); the CPU reads them in `interact2` `[4:0]`, `[9:5]`, `[14:10]`, `[19:15]`. The Pocket reads none of words 16-21 back (every entry is writeonly): they read as 0 on its side |
+| `21` | `0x1000_0154` | the Pocket's actions: a write with bit 1 set flips `interact2[29]` (Save for this game), with bits 0 and 1 set `interact2[28]` and `[29]` (Forget this game) |
 
 A field address writes only its bits, so each `interact.json` setting can have its own address and needs no `mask`. [See the Analogue Docs](https://www.analogue.co/developer/docs/core-definition-files/interact-json) for more information.
 
@@ -94,7 +94,7 @@ A field address writes only its bits, so each `interact.json` setting can have i
 | `interact_changed0`   | `0x4`  | R   | 1     | 1 when slot 0 has been written by the Pocket since last read. |
 | `interact1`           | `0x8`  | RW  | 32    | Slot 1.                                                       |
 | `interact_changed1`   | `0xC`  | R   | 1     | 1 when slot 1 has been written by the Pocket since last read. |
-| `interact2`          | `0x10` | R   | 32    | The editor: `[4:0]` layer, `[9:5]` key, `[14:10]` gives, `[19:15]` or, `[24:20]` Controls, `[28]` / `[29]` flip when Apply / Save are pressed (both: Forget). |
+| `interact2`          | `0x10` | R   | 32    | The layout lists: `[4:0]` Normal, `[9:5]` Shift, `[14:10]` Shift: D-pad, `[19:15]` D-pad keys, `[28]` / `[29]` flip when Save / Forget are pressed. |
 
 # IO - Interfaces
 

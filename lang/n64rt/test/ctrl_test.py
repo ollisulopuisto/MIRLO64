@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The per-game controller layouts (../n64rt_ctrl.h): the families do what they say through the pad mapping (the C of pad_host.c), the
 cartridge table only has real cartridges (the save-type database's), a game's saved record survives and is refused when damaged, and the
-"Controls" setting picks the right source.   python3 ctrl_test.py   (needs gcc)"""
+menu's layout lists lay over the right source.   python3 ctrl_test.py   (needs gcc)"""
 import os, re, subprocess, sys, tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -115,37 +115,6 @@ def main():
                 fail('record with word %d bit %d flipped was accepted' % (word, bit))
     if run(ctrl, 'record', *args, '8', '0', '35').strip() != '0':
         fail('a record of 35 bytes was accepted')
-    # the "Controls" setting: src, saved?, family
-    for src_, saved, fam, want in ((0, 1, 1, 'menu'), (1, 1, 1, '1800 0 %x 1234' % 0x1F), (1, 0, 1, None), (1, 0, -1, 'menu'),
-                                   (2, 1, 1, None), (3, 1, -1, None), (7, 0, 0, None), (8, 1, 1, 'menu'), (31, 1, 1, 'menu')):
-        got = run(ctrl, 'select', str(src_), str(saved), str(fam), 'x').strip()
-        if want is not None and got != want:
-            fail('select %s: %s, expected %s' % ((src_, saved, fam), got, want))
-        if want is None and (got == 'menu' or not got):
-            fail('select %s: %s' % ((src_, saved, fam), got))
-    if int(run(ctrl, 'select', '2', '1', '-1', 'x').split()[0], 16) != 0 or int(run(ctrl, 'select', '3', '1', '-1', 'x').split()[0], 16) != 6 << 10:
-        fail('a family source gave the wrong Modifier')
-    # the menu's editor: each (layer, key, gives, special) the menu can send puts the right code in the right field and nothing else, or
-    # nothing (a choice that means nothing); then through the pad mapping the table does what was asked
-    def field_of(words, f): return (words[f // 6] >> (5 * (f % 6))) & 31
-    for layer in (0, 1):
-        for key in range(15):
-            for gives in [0, 31] + list(range(1, 15)):
-                for special in range(6):
-                    out = run(ctrl, 'edit', str(layer), str(key), str(gives), str(special)).split()
-                    changed, words = int(out[0]), [int(w, 16) for w in out[1:]]
-                    group = key >= 12
-                    if group:
-                        want = {0: {0: 0, 31: 5}.get(gives), 1: 6 if layer else None}.get(special, special - 1 if 2 <= special <= 5 else None)
-                    else:
-                        want = (gives if gives in [0, 31] + list(range(1, 15)) else None) if special == 0 else (15 if layer else None) if special == 1 else None
-                    f = (15 if layer else 0) + key
-                    if want is None:
-                        if changed or any(words): fail('edit %s: changed something that means nothing: %s' % ((layer, key, gives, special), words))
-                    elif not changed or field_of(words, f) != want or any(field_of(words, g) for g in range(30) if g != f):
-                        fail('edit %s: field %d is %d, expected %d (changed %d)' % ((layer, key, gives, special), f, field_of(words, f), want, changed))
-    for nonsense in ((2, 0, 1, 0), (0, 15, 1, 0), (0, 0, 15, 0), (0, 0, 20, 0), (0, 0, 1, 6)):
-        if int(run(ctrl, 'edit', *map(str, nonsense)).split()[0]) != 0: fail('edit %s was accepted' % (nonsense,))
     # the menu file against the Pocket's limits (Analogue's docs: 16 entries shown, names 23 characters, a list 16 options, ids unique 16-bit):
     # a longer file is "Load error in interact" at the core's start
     import json
@@ -160,55 +129,86 @@ def main():
         for o in v.get('options', []):
             if len(o['name']) > 23: fail('interact.json option %r is over 23 characters' % o['name'])
         if v['type'] == 'list' and not 0 <= v['defaultval'] < len(v['options']): fail('interact.json %r defaultval' % v['name'])
-    # a family's Modifier is a default: the menu's own (any key) wins; a game's saved layout has its own Modifier, which is the game's
-    ap = lambda menu, src, saved, fam: int(run(ctrl, 'apply', '%x' % menu, str(src), str(saved), str(fam)).strip(), 16)
-    sel6, l1 = 6 << 10, 1 << 10
-    for menu, src, saved, fam, want in ((0, 3, 0, -1, sel6), (l1, 3, 0, -1, l1), (2 << 10, 5, 0, -1, 2 << 10), (0, 1, 0, 3, sel6),
-                                        (l1, 1, 0, 3, l1), (l1, 1, 1, 3, 3 << 10), (0, 1, 1, 3, 3 << 10), (l1, 0, 0, 3, l1), (0, 0, 0, 3, 0),
-                                        (0, 2, 0, -1, 0), (l1, 2, 0, -1, l1)):
-        got = ap(menu, src, saved, fam)
-        if got != want: fail('apply menu %x src %d saved %d family %d: %x, expected %x' % (menu, src, saved, fam, got, want))
-    # the session: Apply edits the layout in use (a family's, a game's saved one, or the menu's table), the edit is what the pad mapping gets
-    # until "Controls" changes, and Save keeps the layout in use
+    # the menu's picks over a layout: the game's saved one, else its family's, else Standard
     def session(saved, fam, script):
         out = run(ctrl, 'session', str(saved), str(fam), stdin=script).splitlines()
-        return [[int(x, 16) if x not in ('applied', 'eff', 'cap') else x for x in line.split()] for line in out]
+        return [[int(x, 16) for x in line.split()[1:]] for line in out]
+    def eff(saved, fam, pk=(0, 0, 0, 0, 1), menu=(0, 0)):
+        pk = tuple(pk) + (1,) * (5 - len(pk))                       # (the Analog sticks list's default is 1)
+        return session(saved, fam, 'pick %d %d %d %d %d\nmenu %x %x\neff\n' % (*pk, *menu))[0]
     def fld(words, f): return (words[f // 6] >> (5 * (f % 6))) & 31
-    # Auto in a Skate game (family 3, no saved layout): the family's Modifier (Select, code 6), Base A is C-right (10)
-    r = session(0, 3, 'src 1\nmenu 0 0\neff\napply 0 0 1 0\neff\nmenu 400 0\neff\n')
-    if r[0][1] != 6 << 10 or fld(r[0][3:], 0) != 10: fail('session: the family layout is not in use under Auto: %s' % (r[0],))
-    if r[1] != ['applied', 1]: fail('session: the first Apply under Auto was refused: %s' % (r[1],))
-    if r[2][1] != 6 << 10 or fld(r[2][3:], 0) != 1 or fld(r[2][3:], 1) != 8: fail('session: the edit did not take effect on a copy of the family: %s' % (r[2],))
-    if r[3][1] != 0x400: fail('session: the menu Modifier (L, code 1) lost to the family copy: %s' % (r[3],))
-    # the "Controls" setting moving ends the edit: the family decides again, and the edit is the Menu table
-    r = session(0, 3, 'src 1\nmenu 0 0\napply 0 0 1 0\nsrc 0\neff\nsrc 1\neff\nsrc 4\neff\n')
-    if fld(r[1][3:], 0) != 1 or r[1][1] != 0: fail('session: the edit was not kept in the Menu table after Controls moved: %s' % (r[1],))
-    if fld(r[2][3:], 0) != 10 or r[2][1] != 6 << 10: fail('session: Auto did not return to the family after Controls moved back: %s' % (r[2],))
-    # (Controls moved away and back: the first edit's session ended, the live table still holds the edit, but Auto uses the family)
-    # under Menu: the live table, under the menu's own settings
-    r = session(0, -1, 'src 0\nmenu 800 1c00\napply 1 3 1 0\neff\n')
-    if r[1][1] != 0x800 or r[1][2] != 0x1c00 or fld(r[1][3:], 15 + 3) != 1: fail('session: a Menu edit changed the menu settings or missed: %s' % (r[1],))
-    # a game's saved layout (Modifier code 3) is what Auto uses, and an edit starts from it
-    r = session(1, 3, 'src 1\nmenu 0 0\neff\napply 0 5 31 0\neff\n')
-    if r[0][1] != 3 << 10 or r[0][3] != 0x1234: fail('session: the saved layout is not in use under Auto: %s' % (r[0],))
-    if r[2][1] != 3 << 10 or fld(r[2][3:], 5) != 31 or r[2][3] & ~(31 << 25) != 0x1234 & ~(31 << 25): fail('session: an edit of the saved layout lost its other fields: %s' % (r[2],))
-    # Save keeps the layout in use: a family's, edited or not
-    r = session(0, 3, 'src 1\nmenu 0 0\ncap\napply 0 2 4 0\ncap\n')
-    if r[0][1] != 6 << 10 or fld(r[0][3:], 0) != 10: fail('session: Save of an unedited family layout: %s' % (r[0],))
-    if fld(r[2][3:], 2) != 4 or r[2][1] != 6 << 10: fail('session: Save of an edited family layout: %s' % (r[2],))
-    # and what was saved is what Auto then uses, with the edit session over
-    r = session(0, 3, 'src 1\nmenu 0 0\napply 0 0 1 0\nsave\nsrc 4\neff\nsrc 1\neff\n')
-    if fld(r[2][3:], 0) != 1: fail('session: a saved edit is not used by Auto afterwards: %s' % (r[2],))
-    r = session(0, 3, 'src 1\nmenu 0 0\napply 0 0 1 0\nsave\nsrc 4\neff\nsrc 1\nforget\neff\n')
-    if fld(r[2][3:], 0) != 10: fail('session: Forget did not return Auto to the family: %s' % (r[2],))
-    # nonsense changes nothing and does not start an edit that hides the family
-    r = session(0, 3, 'src 1\nmenu 0 0\napply 0 0 1 3\neff\n')
-    if r[0] != ['applied', 0] or fld(r[1][3:], 0) != 10: fail('session: a choice that means nothing: %s' % (r,))
+    def keys(e, names, joy=0x80808080, typ=3):
+        s0, s1, *m = e
+        k = typ << 28 | sum(1 << K[n] for n in names)
+        out = run(pad, stdin='%x %x %x %x %s\n' % (k, joy, s0, s1, ' '.join('%x' % w for w in m))).split()
+        b = int(out[0], 16)
+        return sorted(n for n, bit in N.items() if b & bit), int(out[1]), int(out[2])
+    def want(e, names, buttons, stick=(0, 0), **kw):
+        got = keys(e, names, **kw)
+        if got != (sorted(buttons), *stick): fail('%s: %s, expected %s %s' % (names, got, sorted(buttons), stick))
+    P, SKATE = 1, 3                                                 # the families (n64rt_ctrl.h: Standard 0 .. Fighter 5)
+    # Auto, no saved layout, no family: Standard, the menu's own Shift key stays
+    e = eff(0, -1, menu=(1 << 10, 0x1400))
+    if e[0] != 1 << 10 or e[1] != 0x1400 or any(e[2:]): fail('Standard: %s' % (e,))
+    # a family's Shift key is Select, the menu's own (any key) wins; a saved layout has its own, which is the game's
+    for menu, saved, fam, w in ((0, 0, P, 6 << 10), (1 << 10, 0, P, 1 << 10), (0, 1, P, 3 << 10), (1 << 10, 1, P, 3 << 10)):
+        got = eff(saved, fam, menu=(menu, 0))[0]
+        if got != w: fail('Shift key: menu %x saved %d family %d: %x, expected %x' % (menu, saved, fam, got, w))
+    if eff(1, P)[2] != 0x1234: fail('a saved layout is not used under Auto')
+    if fld(eff(0, SKATE)[2:], 0) != 10: fail('the family is not used under Auto')
+    # Normal: what the face keys, shoulders and Select send
+    for pick, rows in ((1, {'A': ['A'], 'B': ['B'], 'X': ['CRIGHT'], 'Y': ['CLEFT'], 'L1': ['Z'], 'R1': ['R'], 'select': ['CDOWN']}),
+                       (2, {'A': ['CRIGHT'], 'B': ['CDOWN'], 'X': ['CUP'], 'Y': ['CLEFT'], 'L1': ['Z'], 'R1': ['R'], 'select': []}),
+                       (3, {'A': ['A'], 'B': ['B'], 'X': ['CRIGHT'], 'Y': ['CLEFT'], 'L1': ['R'], 'R1': ['Z'], 'select': ['CDOWN']}),
+                       (4, {'A': ['A'], 'B': ['B'], 'X': ['CUP'], 'Y': ['Z'], 'L1': ['Z'], 'R1': ['R'], 'select': ['CDOWN']})):
+        e = eff(0, -1, (pick, 0, 0, 0))
+        for key, b in rows.items(): want(e, [key], b)
+        want(e, ['start'], ['START']); want(e, ['left'], [], (-80, 0))
+    # Auto is the family's: Skate has its own, and Normal 2 is the same
+    e = eff(0, SKATE)
+    for key, b in (('A', ['CRIGHT']), ('B', ['CDOWN']), ('X', ['CUP']), ('Y', ['CLEFT'])): want(e, [key], b)
+    # Shift (the key is Select in a family, or the menu's): the lists change only what they name
+    e = eff(0, P, (0, 1, 0, 0))                                     # same as normal
+    want(e, ['select', 'X'], ['CRIGHT']); want(e, ['select', 'A'], ['A'])
+    e = eff(0, P, (0, 2, 0, 0))                                     # cR cD cU cL
+    for key, b in (('A', ['CRIGHT']), ('B', ['CDOWN']), ('X', ['CUP']), ('Y', ['CLEFT'])): want(e, ['select', key], b)
+    e = eff(0, P, (0, 3, 0, 0))                                     # A B cU cD
+    for key, b in (('A', ['A']), ('B', ['B']), ('X', ['CUP']), ('Y', ['CDOWN'])): want(e, ['select', key], b)
+    e = eff(0, -1, (0, 4, 0, 0), menu=(1 << 10, 0))                 # / L R: Shift on the Pocket's L, no family
+    want(e, ['L1'], []); want(e, ['L1', 'R1'], ['R']); want(e, ['L1', 'A'], ['CRIGHT'])   # (the shoulders keep their unshifted jobs: only the pick changes)
+    e = eff(0, -1, (0, 4, 0, 0), menu=(6 << 10, 0))                 # Shift on Select
+    want(e, ['select', 'L1'], ['L']); want(e, ['select', 'R1'], ['R'])
+    # Shift: D-pad
+    for pick, buttons, stick in ((1, [], (-80, 0)), (2, ['CLEFT'], (0, 0)), (3, [], (-40, 0)), (4, ['DLEFT'], (0, 0)), (5, ['DLEFT'], (-80, 0))):
+        want(eff(0, P, (0, 0, pick, 0)), ['select', 'left'], buttons, stick)
+    want(eff(0, P), ['select', 'left'], ['CLEFT'])                  # (Auto in the Platformer family: the C buttons)
+    # D-pad keys
+    for pick, buttons, stick in ((0, [], (-80, 0)), (1, ['DLEFT'], (0, 0)), (2, ['DLEFT'], (-80, 0)), (3, ['CLEFT'], (0, 0))):
+        want(eff(0, -1, (0, 0, 0, pick)), ['left'], buttons, stick)
+    # Analog sticks (a dock pad with sticks: type 3): the left stick right (lx 0xFF), the right stick up (ry 0x10)
+    LR, RU = 0x808080FF, 0x10808080
+    want(eff(0, -1), [], ['CUP'], joy=RU); want(eff(0, -1), [], [], (80, 0), joy=LR)           # the default: left = the N64 stick, right = the C buttons
+    want(eff(0, -1, (0, 0, 0, 0, 0)), [], [], joy=RU); want(eff(0, -1, (0, 0, 0, 0, 0)), [], [], (80, 0), joy=LR)   # L stick / R none
+    want(eff(0, -1, (0, 0, 0, 0, 2)), [], [], (40, 0), joy=LR); want(eff(0, -1, (0, 0, 0, 0, 2)), [], ['CUP'], joy=RU)   # L half / R C
+    want(eff(0, -1, (0, 0, 0, 0, 3)), [], ['DRIGHT'], joy=LR)                                   # L D-pad / R C
+    want(eff(0, -1, (0, 0, 0, 0, 4)), [], ['CRIGHT'], joy=LR)                                   # L C buttons / R stick
+    got = keys(eff(0, -1, (0, 0, 0, 0, 4)), [], joy=RU)
+    if got[0] or got[2] <= 0: fail('R stick as the N64 stick: %s' % (got,))
+    want(eff(0, -1, (0, 0, 0, 0, 5)), [], [], joy=LR); want(eff(0, -1, (0, 0, 0, 0, 5)), [], [], joy=RU)   # both none
+    # a pick out of the list's range is Auto
+    if eff(0, P, (9, 9, 9, 9, 9)) != eff(0, P): fail('picks out of range changed the layout')
+    # Save keeps the layout in use with the picks; a saved layout is what Auto then uses; the picks still win over it; Forget goes back
+    r = session(0, SKATE, 'pick 0 2 0 0 1\nmenu 0 0\ncap\nsave\npick 0 0 0 0 1\neff\nforget\neff\n')
+    if fld(r[0][2:], 15) != 10 or r[0][0] != 6 << 10: fail('Save of a layout with a pick: %s' % (r[0],))
+    if fld(r[1][2:], 15) != 10: fail('a saved game layout is not used under Auto: %s' % (r[1],))
+    if fld(r[2][2:], 15) != 1 or fld(r[2][2:], 0) != 10: fail('Forget did not return Auto to the family: %s' % (r[2],))
+    r = session(1, P, 'pick 1 0 0 0 1\nmenu 0 0\neff\n')
+    if fld(r[0][2:], 0) != 1 or r[0][0] != 3 << 10: fail('a pick over a saved layout: %s' % (r[0],))
     # the stick's feel is kept by a family, a game's saved layout carries it; the menu's own Modifier still wins over a family's
     feel = 2 << 20 | 3 << 25                          # dead zone code 2, range code 3
-    if ap(feel, 3, 0, -1) != feel | 6 << 10: fail('a family changed the stick\'s feel: %x' % ap(feel, 3, 0, -1))
-    if ap(feel | 1 << 10, 3, 0, -1) != feel | 1 << 10: fail('a family overrode the menu Modifier with the feel set')
-    if ap(feel, 1, 1, 3) != 3 << 10: fail('a game\'s saved layout kept the menu\'s feel: %x' % ap(feel, 1, 1, 3))
+    if eff(0, 3, menu=(feel, 0))[0] != feel | 6 << 10: fail('a family changed the stick\'s feel: %x' % eff(0, 3, menu=(feel, 0))[0])
+    if eff(0, 3, menu=(feel | 1 << 10, 0))[0] != feel | 1 << 10: fail('a family overrode the menu Modifier with the feel set')
+    if eff(1, 3, menu=(feel, 0))[0] != 3 << 10: fail('a game\'s saved layout kept the menu\'s feel: %x' % eff(1, 3, menu=(feel, 0))[0])
     # the D-pad ramp: grows by the step, never past the target; a release, a reversal or a smaller target is at once; off is the target
     ramp = lambda c, t, st: int(run(ctrl, 'ramp', str(c), str(t), str(st)).strip())
     for cur, tgt, step, want in ((0, 80, 20, 20), (20, 80, 20, 40), (70, 80, 20, 80), (0, -80, 40, -40), (-40, -80, 40, -80), (60, 0, 20, 0),
