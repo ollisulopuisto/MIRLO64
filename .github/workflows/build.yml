@@ -1,0 +1,158 @@
+name: Build MIRLO64 (patched v0.1)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [patched-v0.1]
+
+env:
+  QUARTUS_CACHE_KEY: quartus-lite-25.1std.0.1129-cyclonev-v1
+  # Seeds to try, one runner each. v0.1's README says 12, 27, 5 closed timing for the
+  # unpatched design; docs/mips.md lists 20, 3, 41 as closing in earlier fits (34 and 9 fail).
+  # The FPS patch changes RTL, so closure per seed may differ: more seeds are tried.
+
+jobs:
+  software:
+    name: Runtime, boot ROM, tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc-mips-linux-gnu binutils-mips-linux-gnu meson ninja-build python3
+      - name: Host steps (picolibc, boot ROM, div ROM, mips_inits)
+        run: .github/scripts/prep.sh
+      - name: pad_test
+        run: python3 lang/n64rt/test/pad_test.py | tee pad_test.log
+      - name: Runtime
+        run: |
+          make -C lang/n64rt
+          cp lang/n64rt/build/n64rt.bin n64rt.sys
+          ls -l n64rt.sys
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime
+          path: |
+            n64rt.sys
+            pkg/pocket/Cores/tortuga.Mirlo64/interact.json
+            pad_test.log
+
+  quartus-cache:
+    name: Download and cache Quartus installers
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - id: c
+        uses: actions/cache@v4
+        with:
+          path: ~/quartus-dl
+          key: ${{ env.QUARTUS_CACHE_KEY }}
+      - name: Download installers on cache miss
+        if: steps.c.outputs.cache-hit != 'true'
+        run: DOWNLOAD_ONLY=1 .github/scripts/install_quartus.sh
+
+  fit:
+    name: Fit seed ${{ matrix.seed }}
+    needs: quartus-cache
+    runs-on: ubuntu-22.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [12, 27, 5, 20, 3, 41, 1, 7]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc-mips-linux-gnu binutils-mips-linux-gnu meson ninja-build python3 \
+            libtinfo5 libncurses5 libpng16-16 libfreetype6 libsm6 libxrender1 libxext6 libxtst6 libxi6 libxft2 locales
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/quartus-dl
+          key: ${{ env.QUARTUS_CACHE_KEY }}
+      - name: Install Quartus Lite 25.1std
+        run: .github/scripts/install_quartus.sh
+      - name: Boot ROM, div ROM, mips_inits
+        run: .github/scripts/prep.sh
+      - name: Set seed ${{ matrix.seed }} and compile
+        run: |
+          sed -i "s/^set_global_assignment -name SEED .*/set_global_assignment -name SEED ${{ matrix.seed }}/" projects/mirlo.qsf
+          grep -n 'name SEED' projects/mirlo.qsf
+          cd projects
+          "$QUARTUS_BIN/quartus_sh" --flow compile mirlo 2>&1 | tee ../compile.log | tail -n 40
+      - name: Timing closure check
+        id: closure
+        run: |
+          mkdir -p out
+          python3 tools/area2/closure.py projects/output_files | tee out/closure.txt
+          cp projects/output_files/*.sta.summary out/ || true
+          cp projects/output_files/*.fit.summary out/ || true
+          echo ${{ matrix.seed }} > out/seed.txt
+          worst=$(sed -n 's/.*worst \([-+][0-9.]*\).*/\1/p' out/closure.txt | head -1)
+          echo "worst slack: $worst"
+          if python3 -c "import sys; sys.exit(0 if float('$worst') >= 0 else 1)"; then
+            echo "closed=true" >> "$GITHUB_OUTPUT"
+            cp projects/output_files/mirlo.rbf out/
+          else
+            echo "closed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::seed ${{ matrix.seed }} did not close timing (worst $worst)"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fit-${{ matrix.seed }}-closed-${{ steps.closure.outputs.closed }}
+          path: out/
+          if-no-files-found: warn
+
+  release:
+    name: Package release zip
+    needs: [software, fit]
+    if: ${{ !cancelled() && needs.software.result == 'success' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime
+          path: runtime
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fit-*-closed-true
+          path: fits
+      - name: Pick the closing seed with the best slack
+        run: |
+          ls -R fits || true
+          best=""; bw=-999
+          for d in fits/*/; do
+            [ -f "$d/mirlo.rbf" ] || continue
+            w=$(sed -n 's/.*worst \([-+][0-9.]*\).*/\1/p' "$d/closure.txt" | head -1)
+            if python3 -c "import sys; sys.exit(0 if float('$w') > float('$bw') else 1)"; then best=$d; bw=$w; fi
+          done
+          if [ -z "$best" ]; then echo "::error::No seed closed timing. See the fit-* artifacts."; exit 1; fi
+          echo "Using $best seed $(cat $best/seed.txt) worst slack $bw"
+          cp "$best/mirlo.rbf" mirlo.rbf
+          mkdir release
+          { echo "seed: $(cat $best/seed.txt)"; echo "worst slack (ns, all corners): $bw"; cat "$best/closure.txt"; } > release/BUILD_INFO.txt
+      - name: Package
+        run: |
+          python3 tools/package_bitstream.py mirlo.rbf mirlo.rev
+          cp runtime/n64rt.sys .
+          python3 tools/make_release.py mirlo.rev n64rt.sys tortuga.Mirlo64_0.1.zip
+          cp mirlo.rev n64rt.sys tortuga.Mirlo64_0.1.zip release/
+          cp runtime/pkg/pocket/Cores/tortuga.Mirlo64/interact.json release/interact.json
+          cp runtime/pad_test.log release/
+          unzip -l tortuga.Mirlo64_0.1.zip
+          ls -l release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mirlo64-release
+          path: release/
