@@ -130,16 +130,16 @@
 #define CSR_APF_INTERACT_INTERACT2_OFS 0x310
 #define CSR_APF_INTERACT_INTERACT2_ADDR (CSR_BASE + 0x310)
 #define CSR_APF_INTERACT_INTERACT2_SIZE 1
-#define CSR_APF_INTERACT_INTERACT2_LAYER_OFFSET 0
-#define CSR_APF_INTERACT_INTERACT2_LAYER_SIZE 5
-#define CSR_APF_INTERACT_INTERACT2_KEY_OFFSET 5
-#define CSR_APF_INTERACT_INTERACT2_KEY_SIZE 5
-#define CSR_APF_INTERACT_INTERACT2_GIVES_OFFSET 10
-#define CSR_APF_INTERACT_INTERACT2_GIVES_SIZE 5
-#define CSR_APF_INTERACT_INTERACT2_SPECIAL_OFFSET 15
-#define CSR_APF_INTERACT_INTERACT2_SPECIAL_SIZE 5
-#define CSR_APF_INTERACT_INTERACT2_CONTROLS_OFFSET 20
-#define CSR_APF_INTERACT_INTERACT2_CONTROLS_SIZE 5
+#define CSR_APF_INTERACT_INTERACT2_NORMAL_OFFSET 0
+#define CSR_APF_INTERACT_INTERACT2_NORMAL_SIZE 5
+#define CSR_APF_INTERACT_INTERACT2_SHIFT_OFFSET 5
+#define CSR_APF_INTERACT_INTERACT2_SHIFT_SIZE 5
+#define CSR_APF_INTERACT_INTERACT2_SHIFT_DPAD_OFFSET 10
+#define CSR_APF_INTERACT_INTERACT2_SHIFT_DPAD_SIZE 5
+#define CSR_APF_INTERACT_INTERACT2_DPAD_KEYS_OFFSET 15
+#define CSR_APF_INTERACT_INTERACT2_DPAD_KEYS_SIZE 5
+#define CSR_APF_INTERACT_INTERACT2_STICKS_OFFSET 20
+#define CSR_APF_INTERACT_INTERACT2_STICKS_SIZE 5
 #define CSR_APF_INTERACT_INTERACT2_ACT_A_OFFSET 28
 #define CSR_APF_INTERACT_INTERACT2_ACT_A_SIZE 1
 #define CSR_APF_INTERACT_INTERACT2_ACT_B_OFFSET 29
@@ -438,16 +438,16 @@ static inline uint32_t apf_interact_interact1_read(void) { return csr_read_simpl
 static inline void apf_interact_interact1_write(uint32_t v) { csr_write_simple(v, CSR_APF_INTERACT_INTERACT1_ADDR); }
 static inline uint32_t apf_interact_interact_changed1_read(void) { return csr_read_simple(CSR_APF_INTERACT_INTERACT_CHANGED1_ADDR); }
 static inline uint32_t apf_interact_interact2_read(void) { return csr_read_simple(CSR_APF_INTERACT_INTERACT2_ADDR); }
-static inline uint32_t apf_interact_interact2_layer_extract(uint32_t r) { return (r >> 0) & 0x1fu; }
-static inline uint32_t apf_interact_interact2_layer_read(void) { return apf_interact_interact2_layer_extract(apf_interact_interact2_read()); }
-static inline uint32_t apf_interact_interact2_key_extract(uint32_t r) { return (r >> 5) & 0x1fu; }
-static inline uint32_t apf_interact_interact2_key_read(void) { return apf_interact_interact2_key_extract(apf_interact_interact2_read()); }
-static inline uint32_t apf_interact_interact2_gives_extract(uint32_t r) { return (r >> 10) & 0x1fu; }
-static inline uint32_t apf_interact_interact2_gives_read(void) { return apf_interact_interact2_gives_extract(apf_interact_interact2_read()); }
-static inline uint32_t apf_interact_interact2_special_extract(uint32_t r) { return (r >> 15) & 0x1fu; }
-static inline uint32_t apf_interact_interact2_special_read(void) { return apf_interact_interact2_special_extract(apf_interact_interact2_read()); }
-static inline uint32_t apf_interact_interact2_controls_extract(uint32_t r) { return (r >> 20) & 0x1fu; }
-static inline uint32_t apf_interact_interact2_controls_read(void) { return apf_interact_interact2_controls_extract(apf_interact_interact2_read()); }
+static inline uint32_t apf_interact_interact2_normal_extract(uint32_t r) { return (r >> 0) & 0x1fu; }
+static inline uint32_t apf_interact_interact2_normal_read(void) { return apf_interact_interact2_normal_extract(apf_interact_interact2_read()); }
+static inline uint32_t apf_interact_interact2_shift_extract(uint32_t r) { return (r >> 5) & 0x1fu; }
+static inline uint32_t apf_interact_interact2_shift_read(void) { return apf_interact_interact2_shift_extract(apf_interact_interact2_read()); }
+static inline uint32_t apf_interact_interact2_shift_dpad_extract(uint32_t r) { return (r >> 10) & 0x1fu; }
+static inline uint32_t apf_interact_interact2_shift_dpad_read(void) { return apf_interact_interact2_shift_dpad_extract(apf_interact_interact2_read()); }
+static inline uint32_t apf_interact_interact2_dpad_keys_extract(uint32_t r) { return (r >> 15) & 0x1fu; }
+static inline uint32_t apf_interact_interact2_dpad_keys_read(void) { return apf_interact_interact2_dpad_keys_extract(apf_interact_interact2_read()); }
+static inline uint32_t apf_interact_interact2_sticks_extract(uint32_t r) { return (r >> 20) & 0x1fu; }
+static inline uint32_t apf_interact_interact2_sticks_read(void) { return apf_interact_interact2_sticks_extract(apf_interact_interact2_read()); }
 static inline uint32_t apf_interact_interact2_act_a_extract(uint32_t r) { return (r >> 28) & 0x1u; }
 static inline uint32_t apf_interact_interact2_act_a_read(void) { return apf_interact_interact2_act_a_extract(apf_interact_interact2_read()); }
 static inline uint32_t apf_interact_interact2_act_b_extract(uint32_t r) { return (r >> 29) & 0x1u; }

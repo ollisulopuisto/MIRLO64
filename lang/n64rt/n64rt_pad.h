@@ -42,7 +42,7 @@
  * stick, or the N64's D-pad swapped for the stick); the left stick of a dock pad: the N64's stick (code 1); the right stick: the C buttons
  * (code 4) --, 1 the stick (the D-pad keys: full; an analog stick: as it is), 2 half a stick, 3 the N64's D-pad (an analog stick: its four
  * directions, past +-64 of 127), 4 the C buttons (the same), 5 none; 6 same as Base (the Base layer's, as if unheld; in the Base layer,
- * none); anything else none. An analog stick is a group's (it is centred for the "Stick", "D-pad" and "C buttons" settings, which the
+ * none); 7 the stick (full) and the N64's D-pad together (the D-pad keys; an analog stick: none); anything else none. An analog stick is a group's (it is centred for the "Stick", "D-pad" and "C buttons" settings, which the
  * menu no longer has: they are 0, and what they did the groups do).
  * Nothing couples the fields: two keys may give the same output (an N64 button is down while any of its keys is). The stick the
  * groups give adds to the one the settings give; the sum is clamped to +-80.
@@ -186,7 +186,7 @@ static inline uint32_t n64rt_pad_gsel(const uint32_t *map, unsigned g, int held,
         if (h == 0u) { sel = 0u; *lmod = 1; }
         else if (h != 6u) sel = h;
     }
-    return sel > 4u ? 5u : sel;
+    return sel == 7u ? 6u : sel > 4u ? 5u : sel;
 }
 /* k: the key word, j: the four stick bytes, set0 / set1: the two interact words, map: the five remap words (the runtime's table);
  * *digital: the stick came from keys only (n64rt_pad_ramp may slew it) */
@@ -229,6 +229,13 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
             if (k & KEY_DPAD_DOWN) b |= CONT_D;
             if (k & KEY_DPAD_LEFT) b |= CONT_C;
             if (k & KEY_DPAD_RIGHT) b |= CONT_F;
+            break;
+        case 6:                                                     /* the stick, full, and the N64's D-pad (the code 7) */
+            tx += 80 * dx; ty += 80 * dy;
+            if (k & KEY_DPAD_UP) b |= CONT_UP;
+            if (k & KEY_DPAD_DOWN) b |= CONT_DOWN;
+            if (k & KEY_DPAD_LEFT) b |= CONT_LEFT;
+            if (k & KEY_DPAD_RIGHT) b |= CONT_RIGHT;
             break;
         default: break;
         }

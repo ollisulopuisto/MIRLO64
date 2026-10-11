@@ -10,10 +10,10 @@ stay writeonly in it.
    gen_interact.py --readable [FILE]   the readable variant (to FILE, or the shipped path with --install)
 
 The Pocket shows at most 16 entries of interact.json (Analogue's docs: "Up to 16 UI entries ... can be shown"; a longer file is a load
-error), a name is at most 23 characters, a list has at most 16 options. So the controller remap table is not one entry per field: five
-entries are an editor -- 1. which layer, 2. which button, 3. it sends, 3b. or (special) -- and Apply puts the choice in the table (lang/n64rt/n64rt_ctrl.h, n64rt_ctrl_edit); the
-table lives in the runtime's RAM, and Save / Forget keep a game's own copy (the .ctl file). Bus words (0x1000_0100 + 4 x n): 16 layer, 17 key,
-18 gives, 19 or, 20 "Controls", 21 the actions (a write of 1 Applies, 2 Saves, 3 Forgets)."""
+error), a name is at most 23 characters, a list has at most 16 options, and the names use only letters, digits, space and ( ) - . / :
+(the characters the menus that loaded had). The controller layout is four lists -- Normal, Shift, Shift: D-pad, D-pad keys, each with Auto
+first -- and Save / Forget for this game (lang/n64rt/n64rt_ctrl.h: the lists lay over the game's saved layout, else its family's, else
+Standard). Bus words (0x1000_0100 + 4 x n): 16 Normal, 17 Shift, 18 Shift: D-pad, 19 D-pad keys, 21 the actions (a write of 2 Saves, 3 Forgets)."""
 import json, os, sys
 
 READABLE = False
@@ -29,9 +29,7 @@ def lst(name, ident, address, options, dflt=0, persist=True):
 def action(name, ident, value):
     return {"name": name, "id": ident, "type": "action", "enabled": True, "address": "0x10000154", "value": value, "writeonly": True}
 
-KEYS = ["A", "B", "X", "Y", "L", "R", "ZL", "ZR", "Select", "Start", "L3", "R3", "D-pad keys", "Left stick", "Right stick"]
-OUTPUTS = [(1, "A"), (2, "B"), (3, "Z"), (4, "Start"), (5, "L"), (6, "R"), (7, "C-up"), (8, "C-down"), (9, "C-left"), (10, "C-right"),
-           (11, "D-up"), (12, "D-down"), (13, "D-left"), (14, "D-right")]
+AUTO = (0, "Auto (from the game)")
 
 def build():
   entries = [
@@ -39,24 +37,21 @@ def build():
  {"name":"Crop Vertical","id":235,"type":"slider_u32","enabled":True,"persist":True,"address":"0x1000010C","defaultval":8,"graphical":{"signed":False,"min":0,"max":30,"adjust_small":1,"adjust_large":4},"writeonly":True},   # (fork only: a slider, lines blanked at the picture's top and bottom; 5 bits, the video code takes any 0-31)
  lst("Crop Right", 236, "0x10000114", [(0, "None"), (1, "1 column")], 1),
  lst("Controller 1 pak", 214, "0x10000108", [(0, "None"), (1, "Controller Pak"), (2, "Transfer Pak")]),
- lst("Controls", 270, "0x10000150", [(0, "Menu"), (1, "Auto"), (2, "Standard"), (3, "Platformer / adventure"), (4, "Shooter"),
-                                     (5, "Skate / snowboard"), (6, "Racing"), (7, "Fighter")], 1),
+ lst("Shift key", 228, "0x10000110", [(0, "None"), (1, "L"), (2, "R"), (3, "ZL"), (4, "ZR"), (6, "Select")]),
+ lst("Normal: A B X Y / L R", 240, "0x10000140", [AUTO, (1, "A B cR cL / Z R"), (2, "cR cD cU cL / Z R"), (3, "A B cR cL / R Z"),
+                                                   (4, "A B cU Z / Z R")]),
+ lst("Shift: A B X Y / L R", 241, "0x10000144", [AUTO, (1, "Same as normal"), (2, "cR cD cU cL"), (3, "A B cU cD"), (4, "/ L R (shoulders)")]),
+ lst("Shift: D-pad", 242, "0x10000148", [AUTO, (1, "Same as normal"), (2, "C buttons"), (3, "Half stick"), (4, "N64 D-pad"),
+                                        (5, "Stick and D-pad")]),
+ lst("D-pad keys", 243, "0x1000014C", [(0, "N64 stick (default)"), (1, "N64 D-pad"), (2, "Stick and D-pad"), (3, "C buttons")]),
+ lst("Analog sticks (dock)", 244, "0x10000150", [(1, "L stick / R C buttons"), (0, "L stick / R none"), (2, "L half / R C buttons"),
+                                                 (3, "L D-pad / R C buttons"), (4, "L C buttons / R stick"), (5, "Both none")]),
  lst("Stick dead zone", 273, "0x10000118", [(0, "Default (12)"), (1, "None"), (2, "Small (6)"), (3, "Large (20)"), (4, "Huge (30)")]),
  lst("Stick range", 274, "0x1000011C", [(0, "Default (80)"), (1, "Wide (85)"), (2, "75"), (3, "70"), (4, "Small (60)")]),
  lst("D-pad ramp", 275, "0x10000120", [(0, "Off"), (1, "Fast"), (2, "Medium"), (3, "Slow")]),
- lst("Modifier", 228, "0x10000110", [(0, "None"), (1, "L"), (2, "R"), (3, "ZL"), (4, "ZR"), (6, "Select")]),
- lst("1. Remap: which layer", 240, "0x10000140", [(0, "Base (normal)"), (1, "Held (Modifier on)")], persist=False),
- lst("2. Remap: which button", 241, "0x10000144", list(enumerate(KEYS)), persist=False),
- lst("3. Remap: it sends", 242, "0x10000148", [(0, "Default"), (31, "None")] + OUTPUTS, persist=False),
- lst("3b. Or (special)", 243, "0x1000014C", [(0, "Use step 3"), (1, "Same as Base"), (2, "Stick"), (3, "Half stick"), (4, "N64 D-pad"), (5, "C buttons")], persist=False),
- action("4. Apply remap", 244, 1),
  action("Save for this game", 271, 2),
  action("Forget this game", 272, 3),
   ]
-  if READABLE:
-    for e in entries:
-      if e['type'] != 'action':
-        e.pop('writeonly', None)
   return entries
 
 def main():
@@ -72,6 +67,7 @@ def main():
         assert len(e.get("options", [])) <= 16, e["name"]
         assert all(len(o["name"]) <= 23 for o in e.get("options", [])), e["name"]
         assert 0 <= e["id"] <= 65535
+        assert all(set(n) <= set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ()-./:") for n in [e["name"]] + [o["name"] for o in e.get("options", [])]), e["name"]
     out = '{"interact":{"magic":"APF_VER_1","variables":[\n' + ",\n".join(json.dumps(e, separators=(",", ":")) for e in entries) + '\n],"messages":[]}}\n'
     shipped = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pkg", "pocket", "Cores", "tortuga.Mirlo64", "interact.json")
     path = rest[0] if rest else shipped
