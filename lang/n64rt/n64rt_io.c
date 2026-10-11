@@ -492,8 +492,8 @@ s32 n64rt_osPiRawReadIo(u32 dev, u32 *data) { return io_read(0xB0000000u | dev, 
 
 /* ---- SI: controller 1 is the Pocket's (or the dock's first pad) --------------- */
 #include "n64rt_pad.h"          /* the keys and the settings to the N64 controller (a pure function: host-tested) */
-#include "n64rt_ctrl.h"         /* the preset families, and a game's own layout (the Controls slot) that the "Controls" setting picks from */
-static n64rt_ctrl_state_t s_ctrl = { .family = -1 };   /* the layout in use, this game's saved one, its family, the edit (n64rt_ctrl.h) */
+#include "n64rt_ctrl.h"         /* the preset families, a game's own layout (the Controls slot) and the menu's layout lists laid over them */
+static n64rt_ctrl_state_t s_ctrl = { .family = -1 };   /* this game's saved layout and its family (n64rt_ctrl.h) */
 static u32 s_ctrl_act;                          /* INTERACT2's ACT_A and ACT_B bits when last looked at (an action flips its bits) */
 #define CTRL_ACT_A (1u << CSR_APF_INTERACT_INTERACT2_ACT_A_OFFSET)
 #define CTRL_ACT_B (1u << CSR_APF_INTERACT_INTERACT2_ACT_B_OFFSET)
@@ -516,9 +516,15 @@ static void ctrl_init(void)
     s_ctrl_act = apf_interact_interact2_read() & (CTRL_ACT_A | CTRL_ACT_B);
     n64rt_log("n64rt: controller layout: family %d, %s\n", s_ctrl.family, s_ctrl.saved_ok ? "saved for this game" : "none saved");
 }
-/* the Pocket's actions (the menu's "Apply" / "Save controls for this game" / "Forget ..."): a press flips INTERACT2's ACT_A (Apply), ACT_B
- * (Save) or both (Forget). Looked at at each poll of a controller; two actions between two polls are one (a forget; the Pocket's own
- * menu does not let a person press two in a frame). */
+/* the Pocket's actions ("Save for this game", "Forget this game"): a press flips INTERACT2's ACT_B (Save) or both ACT_A and ACT_B (Forget).
+ * Looked at at each poll of a controller; two actions between two polls are one (a forget; the Pocket's own menu does not let a person
+ * press two in a frame). A flip of ACT_A alone (a write of 1) is nothing. */
+static n64rt_ctrl_pick_t ctrl_picks(void)
+{
+    n64rt_ctrl_pick_t pk = { apf_interact_interact2_normal_read(), apf_interact_interact2_shift_read(),
+                             apf_interact_interact2_shift_dpad_read(), apf_interact_interact2_dpad_keys_read() };
+    return pk;
+}
 static void ctrl_poll(void)
 {
     const u32 v = apf_interact_interact2_read();
@@ -526,16 +532,13 @@ static void ctrl_poll(void)
     const u32 flipped = now ^ s_ctrl_act;
     if (!flipped) return;
     s_ctrl_act = now;
-    const u32 src = apf_interact_interact2_controls_read();
     if (flipped == (CTRL_ACT_A | CTRL_ACT_B)) {         /* forget */
         ((volatile u32 *)(uintptr_t)LAYOUT_CTRL)[0] = 0;
         s_ctrl.saved_ok = 0;
-    } else if (flipped == CTRL_ACT_A) {                 /* apply: the editor's choice into the layout in use */
-        n64rt_ctrl_apply_edit(&s_ctrl, src, apf_interact_interact2_layer_extract(v), apf_interact_interact2_key_extract(v),
-                              apf_interact_interact2_gives_extract(v), apf_interact_interact2_special_extract(v));
-    } else {                                            /* save: the layout in use */
+    } else if (flipped == CTRL_ACT_B) {                 /* save: the layout in use */
         n64rt_ctrl_t c;
-        n64rt_ctrl_capture(&s_ctrl, src, apf_interact_interact0_read(), apf_interact_interact1_read(), &c);
+        const n64rt_ctrl_pick_t pk = ctrl_picks();
+        n64rt_ctrl_capture(&s_ctrl, &pk, apf_interact_interact0_read(), apf_interact_interact1_read(), &c);
         n64rt_ctrl_store((volatile u32 *)(uintptr_t)LAYOUT_CTRL, &c);
         ctrl_slot_size(LAYOUT_CTRL_BYTES);
         s_ctrl.saved = c;
@@ -554,7 +557,8 @@ static void read_pad(OSContPad *p, int index)
     ctrl_poll();
     u32 s0 = apf_interact_interact0_read(), s1 = apf_interact_interact1_read();
     u32 map[5];
-    n64rt_ctrl_effective(&s_ctrl, apf_interact_interact2_controls_read(), &s0, &s1, map);
+    const n64rt_ctrl_pick_t pk = ctrl_picks();
+    n64rt_ctrl_effective(&s_ctrl, &pk, &s0, &s1, map);
     n64rt_pad_map(k, j, s0, s1, map, &p->button, &p->stick_x, &p->stick_y);
     p->errnum = 0;
 #ifdef N64RT_PADLOG

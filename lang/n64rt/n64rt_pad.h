@@ -39,7 +39,8 @@
  * A group field's code: 0 the "Stick", "D-pad" and "C buttons" settings (below; for the D-pad keys, Held: with their Modifier
  * effects: half a stick, or the N64's D-pad swapped for the stick), 1 the stick (the D-pad keys: full; an analog stick: as it
  * is), 2 half a stick, 3 the N64's D-pad (an analog stick: its four directions, past +-64 of 127), 4 the C buttons (the same),
- * 5 none; 6 same as Base (the Base layer's, as if unheld; in the Base layer, none); anything else none. Any other code than 0
+ * 5 none; 6 same as Base (the Base layer's, as if unheld; in the Base layer, none); 7 the stick (full) and the N64's D-pad together
+ * (the D-pad keys; an analog stick: none); anything else none. Any other code than 0
  * takes the group's source away from the "Stick", "D-pad" and "C buttons" settings (an analog stick that a group has is centred
  * for them).
  * Nothing couples the fields: two keys may give the same output (an N64 button is down while any of its keys is). The stick the
@@ -155,7 +156,7 @@ static inline uint32_t n64rt_pad_gsel(const uint32_t *map, unsigned g, int held,
         if (h == 0u) { sel = 0u; *lmod = 1; }
         else if (h != 6u) sel = h;
     }
-    return sel > 4u ? 5u : sel;
+    return sel == 7u ? 6u : sel > 4u ? 5u : sel;
 }
 /* k: the key word, j: the four stick bytes, set0 / set1: the two interact words, map: the five remap words (the runtime's table) */
 static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t set1, const uint32_t *map, uint16_t *button, int8_t *stick_x, int8_t *stick_y)
@@ -194,6 +195,13 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
             if (k & KEY_DPAD_DOWN) b |= CONT_D;
             if (k & KEY_DPAD_LEFT) b |= CONT_C;
             if (k & KEY_DPAD_RIGHT) b |= CONT_F;
+            break;
+        case 6:                                                     /* the stick, full, and the N64's D-pad (the code 7) */
+            tx += 80 * dx; ty += 80 * dy;
+            if (k & KEY_DPAD_UP) b |= CONT_UP;
+            if (k & KEY_DPAD_DOWN) b |= CONT_DOWN;
+            if (k & KEY_DPAD_LEFT) b |= CONT_LEFT;
+            if (k & KEY_DPAD_RIGHT) b |= CONT_RIGHT;
             break;
         default: break;
         }

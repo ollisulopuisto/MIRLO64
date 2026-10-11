@@ -49,7 +49,7 @@ def spec(keys, joy, s0, s1, fields):
             if t:
                 out.add(t)
     # the groups (0 the D-pad keys, 1 the left stick, 2 the right stick): 0 the settings', 1 stick, 2 half stick, 3 the N64's D-pad,
-    # 4 C buttons, 5 none, 6 same as Base (held)
+    # 4 C buttons, 5 none, 6 same as Base (held), 7 the stick and the N64's D-pad (the D-pad keys)
     def group(g):
         sel, lm = fields[12 + g], False
         if rmod:
@@ -57,7 +57,7 @@ def spec(keys, joy, s0, s1, fields):
                 sel, lm = 0, True
             elif fields[HELD + 12 + g] != 6:
                 sel = fields[HELD + 12 + g]
-        return (5 if sel > 4 else sel), lm
+        return (6 if sel == 7 else 5 if sel > 4 else sel), lm
     dsel, lmod = group(0)
     tx = ty = 0
     if dsel:
@@ -67,9 +67,10 @@ def spec(keys, joy, s0, s1, fields):
             tx, ty = 80 * dx, 80 * dy
         elif dsel == 2:
             tx, ty = (28 * dx, 28 * dy) if dx and dy else (40 * dx, 40 * dy)
-        elif dsel in (3, 4):
+        elif dsel in (3, 4, 6):
+            if dsel == 6: tx, ty = 80 * dx, 80 * dy                     # (7 in the field: the stick and the N64's D-pad)
             for key, c3, c4 in (('up', 'DUP', 'CUP'), ('down', 'DDOWN', 'CDOWN'), ('left', 'DLEFT', 'CLEFT'), ('right', 'DRIGHT', 'CRIGHT')):
-                if key in held: out.add(c3 if dsel == 3 else c4)
+                if key in held: out.add(c4 if dsel == 4 else c3)
         held -= {'up', 'down', 'left', 'right'}
     # joystick bytes: left X, left Y, right X, right Y (0x80 centre)
     lx, ly, rx, ry = (joy >> 0) & 255, (joy >> 8) & 255, (joy >> 16) & 255, (joy >> 24) & 255

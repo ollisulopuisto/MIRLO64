@@ -1,16 +1,15 @@
 /* The controller layouts a game can have (n64rt_pad.h's remap table with the settings that go with it): the preset families, which
  * family a cartridge is, the record a game's own layout is saved as (the Pocket's Controls slot, a file per game next to its .sav) and
- * which of the three the "Controls" setting picks. Pure functions of their arguments (no hardware), so that test/ctrl_host.c can run
- * them on the host (test/ctrl_test.py).
+ * how the menu's picks lay over them. Pure functions of their arguments (no hardware), so that test/ctrl_host.c can run them on the
+ * host (test/ctrl_test.py).
  *
- * A layout is: the Modifier (set0 [14:10]), the "C buttons" [14:10], "Stick" [19:15] and "D-pad" [23:22] settings (set1) and the table's
- * 30 fields (map[5]). Every other setting (crops, pak, Show FPS) stays the menu's. A family sets the Modifier and the table (and "C buttons"
- * where it says so), not "Stick" or "D-pad": the menu's choice of which analog stick moves stays; a game's saved layout has all of them.
+ * A layout is: the Shift key (set0 [14:10]), the "C buttons" [14:10], "Stick" [19:15] and "D-pad" [23:22] settings (set1) and the table's
+ * 30 fields (map[5]). Every other setting (crops, pak, Show FPS) stays the menu's.
  *
- * "Controls" (INTERACT2 [24:20], interact.json's first controller entry): 0 Menu (the live table: the menu's Remap entries edit it), 1 Auto
- * (the game's saved layout, else the family it is in, else the menu), 2.. a family, whatever the game: 2 Standard, 3 Platformer /
- * adventure, 4 Shooter, 5 Skate, 6 Racing, 7 Fighter; anything else the menu. The actions: Apply (the editor's choice into the live table),
- * Save (the live table and the menu's settings for this game), Forget. */
+ * The menu has four layout lists (INTERACT2 [4:0] .. [19:15]): Normal (the face keys, shoulders and Select), Shift (the face keys and
+ * shoulders while the Shift key is held), Shift: D-pad and D-pad keys. Where a list is on Auto (0), the layout comes from, in this order:
+ * the game's saved layout, the family the cartridge is in, Standard. A list that names a layout puts it over that. Save keeps what
+ * the pad mapping got (the layout and the picks together), Forget deletes the record. */
 #ifndef N64RT_CTRL_H
 #define N64RT_CTRL_H
 #include <stdint.h>
@@ -30,7 +29,7 @@ enum { N64RT_FAM_STANDARD, N64RT_FAM_PLATFORMER, N64RT_FAM_SHOOTER, N64RT_FAM_SK
 enum { F_A, F_B, F_X, F_Y, F_L, F_R, F_ZL, F_ZR, F_SELECT, F_START, F_L3, F_R3, F_DPAD, F_LSTICK, F_RSTICK, F_HELD = 15 };
 /* the outputs of a key's field, and a group's */
 enum { O_DFLT = 0, O_A, O_B, O_Z, O_START, O_L, O_R, O_CU, O_CD, O_CL, O_CR, O_DU, O_DD, O_DL, O_DR, O_SAME, O_NONE = 31 };
-enum { G_SETTINGS = 0, G_STICK, G_HALF, G_DPAD, G_C, G_NONE, G_SAME };
+enum { G_SETTINGS = 0, G_STICK, G_HALF, G_DPAD, G_C, G_NONE, G_SAME, G_BOTH };   /* G_BOTH: the stick and the N64 D-pad (the D-pad keys only) */
 #define N64RT_MOD_SELECT 6u                      /* the Modifier setting's code for the Pocket's Select */
 
 static inline void n64rt_ctrl_pack(n64rt_ctrl_t *c, const uint8_t f[30])
@@ -164,93 +163,69 @@ static inline int n64rt_ctrl_load(const volatile uint32_t *mem, unsigned file_by
     return 1;
 }
 
-/* the layout the "Controls" setting `src` picks: `saved` (a game's, or NULL), `family` (the cartridge's, or -1); fills `tmp` for a
- * family; NULL: the menu's own */
-static inline const n64rt_ctrl_t *n64rt_ctrl_select(unsigned src, const n64rt_ctrl_t *saved, int family, n64rt_ctrl_t *tmp)
+/* ---- the menu's picks ---- */
+typedef struct { unsigned normal, shift, shift_dpad, dpad_keys; } n64rt_ctrl_pick_t;
+enum { N64RT_PICK_NORMAL = 5, N64RT_PICK_SHIFT = 5, N64RT_PICK_SDPAD = 6, N64RT_PICK_DKEYS = 4 };   /* how many entries each list has (Auto first) */
+
+/* Normal: the outputs of A, B, X, Y, L, R, Select; entry 1.. of the list ("A B cR cL / Z R", "cR cD cU cL / Z R", "A B cR cL / R Z", "A B cU Z / Z R") */
+static const uint8_t n64rt_ctrl_normal[N64RT_PICK_NORMAL - 1][7] = {
+    { O_A,  O_B,  O_CR, O_CL, O_Z, O_R, O_CD   },
+    { O_CR, O_CD, O_CU, O_CL, O_Z, O_R, O_NONE },
+    { O_A,  O_B,  O_CR, O_CL, O_R, O_Z, O_CD   },
+    { O_A,  O_B,  O_CU, O_Z,  O_Z, O_R, O_CD   },
+};
+static inline void n64rt_ctrl_setf(uint32_t map[5], unsigned f, unsigned v)
 {
-    if (src == 1u) {
-        if (saved) return saved;
-        if (family < 0) return 0;
-        n64rt_ctrl_preset((unsigned)family, tmp);
-        return tmp;
-    }
-    if (src >= 2u && src < 2u + N64RT_FAMILIES) { n64rt_ctrl_preset(src - 2u, tmp); return tmp; }
-    return 0;
+    map[f / 6u] = (map[f / 6u] & ~(31u << (5u * (f % 6u)))) | ((v & 31u) << (5u * (f % 6u)));
 }
-/* ---- the menu's editor: five entries (interact.json has 16 at most) choose one field of the table and what to put in it ----
- * layer 0 Base, 1 Held; key 0-14: A, B, X, Y, L, R, ZL, ZR, Select, Start, L3, R3, then the groups D-pad keys, Left stick, Right stick;
- * gives (a key's output): 0 default, 31 none, 1-14 the outputs (A, B, Z, Start, L, R, C-up/down/left/right, D-up/down/left/right);
- * special: 0 use "gives" (for a group: 0 default / 31 none only), 1 same as Base (the Held layer), 2 Stick, 3 Half stick, 4 N64 D-pad,
- * 5 C buttons (the groups only). -> 1 if the table changed, 0 if the choice means nothing (a key with a group's target, "same as Base" in the
- * Base layer, a group with a key's output) and nothing was written. */
-static inline int n64rt_ctrl_edit(n64rt_ctrl_t *c, unsigned layer, unsigned key, unsigned gives, unsigned special)
+/* the picks over a layout's table: a list that is on Auto (0), or out of range, changes nothing */
+static inline void n64rt_ctrl_overlay(const n64rt_ctrl_pick_t *pk, uint32_t map[5])
 {
-    if (layer > 1u || key >= 15u) return 0;
-    const unsigned f = (layer ? F_HELD : 0u) + key;
-    uint32_t v;
-    if (key >= F_DPAD) {                                /* a group: 0 settings, 1 stick, 2 half, 3 D-pad, 4 C buttons, 5 none, 6 same */
-        if (special == 1u) { if (!layer) return 0; v = G_SAME; }
-        else if (special >= 2u && special <= 5u) v = special - 1u;
-        else if (special == 0u && gives == O_DFLT) v = G_SETTINGS;
-        else if (special == 0u && gives == O_NONE) v = G_NONE;
-        else return 0;
-    } else {                                            /* a key: an output, or 15 (same as Base) */
-        if (special == 1u) { if (!layer) return 0; v = O_SAME; }
-        else if (special == 0u && (gives == O_DFLT || gives == O_NONE || (gives >= O_A && gives <= O_DR))) v = gives;
-        else return 0;
+    if (pk->normal >= 1u && pk->normal < N64RT_PICK_NORMAL) {
+        const uint8_t *o = n64rt_ctrl_normal[pk->normal - 1u];
+        for (unsigned i = 0; i < 6; i++) n64rt_ctrl_setf(map, i, o[i]);            /* A B X Y L R */
+        n64rt_ctrl_setf(map, F_SELECT, o[6]);
     }
-    c->map[f / 6u] = (c->map[f / 6u] & ~(31u << (5u * (f % 6u)))) | (v << (5u * (f % 6u)));
-    return 1;
+    switch (pk->shift) {
+    case 1: for (unsigned i = 0; i < 6; i++) n64rt_ctrl_setf(map, F_HELD + i, O_SAME); break;                   /* same as normal */
+    case 2: n64rt_ctrl_setf(map, F_HELD + F_A, O_CR); n64rt_ctrl_setf(map, F_HELD + F_B, O_CD);
+            n64rt_ctrl_setf(map, F_HELD + F_X, O_CU); n64rt_ctrl_setf(map, F_HELD + F_Y, O_CL); break;           /* cR cD cU cL */
+    case 3: n64rt_ctrl_setf(map, F_HELD + F_A, O_A);  n64rt_ctrl_setf(map, F_HELD + F_B, O_B);
+            n64rt_ctrl_setf(map, F_HELD + F_X, O_CU); n64rt_ctrl_setf(map, F_HELD + F_Y, O_CD); break;           /* A B cU cD */
+    case 4: n64rt_ctrl_setf(map, F_HELD + F_L, O_L);  n64rt_ctrl_setf(map, F_HELD + F_R, O_R); break;           /* / L R */
+    default: break;
+    }
+    static const uint8_t sd[N64RT_PICK_SDPAD] = { 0, G_SAME, G_C, G_HALF, G_DPAD, G_BOTH };
+    if (pk->shift_dpad >= 1u && pk->shift_dpad < N64RT_PICK_SDPAD) n64rt_ctrl_setf(map, F_HELD + F_DPAD, sd[pk->shift_dpad]);
+    static const uint8_t dk[N64RT_PICK_DKEYS] = { 0, G_DPAD, G_BOTH, G_C };
+    if (pk->dpad_keys >= 1u && pk->dpad_keys < N64RT_PICK_DKEYS) n64rt_ctrl_setf(map, F_DPAD, dk[pk->dpad_keys]);
 }
 /* the settings the pad mapping reads: the menu's words with the layout's parts put in */
 static inline void n64rt_ctrl_apply(const n64rt_ctrl_t *c, uint32_t *set0, uint32_t *set1, uint32_t map[5])
 {
     if (!c) return;
-    if (!(c->mod_default && ((*set0 >> 10) & 31u) != 0u))      /* (the menu's Modifier, if it names a key, over a family's) */
+    if (!(c->mod_default && ((*set0 >> 10) & 31u) != 0u))      /* (the menu's Shift key, if it names a key, over a family's) */
         *set0 = (*set0 & ~N64RT_CTRL_MASK0) | c->set0;
     *set1 = (*set1 & ~c->m1) | (c->set1 & c->m1);
     for (int i = 0; i < 5; i++) map[i] = c->map[i];
 }
 
-/* ---- the session: what the pad mapping uses at this moment, and what the menu's Remap entries edit ----
- * Without an edit, the layout is the one "Controls" picks (n64rt_ctrl_select) over the menu's own settings and the live table (the
- * menu's table: it starts as the defaults). The first Apply starts an edit of the layout in use: a copy of a family's or of the game's
- * saved one (the live table, with its Modifier and the rest), or, under Menu, the live table itself; from then on the edited copy is what
- * is used, until the "Controls" setting changes (then Controls decides again; the live table stays as it was edited). */
-typedef struct {
-    n64rt_ctrl_t live, saved;
-    int saved_ok, family, editing;
-    unsigned edit_src;                           /* "Controls" when the edit began */
-} n64rt_ctrl_state_t;
+/* ---- what the pad mapping uses: the game's saved layout, else its family's, else Standard, with the menu's picks over it ---- */
+typedef struct { n64rt_ctrl_t saved; int saved_ok, family; } n64rt_ctrl_state_t;
 
-/* the settings and the table for the pad mapping, given the menu's words and "Controls" (src) */
-static inline void n64rt_ctrl_effective(n64rt_ctrl_state_t *st, unsigned src, uint32_t *set0, uint32_t *set1, uint32_t map[5])
+static inline void n64rt_ctrl_effective(const n64rt_ctrl_state_t *st, const n64rt_ctrl_pick_t *pk, uint32_t *set0, uint32_t *set1, uint32_t map[5])
 {
     n64rt_ctrl_t tmp;
-    if (st->editing && src != st->edit_src) st->editing = 0;        // the "Controls" setting moved: it decides again
-    for (int i = 0; i < 5; i++) map[i] = st->live.map[i];
-    const n64rt_ctrl_t *c = st->editing ? &st->live : n64rt_ctrl_select(src, st->saved_ok ? &st->saved : 0, st->family, &tmp);
+    const n64rt_ctrl_t *c = &st->saved;
+    if (!st->saved_ok) { n64rt_ctrl_preset(st->family >= 0 ? (unsigned)st->family : N64RT_FAM_STANDARD, &tmp); c = &tmp; }
     n64rt_ctrl_apply(c, set0, set1, map);
+    n64rt_ctrl_overlay(pk, map);
 }
-/* Apply: the editor's choice into the layout in use */
-static inline int n64rt_ctrl_apply_edit(n64rt_ctrl_state_t *st, unsigned src, unsigned layer, unsigned key, unsigned gives, unsigned special)
-{
-    if (st->editing && src != st->edit_src) st->editing = 0;
-    if (!st->editing) {
-        n64rt_ctrl_t tmp;
-        const n64rt_ctrl_t *c = n64rt_ctrl_select(src, st->saved_ok ? &st->saved : 0, st->family, &tmp);
-        if (c) st->live = *c;                                       // a copy of the layout in use
-        else { st->live.set0 = 0; st->live.set1 = 0; st->live.m1 = 0; st->live.mod_default = 1; }   // Menu: the table, under the menu's own settings
-        st->editing = 1;
-        st->edit_src = src;
-    }
-    return n64rt_ctrl_edit(&st->live, layer, key, gives, special);
-}
-/* Save: the layout in use (what the pad mapping gets from the menu's words) as a game's record */
-static inline void n64rt_ctrl_capture(n64rt_ctrl_state_t *st, unsigned src, uint32_t menu0, uint32_t menu1, n64rt_ctrl_t *rec)
+/* Save: what the pad mapping gets (from the menu's words and picks) as a game's record */
+static inline void n64rt_ctrl_capture(const n64rt_ctrl_state_t *st, const n64rt_ctrl_pick_t *pk, uint32_t menu0, uint32_t menu1, n64rt_ctrl_t *rec)
 {
     uint32_t s0 = menu0, s1 = menu1, map[5];
-    n64rt_ctrl_effective(st, src, &s0, &s1, map);
+    n64rt_ctrl_effective(st, pk, &s0, &s1, map);
     memset(rec, 0, sizeof *rec);
     rec->set0 = s0 & N64RT_CTRL_MASK0;
     rec->set1 = s1 & N64RT_CTRL_MASK1;

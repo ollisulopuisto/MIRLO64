@@ -1,7 +1,8 @@
 /* ctrl_test.py's host side: n64rt_ctrl.h's presets, record and selection, printed for it to check.
  *   ctrl_host presets            -> "family set0 set1 m1 map0..map4" per family
  *   ctrl_host family ABCD        -> the family of a cartridge ID, or -1
- *   ctrl_host record s0 s1 m0..m4 [damage] -> store, then load back: "1 set0 set1 map0..map4" or "0" */
+ *   ctrl_host record s0 s1 m0..m4 [damage] -> store, then load back: "1 set0 set1 map0..map4" or "0"
+ *   ctrl_host session saved family  -> commands on stdin: pick n s d k, menu s0 s1, eff, cap, save, forget */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,34 +21,23 @@ int main(int argc, char **argv)
         memset(&st, 0, sizeof st);
         st.family = atoi(argv[3]);
         if (atoi(argv[2])) { st.saved_ok = 1; st.saved.set0 = 3u << 10; st.saved.m1 = N64RT_CTRL_MASK1; st.saved.map[0] = 0x1234; }
-        unsigned src = 0; uint32_t m0 = 0, m1 = 0;
+        n64rt_ctrl_pick_t pk = { 0, 0, 0, 0 };
+        uint32_t m0 = 0, m1 = 0;
         char cmd[16];
         while (scanf("%15s", cmd) == 1) {
-            unsigned a, b, c, d;
-            if (!strcmp(cmd, "src") && scanf("%u", &src) == 1) { }
+            if (!strcmp(cmd, "pick") && scanf("%u %u %u %u", &pk.normal, &pk.shift, &pk.shift_dpad, &pk.dpad_keys) == 4) { }
             else if (!strcmp(cmd, "menu") && scanf("%x %x", &m0, &m1) == 2) { }
-            else if (!strcmp(cmd, "apply") && scanf("%u %u %u %u", &a, &b, &c, &d) == 4) printf("applied %d\n", n64rt_ctrl_apply_edit(&st, src, a, b, c, d));
             else if (!strcmp(cmd, "eff")) {
                 uint32_t s0 = m0, s1 = m1, map[5];
-                n64rt_ctrl_effective(&st, src, &s0, &s1, map);
+                n64rt_ctrl_effective(&st, &pk, &s0, &s1, map);
                 printf("eff %x %x %x %x %x %x %x\n", s0, s1, map[0], map[1], map[2], map[3], map[4]);
             } else if (!strcmp(cmd, "cap")) {
                 n64rt_ctrl_t r;
-                n64rt_ctrl_capture(&st, src, m0, m1, &r);
+                n64rt_ctrl_capture(&st, &pk, m0, m1, &r);
                 printf("cap %x %x %x %x %x %x %x\n", r.set0, r.set1, r.map[0], r.map[1], r.map[2], r.map[3], r.map[4]);
-            } else if (!strcmp(cmd, "save")) { n64rt_ctrl_capture(&st, src, m0, m1, &st.saved); st.saved_ok = 1; }
+            } else if (!strcmp(cmd, "save")) { n64rt_ctrl_capture(&st, &pk, m0, m1, &st.saved); st.saved_ok = 1; }
             else if (!strcmp(cmd, "forget")) st.saved_ok = 0;
         }
-    } else if (argc == 6 && !strcmp(argv[1], "apply")) {           /* apply menu_set0 src saved family -> the set0 the pad mapping gets */
-        n64rt_ctrl_t saved = { 0 }, tmp;
-        saved.set0 = 3u << 10; saved.m1 = N64RT_CTRL_MASK1;
-        uint32_t s0 = (uint32_t)strtoul(argv[2], 0, 16), s1 = 0, map[5] = { 0 };
-        n64rt_ctrl_apply(n64rt_ctrl_select((unsigned)atoi(argv[3]), atoi(argv[4]) ? &saved : 0, atoi(argv[5]), &tmp), &s0, &s1, map);
-        printf("%x\n", s0);
-    } else if (argc == 6 && !strcmp(argv[1], "edit")) {            /* edit layer key gives special -> the changed flag and the table, from a zero one */
-        n64rt_ctrl_t c = { 0 };
-        const int r = n64rt_ctrl_edit(&c, (unsigned)atoi(argv[2]), (unsigned)atoi(argv[3]), (unsigned)atoi(argv[4]), (unsigned)atoi(argv[5]));
-        printf("%d %x %x %x %x %x\n", r, c.map[0], c.map[1], c.map[2], c.map[3], c.map[4]);
     } else if (argc == 3 && !strcmp(argv[1], "family")) {
         printf("%d\n", n64rt_ctrl_family((const unsigned char *)argv[2]));
     } else if (argc >= 9 && !strcmp(argv[1], "record")) {
@@ -61,11 +51,6 @@ int main(int argc, char **argv)
         if (n64rt_ctrl_load(mem, argc >= 12 ? (unsigned)atoi(argv[11]) : 64u, &d))
             printf("1 %x %x %x %x %x %x %x\n", d.set0, d.set1, d.map[0], d.map[1], d.map[2], d.map[3], d.map[4]);
         else printf("0\n");
-    } else if (argc == 6 && !strcmp(argv[1], "select")) {          /* select src saved(0/1) family -> the layout's set0 set1 m1 map0 (or "menu") */
-        n64rt_ctrl_t saved = { 0 }, tmp;
-        saved.set0 = 6u << 10; saved.m1 = N64RT_CTRL_MASK1; saved.map[0] = 0x1234;
-        const n64rt_ctrl_t *r = n64rt_ctrl_select((unsigned)atoi(argv[2]), atoi(argv[3]) ? &saved : 0, atoi(argv[4]), &tmp);
-        if (!r) printf("menu\n"); else printf("%x %x %x %x\n", r->set0, r->set1, r->m1, r->map[0]);
     }
     return 0;
 }
