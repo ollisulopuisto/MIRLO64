@@ -6,7 +6,9 @@ R=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 H=$R/sim/interact_bridge
 B=$(mktemp -d)
 trap 'rm -rf "$B"' EXIT HUP INT TERM
-python3 "$H/gen_elements.py" "$R/pkg/pocket/Cores/tortuga.Mirlo64/interact.json" > "$B/elements.svh"
+# (the readable variant of the menu: the shipped one is writeonly, so the Pocket never reads it back -- tools/gen_interact.py)
+python3 "$R/tools/gen_interact.py" --readable "$B/interact_readable.json" > /dev/null
+python3 "$H/gen_elements.py" "$B/interact_readable.json" > "$B/elements.svh"
 fail=0
 for order in 0 1; do
  for mode in 0 1; do

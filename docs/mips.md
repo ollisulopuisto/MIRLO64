@@ -1003,7 +1003,7 @@ each button sends: the runtime only sees the Pocket's key bits.
 | C buttons | 223 | `0x1000_0128` (10: `interact1[14:10]`) | 0 None, 1 Right stick |
 | Modifier | 228 | `0x1000_0110` (4: `interact0[14:10]`) | menu None, L, R, ZL, ZR, Select: values **0**, 1, 2, 3, 4, 6 |
 | Controls | 270 | `0x1000_0150` (20: `interact2[24:20]`) | menu Menu, **Auto**, Standard, Platformer / adventure, Shooter, Skate / snowboard, Racing, Fighter: values 0-7 |
-| Remap: layer, key, gives, or | 240-243 | `0x1000_0140`..`0x1000_014C` (16-19: `interact2[19:0]`) | the editor: layer Base / Held, key (15), gives (16 outputs), or (6); not persisted |
+| 1. which layer, 2. which button, 3. it sends, 3b. or (special) | 240-243 | `0x1000_0140`..`0x1000_014C` (16-19: `interact2[19:0]`) | the editor: layer Base / Held, key (15), gives (16 outputs), or (6); not persisted |
 | Apply remap, Save for this game, Forget this game | 244, 271, 272 | `0x1000_0154` (21) | actions: write 1 / 2 / 3; `interact2[28]` flips with bit 0, `[29]` with bit 1 |
 
 (The bold value is the default; the lists' defaults are their value 0, so the fields' reset value, 0, which they hold until the Pocket
@@ -1020,7 +1020,15 @@ the menu says; Start, which is not listed either, has always arrived as it is).
 **Why an editor and not one entry per field.** The Pocket shows at most 16 entries of `interact.json` ("Up to 16 UI entries ... can be shown", Analogue's docs;
 a name is 23 characters at most, a list 16 options), and a longer file is a "Load error in interact" at the core's start -- the first remap builds, with 30
 entries, failed so on a Pocket. The menu has 16 entries: Show FPS, Crop Vertical, Crop Right, Controller 1 pak, Controls, Stick, D-pad, C buttons, Modifier,
-the editor (Remap: layer, key, gives, or), and the actions Apply remap, Save for this game, Forget this game. `tools/gen_interact.py` writes it and checks the limits.
+the editor (1. which layer, 2. which button, 3. it sends, 3b. or (special)), and the actions Apply remap, Save for this game, Forget this game. `tools/gen_interact.py` writes it and checks the limits.
+
+**Writeonly or readable.** Every entry of the shipped menu is `writeonly` (the Pocket stores the value and writes it; as in the first core's menu, which ran on a Pocket), so
+the Pocket's menu does not mark the selected option of a list. `tools/gen_interact.py --readable FILE` writes the variant the Pocket reads back every frame (Analogue's
+docs: read, modify, write back); `rtl/soc/mirlo_regs.sv` answers those reads (words 2-20; the reset values are the menu's defaults) and `sim/interact_bridge`
+(CI) runs the Pocket's cycle against it with `target/pocket/sync_fifo.sv` and a model of `dcfifo`: no stale read and no corruption for a fixed order of entries at
+24 bus cycles of spacing and up (reads return stale data below ~16: the template's round trip). The template's read path pushes data when the address changes, so it
+has a hazard if the same entry is last in one frame and first in the next, which a fixed order does not do; the bench's shuffled order shows it. Not tried on a Pocket:
+the shipped menu stays writeonly until it is.
 
 **The remap table.** 30 five-bit fields in the runtime's RAM (`n64rt_ctrl_t.map`; `n64rt_pad.h` has the layout): twelve Pocket keys (A, B, X, Y, L, R, ZL, ZR,
 Select, Start, L3, R3) and three groups (the four D-pad keys, the left and the right analog stick), each in two layers, Base and Held (the Modifier key held).
