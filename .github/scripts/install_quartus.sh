@@ -1,19 +1,27 @@
 #!/bin/bash
-# Installs Quartus Prime Lite 25.1std (build 1129) + Cyclone V support into $HOME/altera/25.1std.
-# Installers are kept in $HOME/quartus-dl (restored from the Actions cache when present).
+# Installs Quartus Prime Lite 25.1std + Cyclone V into $HOME/altera/25.1std.
+# Altera's installers are not public: they sit in the private repo $ASSETS_REPO (release $ASSETS_TAG),
+# fetched with the token in $ASSETS_TOKEN, and are kept in $HOME/quartus-dl (Actions cache).
 set -euxo pipefail
-BASE=https://downloads.intel.com/akdlm/software/acdsinst/25.1std/1129/ib_installers
+ASSETS_REPO=${ASSETS_REPO:-ollisulopuisto/mirlo64-quartus-assets}
+ASSETS_TAG=${ASSETS_TAG:-q25.1}
 DL=$HOME/quartus-dl
 mkdir -p "$DL"
 cd "$DL"
-for f in QuartusLiteSetup-25.1std.0.1129-linux.run cyclonev-25.1std.0.1129.qdz; do
-  if [ ! -s "$f" ]; then curl -fL --retry 5 --retry-delay 10 -o "$f" "$BASE/$f"; fi
+for f in qinst-lite-linux-25.1std-1129.run cyclonev-25.1std.0.1129.qdz; do
+  if [ ! -s "$f" ]; then
+    : "${ASSETS_TOKEN:?ASSETS_TOKEN secret is not set}"
+    GH_TOKEN=$ASSETS_TOKEN gh release download "$ASSETS_TAG" -R "$ASSETS_REPO" -p "$f"
+  fi
 done
+# refuse an HTML error page posing as an installer
+head -c 2 qinst-lite-linux-25.1std-1129.run | grep -q '#!'
+unzip -tq cyclonev-25.1std.0.1129.qdz >/dev/null
 ls -l
 [ "${DOWNLOAD_ONLY:-0}" = 1 ] && exit 0
-chmod +x QuartusLiteSetup-25.1std.0.1129-linux.run
-./QuartusLiteSetup-25.1std.0.1129-linux.run --mode unattended --unattendedmodeui none \
-  --accept_eula 1 --installdir "$HOME/altera/25.1std"
+chmod +x qinst-lite-linux-25.1std-1129.run
+./qinst-lite-linux-25.1std-1129.run --cli --download-dir "$DL" --install-dir "$HOME/altera/25.1std" \
+  --accept-eula --components quartus,cyclonev
 QSH=$(find "$HOME/altera" -name quartus_sh -type f | head -1)
 test -n "$QSH"
 echo "QUARTUS_BIN=$(dirname "$QSH")" >> "$GITHUB_ENV"

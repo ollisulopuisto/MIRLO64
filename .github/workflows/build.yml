@@ -6,7 +6,7 @@ on:
     branches: [patched-v0.1]
 
 env:
-  QUARTUS_CACHE_KEY: quartus-lite-25.1std.0.1129-cyclonev-v1
+  QUARTUS_CACHE_KEY: quartus-lite-25.1std.0.1129-cyclonev-v2
   # Seeds to try, one runner each. v0.1's README says 12, 27, 5 closed timing for the
   # unpatched design; docs/mips.md lists 20, 3, 41 as closing in earlier fits (34 and 9 fail).
   # The FPS patch changes RTL, so closure per seed may differ: more seeds are tried.
@@ -52,6 +52,8 @@ jobs:
           key: ${{ env.QUARTUS_CACHE_KEY }}
       - name: Download installers on cache miss
         if: steps.c.outputs.cache-hit != 'true'
+        env:
+          ASSETS_TOKEN: ${{ secrets.ASSETS_TOKEN }}
         run: DOWNLOAD_ONLY=1 .github/scripts/install_quartus.sh
 
   fit:
@@ -81,6 +83,8 @@ jobs:
           path: ~/quartus-dl
           key: ${{ env.QUARTUS_CACHE_KEY }}
       - name: Install Quartus Lite 25.1std
+        env:
+          ASSETS_TOKEN: ${{ secrets.ASSETS_TOKEN }}
         run: .github/scripts/install_quartus.sh
       - name: Boot ROM, div ROM, mips_inits
         run: .github/scripts/prep.sh
