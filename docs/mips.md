@@ -1003,7 +1003,7 @@ each button sends: the runtime only sees the Pocket's key bits.
 | C buttons | 223 | `0x1000_0128` (10: `interact1[14:10]`) | 0 None, 1 Right stick |
 | Modifier | 228 | `0x1000_0110` (4: `interact0[14:10]`) | menu None, L, R, ZL, ZR, Select: values **0**, 1, 2, 3, 4, 6 |
 | Controls | 270 | `0x1000_01B8` (46: `interact7[4:0]`) | menu Menu, **Auto**, Standard, Platformer / adventure, Shooter, Skate / snowboard, Racing, Fighter: values 0-7 |
-| Save controls for this game, Forget this game's controls | 271, 272 | `0x1000_01BC` (47) | actions: write 1 / 2; `interact7[12:8]` the value, `[23:16]` a count of the writes |
+| Save controls for this game, Forget this game's controls | 271, 272 | `0x1000_01BC` (47) | actions: write 1 / 2; each flips its bit, `interact7[8]` / `[9]` |
 | *key* (base / held), *group* (base / held) | 240-269 | `0x1000_0140` + 4 x field (16-45: the remap table, below) | 30 lists |
 
 (The bold value is the default; the lists' defaults are their value 0, so the fields' reset value, 0, which they hold until the Pocket
@@ -1035,8 +1035,8 @@ so it cannot also be mapped.
 **Per game** (`lang/n64rt/n64rt_ctrl.h`; `lang/n64rt/test/ctrl_test.py` checks it). The Pocket's menu is the core's, not a game's, so a game's own layout is
 the **Controls slot** (data.json slot 5, `LAYOUT_CTRL`, a nonvolatile slot of 64 bytes with the extension `.ctl`: the Pocket keeps a file of it per game, next
 to the game's `.sav`, loads it and writes it back when the core quits, as it does the Controller Pak). *Save controls for this game* is an action on bus
-word 47: the RTL counts its writes (`interact7[23:16]`) and keeps the value written (1 save, 2 forget), the runtime looks at the count at each poll of a
-controller, and a save copies the menu's own layout (the Modifier, "C buttons", "Stick", "D-pad" and the 30 fields) to the slot and gives the slot a file
+word 47: a write of 1 flips `interact7[8]`, of 2 `interact7[9]` (two flip-flops, no counter), the runtime compares the bits with the ones it saw at each poll
+of a controller, and a save copies the menu's own layout (the Modifier, "C buttons", "Stick", "D-pad" and the 30 fields) to the slot and gives the slot a file
 size, a forget clears the record's magic. The record is 16 words: "MCT1", set0 and set1 masked to those settings, the five table words, a checksum; a file
 that is short, has another magic or a bad checksum is no layout. **Controls** (bus word 46, `interact7[4:0]`) picks the layout the pad mapping uses:
 *Menu* the menu's own; *Auto* (the default) this game's saved layout, else its family (a table of cartridge IDs, three characters each, every one of

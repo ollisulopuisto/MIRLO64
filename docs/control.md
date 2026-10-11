@@ -83,9 +83,9 @@ This interface provides IO to the Pocket's `interact.json` (`Core Settings`) API
 | `13`      | `0x1000_0134`               | `interact1[23:22]`                         |
 | `14`      | `0x1000_0138`               | `interact1[24]`                            |
 | `15`      | `0x1000_013C`               | `interact1[25]` (Show FPS; see [FPS overlay](fps.md)) |
-| `16`..`45` | `0x1000_0140`..`0x1000_01B4` | the controller remap table: field `f = n-16`, five bits; the CPU reads six fields to a word in `interact2`..`interact6` (`interact2 + f/6`, bits `[5(f%6)+4 : 5(f%6)]`; read-only) |
+| `16`..`45` | `0x1000_0140`..`0x1000_01B4` | the controller remap table: field `f = n-16`, five bits; the CPU reads six fields to a word in `interact2`..`interact6` (`interact2 + f/6`, bits `[5(f%6)+4 : 5(f%6)]`; read-only). The Pocket reads none of words 16-47 back (every entry is writeonly): they read as 0 on its side |
 | `46` | `0x1000_01B8` | "Controls" (where the layout comes from), `interact7[4:0]` |
-| `47` | `0x1000_01BC` | the Pocket's two actions (save / forget this game's controls): the value last written in `interact7[12:8]`, the number of writes (a wrapping byte) in `interact7[23:16]` |
+| `47` | `0x1000_01BC` | the Pocket's two actions (save / forget this game's controls): a write of 1 flips `interact7[8]`, of 2 `interact7[9]` |
 
 A field address writes only its bits, so each `interact.json` setting can have its own address and needs no `mask`. [See the Analogue Docs](https://www.analogue.co/developer/docs/core-definition-files/interact-json) for more information.
 
@@ -96,7 +96,7 @@ A field address writes only its bits, so each `interact.json` setting can have i
 | `interact1`           | `0x8`  | RW  | 32    | Slot 1.                                                       |
 | `interact_changed1`   | `0xC`  | R   | 1     | 1 when slot 1 has been written by the Pocket since last read. |
 | `interact2`..`interact6` | `0x10`..`0x20` | R | 32 | The remap table's fields 0-29, six to a word. |
-| `interact7`          | `0x24` | R   | 32    | `[4:0]` Controls, `[12:8]` last action, `[23:16]` action count. |
+| `interact7`          | `0x24` | R   | 32    | `[4:0]` Controls, `[8]` SAVE and `[9]` FORGET: each flips when its action is pressed. |
 
 # IO - Interfaces
 

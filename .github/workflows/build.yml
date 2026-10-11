@@ -103,6 +103,10 @@ jobs:
           python3 tools/area2/closure.py projects/output_files | tee out/closure.txt
           cp projects/output_files/*.sta.summary out/ || true
           cp projects/output_files/*.fit.summary out/ || true
+          # where the margin is: the endpoints within 0.3 ns of failing, grouped (tools/area2/fails.sh), and the area by entity
+          tools/area2/fails.sh projects 0.3 > out/paths.txt 2>&1 || true
+          python3 tools/area2/entity_table.py projects/output_files/mirlo.fit.rpt 15 > out/entities.txt 2>&1 || true
+          head -30 out/paths.txt
           echo ${{ matrix.seed }} > out/seed.txt
           worst=$(sed -n 's/.*worst \([-+][0-9.]*\).*/\1/p' out/closure.txt | head -1)
           echo "worst slack: $worst"

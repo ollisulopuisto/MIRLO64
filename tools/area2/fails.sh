@@ -9,7 +9,7 @@ update_timing_netlist
 report_timing -setup -npaths 2000 -nworst 1 -detail summary -file /tmp/a2_f_$$.txt
 project_close
 TCL
-~/altera/25.1std/quartus/bin/quartus_sta -t /tmp/a2_f_$$.tcl >/dev/null 2>&1
+${QUARTUS_BIN:-$HOME/altera/25.1std/quartus/bin}/quartus_sta -t /tmp/a2_f_$$.tcl >/dev/null 2>&1
 python3 - /tmp/a2_f_$$.txt $th <<'PY'
 import re,sys
 d={}

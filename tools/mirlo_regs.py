@@ -61,8 +61,8 @@ BLOCKS = [
         ("INTERACT5",         0x1C, R,  1, []),
         ("INTERACT6",         0x20, R,  1, []),
         # bus word 46 ("Controls": which source the controller layout comes from) in [4:0]; word 47, the Pocket's two actions (save, forget
-        # this game's controls), the value written last in [12:8] and how many times it was written (a byte, wrapping) in [23:16]
-        ("INTERACT7",         0x24, R,  1, [("CONTROLS", 0, 5), ("ACTION", 8, 5), ("ACTION_COUNT", 16, 8)]),
+        # this game's controls): a write of 1 flips SAVE, of 2 FORGET -- the CPU compares the bits with the ones it saw
+        ("INTERACT7",         0x24, R,  1, [("CONTROLS", 0, 5), ("SAVE", 8, 1), ("FORGET", 9, 1)]),
     ]),
     ("APF_VIDEO", 0x0400, [
         # a read clears VBLANK_TRIGGERED (status register: the read strobe clears the flag)

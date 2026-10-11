@@ -496,7 +496,9 @@ s32 n64rt_osPiRawReadIo(u32 dev, u32 *data) { return io_read(0xB0000000u | dev, 
 static n64rt_ctrl_t s_ctrl_saved;               /* this game's saved layout, if s_ctrl_saved_ok */
 static int s_ctrl_saved_ok;
 static int s_ctrl_family = -1;                  /* the cartridge's family (n64rt_ctrl_family), or -1 */
-static u32 s_ctrl_act;                          /* the Pocket's action count (INTERACT7) when last looked at */
+static u32 s_ctrl_act;                          /* INTERACT7's SAVE and FORGET bits when last looked at (an action flips its bit) */
+#define CTRL_ACT_SAVE   (1u << CSR_APF_INTERACT_INTERACT7_SAVE_OFFSET)
+#define CTRL_ACT_FORGET (1u << CSR_APF_INTERACT_INTERACT7_FORGET_OFFSET)
 static u32 ctrl_slot_size(u32 want)             /* the Controls slot's file size in the core's table (0: no file); `want` sets it, so the Pocket writes the file */
 {
     u32 prev = apf_bridge_slot_id_read();
@@ -513,18 +515,22 @@ static void ctrl_init(void)
     const unsigned char id[4] = { (unsigned char)w, (unsigned char)(v >> 24), (unsigned char)(v >> 16), (unsigned char)(v >> 8) };
     s_ctrl_family = n64rt_ctrl_family(id);
     s_ctrl_saved_ok = n64rt_ctrl_load((const volatile u32 *)(uintptr_t)LAYOUT_CTRL, ctrl_slot_size(0), &s_ctrl_saved);
-    s_ctrl_act = (apf_interact_interact7_read() >> 16) & 255u;
+    s_ctrl_act = apf_interact_interact7_read() & (CTRL_ACT_SAVE | CTRL_ACT_FORGET);
     n64rt_log("n64rt: controller layout: family %d, %s\n", s_ctrl_family, s_ctrl_saved_ok ? "saved for this game" : "none saved");
 }
-/* the Pocket's actions (the menu's "Save controls for this game" / "Forget ..."): one is counted in INTERACT7 each time it is pressed */
+/* the Pocket's actions (the menu's "Save controls for this game" / "Forget ..."): each flips its bit of INTERACT7 when pressed. Both
+ * flipped since the last look (two presses between two polls of a controller): the forget is done first, so the save stands. */
 static void ctrl_poll(void)
 {
-    const u32 v = apf_interact_interact7_read();
-    const u32 n = (v >> 16) & 255u;
-    if (n == s_ctrl_act) return;
-    s_ctrl_act = n;
-    switch ((v >> 8) & 31u) {
-    case 1: {                                   /* save: the menu's own layout */
+    const u32 v = apf_interact_interact7_read() & (CTRL_ACT_SAVE | CTRL_ACT_FORGET);
+    const u32 flipped = v ^ s_ctrl_act;
+    if (!flipped) return;
+    s_ctrl_act = v;
+    if (flipped & CTRL_ACT_FORGET) {            /* forget */
+        ((volatile u32 *)(uintptr_t)LAYOUT_CTRL)[0] = 0;
+        s_ctrl_saved_ok = 0;
+    }
+    if (flipped & CTRL_ACT_SAVE) {              /* save: the menu's own layout */
         n64rt_ctrl_t c;
         c.set0 = apf_interact_interact0_read() & N64RT_CTRL_MASK0;
         c.set1 = apf_interact_interact1_read() & N64RT_CTRL_MASK1;
@@ -535,13 +541,6 @@ static void ctrl_poll(void)
         ctrl_slot_size(LAYOUT_CTRL_BYTES);
         s_ctrl_saved = c;
         s_ctrl_saved_ok = 1;
-        break;
-    }
-    case 2:                                     /* forget */
-        ((volatile u32 *)(uintptr_t)LAYOUT_CTRL)[0] = 0;
-        s_ctrl_saved_ok = 0;
-        break;
-    default: break;
     }
 }
 static void read_pad(OSContPad *p, int index)

@@ -187,32 +187,36 @@ end
 // Show FPS uses slot 1 bit 25 (field 15).
 logic [31:0] ia0, ia1;
 logic        ia_ch0, ia_ch1;
-// The controller remap table: interact bus words 16-45 are 30 five-bit fields (the Pocket writes each, never the CPU); word 46 is the
-// "Controls" setting (which source the layout comes from), word 47 the Pocket's two actions (save, forget this game's controls):
-// the value written last, and a count of the writes, which the CPU compares with the one it saw (an action writes the same value
-// each time).
+// The controller remap table: interact bus words 16-46 are 31 five-bit fields (the Pocket writes each, never the CPU, and reads
+// none back: every entry of interact.json is writeonly, so ia_q is 0 for them). Word 47 is the Pocket's two actions (save, forget
+// this game's controls): a write of 1 flips ia_save, of 2 ia_forget, and the CPU compares the two bits with the ones it saw.
+// The index is wiring, not arithmetic: words 16-31 are {0, address[3:0]}, 32-47 {1, address[3:0]}. (Entry 31 is written by
+// word 47 and never read: synthesis drops it.)
 logic [4:0]  iaf [32];
-logic [7:0]  ia_act_n;
-wire         iaf_sel = ia_address >= 6'd16 && ia_address < 6'd48;
-wire  [4:0]  iaf_n   = 5'(ia_address - 6'd16);
+logic        ia_save, ia_forget;
+wire         iaf_sel = ia_address[5] ^ ia_address[4];
+wire  [4:0]  iaf_n   = {ia_address[5], ia_address[3:0]};
 wire  [31:0] iaw0 = {2'd0, iaf[5],  iaf[4],  iaf[3],  iaf[2],  iaf[1],  iaf[0]};
 wire  [31:0] iaw1 = {2'd0, iaf[11], iaf[10], iaf[9],  iaf[8],  iaf[7],  iaf[6]};
 wire  [31:0] iaw2 = {2'd0, iaf[17], iaf[16], iaf[15], iaf[14], iaf[13], iaf[12]};
 wire  [31:0] iaw3 = {2'd0, iaf[23], iaf[22], iaf[21], iaf[20], iaf[19], iaf[18]};
 wire  [31:0] iaw4 = {2'd0, iaf[29], iaf[28], iaf[27], iaf[26], iaf[25], iaf[24]};
-wire  [31:0] iaw5 = {8'd0, ia_act_n, 3'd0, iaf[31], 3'd0, iaf[30]};
+wire  [31:0] iaw5 = {22'd0, ia_forget, ia_save, 3'd0, iaf[30]};
 assign ia_crop_v = ia0[9:5];
 assign ia_crop_r = ia0[16:15];
 assign ia_fps_en = ia1[25];
 always_ff @(posedge clk) begin
-    if (rst) begin ia0 <= 0; ia1 <= 0; ia_ch0 <= 0; ia_ch1 <= 0; for (int i = 0; i < 32; i++) iaf[i] <= 5'd0; ia_act_n <= 8'd0; end
+    if (rst) begin ia0 <= 0; ia1 <= 0; ia_ch0 <= 0; ia_ch1 <= 0; for (int i = 0; i < 32; i++) iaf[i] <= 5'd0; ia_save <= 0; ia_forget <= 0; end
     else begin
         if (wr && a == R_APF_INTERACT_INTERACT0) ia0 <= r_wdata;
         if (wr && a == R_APF_INTERACT_INTERACT1) ia1 <= r_wdata;
         if (rd && a == R_APF_INTERACT_INTERACT0) ia_ch0 <= 0;
         if (rd && a == R_APF_INTERACT_INTERACT1) ia_ch1 <= 0;
         if (ia_wr && iaf_sel) iaf[iaf_n] <= ia_data[4:0];
-        if (ia_wr && ia_address == 6'd47) ia_act_n <= ia_act_n + 8'd1;
+        if (ia_wr && ia_address == 6'd47) begin
+            if (ia_data[4:0] == 5'd1) ia_save <= !ia_save;
+            if (ia_data[4:0] == 5'd2) ia_forget <= !ia_forget;
+        end
         if (ia_wr) case (ia_address)
             6'd0:  begin ia0 <= ia_data; ia_ch0 <= 1; end
             6'd1:  begin ia1 <= ia_data; ia_ch1 <= 1; end
@@ -250,7 +254,7 @@ always_ff @(posedge clk) begin
     6'd13: ia_q <= {30'd0, ia1[23:22]};
     6'd14: ia_q <= {31'd0, ia1[24]};
     6'd15: ia_q <= {31'd0, ia1[25]};
-    default: ia_q <= iaf_sel ? {27'd0, iaf[iaf_n]} : 32'd0;
+    default: ia_q <= 32'd0;
     endcase
 end
 
