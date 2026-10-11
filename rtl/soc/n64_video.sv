@@ -69,7 +69,7 @@ module n64_video #(
     input  wire  [5:0]  vi_y0,          // sys: its first line
     input  wire  [8:0]  vi_rows,        // sys: its lines (0: the whole frame)
     input  wire         osd_en,
-    input  wire         fps_en,         // the frame counter in the corner (when the OSD is off)
+    input  wire         fps_en,         // sys: the frame counter in the corner (when the OSD is off)
     input  wire  [15:0][31:0] osd_val,  // sys
     // the DMA's SDRAM port (sys): word addresses
     output logic        m_valid,
@@ -641,7 +641,11 @@ wire        in_box = osd_en && de && ax < 9'(17 * 8) && ay < 9'(8 * 8);
 // top left corner
 logic [7:0] fps_s1, fps_s2;
 always_ff @(posedge clk_vid) begin fps_s1 <= fps_bcd; fps_s2 <= fps_s1; end
-wire        in_fps = fps_en && !osd_en && de && ax < 9'd16 && ay < 9'd8;
+logic [1:0] fps_en_s;
+always_ff @(posedge clk_vid)
+    if (rst_vid) fps_en_s <= 0;
+    else fps_en_s <= {fps_en_s[0], fps_en};
+wire        in_fps = fps_en_s[1] && !osd_en && de && ax < 9'd16 && ay < 9'd8;
 logic       s1_in, s1_sp;
 logic [2:0] s1_px, s1_py;
 logic [3:0] s1_nib;

@@ -82,7 +82,7 @@ This interface provides IO to the Pocket's `interact.json` (`Core Settings`) API
 | `12`      | `0x1000_0130`               | `interact1[21:20]`                         |
 | `13`      | `0x1000_0134`               | `interact1[23:22]`                         |
 | `14`      | `0x1000_0138`               | `interact1[24]`                            |
-| `15`      | `0x1000_013C`               | `interact1[25]`                            |
+| `15`      | `0x1000_013C`               | `interact1[25]` (Show FPS; see [FPS overlay](fps.md)) |
 
 A field address writes only its bits, so each `interact.json` setting can have its own address and needs no `mask`. [See the Analogue Docs](https://www.analogue.co/developer/docs/core-definition-files/interact-json) for more information.
 
