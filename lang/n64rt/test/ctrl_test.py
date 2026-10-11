@@ -105,7 +105,7 @@ def main():
     # a game's saved layout: it comes back, and any damage to it, or a short file, refuses it
     s0, s1, m = 6 << 10 | 0x7FFF, 1 << 10 | 2 << 15 | 1 << 22 | 0x3FFF000, [0x12345678 & 0x3FFFFFFF, 1, 2, 3, 0x3FFFFFFF]
     args = ['%x' % s0, '%x' % s1, *('%x' % w for w in m)]
-    want = '1 %x %x %s' % (s0 & (31 << 10), s1 & (31 << 10 | 31 << 15 | 3 << 22), ' '.join('%x' % w for w in m))
+    want = '1 %x %x %s' % (s0 & (31 << 10 | 0x3FF << 20), s1 & (31 << 10 | 31 << 15 | 3 << 22 | 0x3FF), ' '.join('%x' % w for w in m))
     got = run(ctrl, 'record', *args).strip()
     if got != want:
         fail('record: %s, expected %s' % (got, want))
@@ -118,7 +118,7 @@ def main():
     if run(ctrl, 'record', *args, '8', '0', '35').strip() != '0':
         fail('a record of 35 bytes was accepted')
     # the "Controls" setting: src, saved?, family
-    for src_, saved, fam, want in ((0, 1, 1, 'menu'), (1, 1, 1, '1800 0 %x 1234' % (31 << 10 | 31 << 15 | 3 << 22)), (1, 0, 1, None), (1, 0, -1, 'menu'),
+    for src_, saved, fam, want in ((0, 1, 1, 'menu'), (1, 1, 1, '1800 0 %x 1234' % (31 << 10 | 31 << 15 | 3 << 22 | 0x3FF)), (1, 0, 1, None), (1, 0, -1, 'menu'),
                                    (2, 1, 1, None), (3, 1, -1, None), (7, 0, 0, None), (8, 1, 1, 'menu'), (31, 1, 1, 'menu')):
         got = run(ctrl, 'select', str(src_), str(saved), str(fam), 'x').strip()
         if want is not None and got != want:
@@ -127,6 +127,31 @@ def main():
             fail('select %s: %s' % ((src_, saved, fam), got))
     if int(run(ctrl, 'select', '2', '1', '-1', 'x').split()[0], 16) != 0 or int(run(ctrl, 'select', '3', '1', '-1', 'x').split()[0], 16) != 6 << 10:
         fail('a family source gave the wrong Modifier')
+    # the user's database: first match wins, ? is any character, comments and bad lines are skipped, "menu" is explicit
+    db = lambda text, cid: int(run(ctrl, 'db', text, cid).strip())
+    for text, cid, want in (('', 'NSME', -2), ('NSM? racing', 'NSME', 4), ('NSM? racing', 'NSMJ', 4), ('NSME shooter\nNSM? racing', 'NSME', 2),
+                            ('NSME shooter\nNSM? racing', 'NSMJ', 4), ('NSM? racing', 'NGEE', -2), ('# NSM? racing', 'NSME', -2),
+                            ('NSM? menu', 'NSME', -1), ('NSM? standard # same as default', 'NSME', 0), ('NSM?\tfighter\r\n', 'NSME', 5),
+                            ('NSM? bogus\nNSM? skate', 'NSME', 3), ('nsm? skate', 'NSME', -2), ('NSM skate', 'NSME', -2), ('NSM?skate', 'NSME', -2),
+                            ('NSM? skates', 'NSME', -2), ('  \n\n  NSM?   platformer', 'NSME', 1), ('NSM? plat', 'NSME', -2),
+                            ('N?M? racing', 'NSME', 4), ('????  fighter', 'ZZZZ', 5), ('NSM? racing', 'NSM', -2)):
+        if cid == 'NSM': continue                                  # (a 3-character ID is not a cartridge's: skip)
+        if db(text, cid) != want:
+            fail('db %r for %s: %d, expected %d' % (text, cid, db(text, cid), want))
+    # the D-pad ramp: grows by the step, never past the target; a release, a reversal or a smaller target is at once; off is the target
+    ramp = lambda c, t, st: int(run(ctrl, 'ramp', str(c), str(t), str(st)).strip())
+    for cur, tgt, step, want in ((0, 80, 20, 20), (20, 80, 20, 40), (70, 80, 20, 80), (0, -80, 40, -40), (-40, -80, 40, -80), (60, 0, 20, 0),
+                                 (60, -80, 20, -80), (80, 40, 20, 40), (0, 80, 0, 80), (0, 40, 10, 10), (5, 3, 10, 3), (0, 80, -5, 80)):
+        if ramp(cur, tgt, step) != want:
+            fail('ramp %d -> %d by %d: %d, expected %d' % (cur, tgt, step, ramp(cur, tgt, step), want))
+    # from rest to full, every step setting reaches the target and never overshoots, in the number of polls the step implies
+    for step in (10, 20, 40):
+        v, n = 0, 0
+        while v != 80 and n < 100:
+            nv = ramp(v, 80, step)
+            if not v < nv <= 80: fail('ramp stalled or overshot at %d (step %d)' % (v, step)); break
+            v, n = nv, n + 1
+        if n != -(-80 // step): fail('ramp with step %d took %d polls' % (step, n))
     print('ctrl_test: %s' % ('FAIL (%d)' % bad if bad else 'PASS'))
     return 1 if bad else 0
 

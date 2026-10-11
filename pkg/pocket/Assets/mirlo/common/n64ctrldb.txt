@@ -1,0 +1,13 @@
+# n64ctrldb.txt -- which controller layout a cartridge gets, by the ID in its ROM header (offsets 0x3B..0x3E, e.g. NSME),
+# read by n64rt.sys (data slot 6 of the core, the file Assets/mirlo/common/n64ctrldb.txt). Your lines go before the built-in
+# table of games (lang/n64rt/n64rt_ctrl.h), so they win. A game you saved its own layout for (Save controls for this game)
+# uses that one, and Controls = Menu / a family in the core's menu ignores this file.
+#
+#   <ID> <family>   # anything after a "#" is a comment
+#
+#   ID      four characters; "?" stands for any character, usually the region (the 4th). The first line that matches wins.
+#   family  standard, platformer, shooter, skate, racing, fighter -- or menu: the menu's own layout for that game.
+#
+# Examples (remove the "#" to use one):
+# NSM?  shooter       # Super Mario 64, with the shooter layout
+# NKT?  menu          # Mario Kart 64: the menu's own layout

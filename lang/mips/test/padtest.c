@@ -62,7 +62,8 @@ int main(void)
             uint32_t k, j;
             uint16_t b; int8_t x, y;
             read_pad(i, &k, &j);
-            n64rt_pad_map(k, j, s0, s1, map, &b, &x, &y);
+            int dig;
+            n64rt_pad_map(k, j, s0, s1, map, &b, &x, &y, &dig);
             n += snprintf(text + n, sizeof text - (size_t)n, "P%d K %08lX BTN %04X\n  J %02X %02X %02X %02X  S%+03d%+03d\n", i + 1, (unsigned long)k, b,
                           (unsigned)(j & 255u), (unsigned)((j >> 8) & 255u), (unsigned)((j >> 16) & 255u), (unsigned)(j >> 24), x, y);
             if (k != lk[i] || j != lj[i]) changed = 1;

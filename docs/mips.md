@@ -1032,6 +1032,8 @@ group's source away from those settings (an analog stick a group has is centred 
 (`n64rt_pad.h` has the details). Nothing couples the keys: two keys may give one output. The Modifier key itself never reaches the table (it is consumed),
 so it cannot also be mapped.
 
+**Stick dead zone** (field 6, `interact0[24:20]`, 0 12, 1 none, 2 6, 3 20, 4 30), **Stick range** (field 7, `interact0[29:25]`, 0 80, 1 85, 2 75, 3 70, 4 60) and **D-pad ramp** (field 8, `interact1[4:0]`, 0 off, 1 / 2 / 3 at most 40 / 20 / 10 per poll): the first two are `n64rt_pad_axis`'s and scale every digital stick value (full, half, diagonal) as well; the ramp slews a stick that came from keys only and grows (`n64rt_pad_ramp`, per poll of the pad: a game that polls twice a frame ramps twice as fast). They are part of a game's saved layout. No RTL: the fields were free.
+
 **Per game** (`lang/n64rt/n64rt_ctrl.h`; `lang/n64rt/test/ctrl_test.py` checks it). The Pocket's menu is the core's, not a game's, so a game's own layout is
 the **Controls slot** (data.json slot 5, `LAYOUT_CTRL`, a nonvolatile slot of 64 bytes with the extension `.ctl`: the Pocket keeps a file of it per game, next
 to the game's `.sav`, loads it and writes it back when the core quits, as it does the Controller Pak). *Save controls for this game* is an action on bus
@@ -1039,7 +1041,7 @@ word 47: a write of 1 flips `interact7[8]`, of 2 `interact7[9]` (two flip-flops,
 side under Icarus: the fields' packing, the actions, the legacy fields), the runtime compares the bits with the ones it saw at each poll
 of a controller, and a save copies the menu's own layout (the Modifier, "C buttons", "Stick", "D-pad" and the 30 fields) to the slot and gives the slot a file
 size, a forget clears the record's magic. The record is 16 words: "MCT1", set0 and set1 masked to those settings, the five table words, a checksum; a file
-that is short, has another magic or a bad checksum is no layout. **Controls** (bus word 46, `interact7[4:0]`) picks the layout the pad mapping uses:
+that is short, has another magic or a bad checksum is no layout. The user's database `n64ctrldb.txt` (slot 6, optional: `LAYOUT_CTRLDB`) is read first for the family (`n64rt_ctrl_db_lookup`). **Controls** (bus word 46, `interact7[4:0]`) picks the layout the pad mapping uses:
 *Menu* the menu's own; *Auto* (the default) this game's saved layout, else its family (a table of cartridge IDs, three characters each, every one of
 them in `n64savedb.txt`), else the menu's; a family (*Standard*, *Platformer / adventure*, *Shooter*, *Skate / snowboard*, *Racing*, *Fighter*) that
 family whatever the game. A family sets the Modifier (Select, except Standard: none) and the table, and "C buttons" where it says so (Platformer, Shooter:

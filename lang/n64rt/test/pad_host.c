@@ -8,9 +8,9 @@ int main(void)
     unsigned k, j, s0, s1, m[5];
     while (scanf("%x %x %x %x %x %x %x %x %x", &k, &j, &s0, &s1, &m[0], &m[1], &m[2], &m[3], &m[4]) == 9) {
         const uint32_t map[5] = { m[0], m[1], m[2], m[3], m[4] };
-        uint16_t b; int8_t x, y;
-        n64rt_pad_map(k, j, s0, s1, map, &b, &x, &y);
-        printf("%04x %d %d\n", b, x, y);
+        uint16_t b; int8_t x, y; int dig;
+        n64rt_pad_map(k, j, s0, s1, map, &b, &x, &y, &dig);
+        printf("%04x %d %d %d\n", b, x, y, dig);
     }
     return 0;
 }

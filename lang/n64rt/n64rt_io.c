@@ -514,6 +514,16 @@ static void ctrl_init(void)
     const u32 w = n64rt_rom_word(0x38u), v = n64rt_rom_word(0x3Cu);       /* the cartridge's ID: 0x3B..0x3E */
     const unsigned char id[4] = { (unsigned char)w, (unsigned char)(v >> 24), (unsigned char)(v >> 16), (unsigned char)(v >> 8) };
     s_ctrl_family = n64rt_ctrl_family(id);
+    {                                           /* the user's database (data.json's slot 6; no file: size 0) goes first */
+        u32 prev = apf_bridge_slot_id_read();
+        apf_bridge_slot_id_write(LAYOUT_CTRLDB_SLOT);
+        bridge_settle();
+        u32 len = apf_bridge_file_size_read();
+        apf_bridge_slot_id_write(prev);
+        if (len > LAYOUT_CTRLDB_MAX) len = LAYOUT_CTRLDB_MAX;
+        const int r = len ? n64rt_ctrl_db_lookup((const char *)(uintptr_t)LAYOUT_CTRLDB, len, id) : N64RT_DB_NONE;
+        if (r != N64RT_DB_NONE) s_ctrl_family = r;                  /* a family, or -1: the menu's own */
+    }
     s_ctrl_saved_ok = n64rt_ctrl_load((const volatile u32 *)(uintptr_t)LAYOUT_CTRL, ctrl_slot_size(0), &s_ctrl_saved);
     s_ctrl_act = apf_interact_interact7_read() & (CTRL_ACT_SAVE | CTRL_ACT_FORGET);
     n64rt_log("n64rt: controller layout: family %d, %s\n", s_ctrl_family, s_ctrl_saved_ok ? "saved for this game" : "none saved");
@@ -534,6 +544,7 @@ static void ctrl_poll(void)
         n64rt_ctrl_t c;
         c.set0 = apf_interact_interact0_read() & N64RT_CTRL_MASK0;
         c.set1 = apf_interact_interact1_read() & N64RT_CTRL_MASK1;
+        c.m0 = N64RT_CTRL_MASK0;
         c.m1 = N64RT_CTRL_MASK1;
         c.map[0] = apf_interact_interact2_read(); c.map[1] = apf_interact_interact3_read(); c.map[2] = apf_interact_interact4_read();
         c.map[3] = apf_interact_interact5_read(); c.map[4] = apf_interact_interact6_read();
@@ -558,7 +569,15 @@ static void read_pad(OSContPad *p, int index)
                    apf_interact_interact6_read() };
     n64rt_ctrl_t tmp;
     n64rt_ctrl_apply(n64rt_ctrl_select(apf_interact_interact7_controls_read(), s_ctrl_saved_ok ? &s_ctrl_saved : 0, s_ctrl_family, &tmp), &s0, &s1, map);
-    n64rt_pad_map(k, j, s0, s1, map, &p->button, &p->stick_x, &p->stick_y);
+    int digital;
+    n64rt_pad_map(k, j, s0, s1, map, &p->button, &p->stick_x, &p->stick_y, &digital);
+    if (digital) {                              /* "D-pad ramp": a stick from keys grows by steps (the pad's own state, per poll) */
+        const int step = n64rt_pad_ramp_step(s1);
+        static int8_t rx[4], ry[4];
+        const int i = index & 3;
+        p->stick_x = rx[i] = n64rt_pad_ramp(rx[i], p->stick_x, step);
+        p->stick_y = ry[i] = n64rt_pad_ramp(ry[i], p->stick_y, step);
+    }
     p->errnum = 0;
 #ifdef N64RT_PADLOG
     /* (make PADLOG=1) what the dock sends and what the game gets, on the JTAG UART whenever a pad's words change, at most every 20 reads

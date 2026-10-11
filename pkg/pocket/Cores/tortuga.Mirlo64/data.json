@@ -66,6 +66,15 @@
         ],
         "size_maximum": "0x100",
         "address": "0x07341000"
+      },
+      {
+        "name": "Controls database",
+        "id": 6,
+        "required": false,
+        "parameters": "0x08",
+        "filename": "n64ctrldb.txt",
+        "size_maximum": "0x4000",
+        "address": "0x07341100"
       }
     ]
   }

@@ -19,6 +19,9 @@ FIRST = [
  {"name":"Stick","id":225,"type":"list","enabled":True,"persist":True,"address":"0x1000012C","defaultval":0,"options":[{"value":0,"name":"D-pad"},{"value":1,"name":"L stick"},{"value":2,"name":"R stick"}],"writeonly":True},
  {"name":"D-pad","id":226,"type":"list","enabled":True,"persist":True,"address":"0x10000134","defaultval":0,"options":[{"value":0,"name":"None"},{"value":1,"name":"D-pad"},{"value":2,"name":"L stick"},{"value":3,"name":"R stick"}],"writeonly":True},
  {"name":"C buttons","id":223,"type":"list","enabled":True,"persist":True,"address":"0x10000128","defaultval":0,"options":[{"value":0,"name":"None"},{"value":1,"name":"Right stick"}],"writeonly":True},
+ {"name":"Stick dead zone","id":273,"type":"list","enabled":True,"persist":True,"address":"0x10000118","defaultval":0,"options":[{"value":0,"name":"Default (12)"},{"value":1,"name":"None"},{"value":2,"name":"Small (6)"},{"value":3,"name":"Large (20)"},{"value":4,"name":"Huge (30)"}],"writeonly":True},
+ {"name":"Stick range","id":274,"type":"list","enabled":True,"persist":True,"address":"0x1000011C","defaultval":0,"options":[{"value":0,"name":"Default (80)"},{"value":1,"name":"Wide (85)"},{"value":2,"name":"75"},{"value":3,"name":"70"},{"value":4,"name":"Small (60)"}],"writeonly":True},
+ {"name":"D-pad ramp","id":275,"type":"list","enabled":True,"persist":True,"address":"0x10000120","defaultval":0,"options":[{"value":0,"name":"Off"},{"value":1,"name":"Fast"},{"value":2,"name":"Medium"},{"value":3,"name":"Slow"}],"writeonly":True},
  {"name":"Modifier","id":228,"type":"list","enabled":True,"persist":True,"address":"0x10000110","defaultval":0,"options":[{"value":0,"name":"None"},{"value":1,"name":"L"},{"value":2,"name":"R"},{"value":3,"name":"ZL"},{"value":4,"name":"ZR"},{"value":6,"name":"Select"}],"writeonly":True},
 ]
 KEYS = ["A", "B", "X", "Y", "L", "R", "ZL", "ZR", "Select", "Start", "L3", "R3"]

@@ -25,8 +25,15 @@ def pack(fields):
     return [sum((fields[6 * w + i] & 31) << (5 * i) for i in range(6)) for w in range(5)]
 
 
-def spec(keys, joy, s0, s1, fields):
-    """-> (button, stick_x, stick_y) by the table in the task: written from the spec, not from the C"""
+def spec(*args):
+    return _spec(*args)[:3]
+
+
+def _spec(keys, joy, s0, s1, fields):
+    """-> (button, stick_x, stick_y, digital) by the table in the task: written from the spec, not from the C"""
+    dz = {1: 0, 2: 6, 3: 20, 4: 30}.get((s0 >> 20) & 31, 12)          # "Stick dead zone" interact0 [24:20]
+    rng = {1: 85, 2: 75, 3: 70, 4: 60}.get((s0 >> 25) & 31, 80)       # "Stick range" interact0 [29:25]
+    adig = False
     held = {n for n, bit in K.items() if keys >> bit & 1}
     typ = keys >> 28
     analog = typ == 3 or (typ == 2 and joy not in (0, 0xFFFFFFFF))     # type 2: its stick bytes are believed unless a pad with none would send them
@@ -64,9 +71,9 @@ def spec(keys, joy, s0, s1, fields):
         dx = ('right' in held) - ('left' in held)
         dy = ('up' in held) - ('down' in held)
         if dsel == 1:
-            tx, ty = 80 * dx, 80 * dy
+            tx, ty = rng * dx, rng * dy
         elif dsel == 2:
-            tx, ty = (28 * dx, 28 * dy) if dx and dy else (40 * dx, 40 * dy)
+            tx, ty = ((rng * 7 // 20) * dx, (rng * 7 // 20) * dy) if dx and dy else ((rng // 2) * dx, (rng // 2) * dy)
         elif dsel in (3, 4):
             for key, c3, c4 in (('up', 'DUP', 'CUP'), ('down', 'DDOWN', 'CDOWN'), ('left', 'DLEFT', 'CLEFT'), ('right', 'DRIGHT', 'CRIGHT')):
                 if key in held: out.add(c3 if dsel == 3 else c4)
@@ -76,16 +83,19 @@ def spec(keys, joy, s0, s1, fields):
     def axg(v, flip):
         a = v - 128
         if flip: a = -a
-        if -12 < a < 12: return 0
-        a = int(a * 80 / 127)
-        return max(-80, min(80, a))
+        if -dz < a < dz: return 0
+        a = int(a * rng / 127)
+        return max(-rng, min(rng, a))
     for g, (px, py) in ((1, (lx, ly)), (2, (rx, ry))):
         sel, _ = group(g)
         if not sel:
             continue
         if analog:
-            if sel == 1: tx += axg(px, False); ty += axg(py, True)
-            elif sel == 2: tx += int(axg(px, False) / 2); ty += int(axg(py, True) / 2)
+            if sel in (1, 2):
+                dv = 2 if sel == 2 else 1
+                ax_, ay_ = int(axg(px, False) / dv), int(axg(py, True) / dv)
+                if ax_ or ay_: adig = True
+                tx += ax_; ty += ay_
             elif sel in (3, 4):
                 for cond, c3, c4 in ((px - 128 < -64, 'DLEFT', 'CLEFT'), (px - 128 > 64, 'DRIGHT', 'CRIGHT'),
                                      (py - 128 < -64, 'DUP', 'CUP'), (py - 128 > 64, 'DDOWN', 'CDOWN')):
@@ -102,15 +112,15 @@ def spec(keys, joy, s0, s1, fields):
     def ax(v, flip):
         a = v - 128
         if flip: a = -a
-        if -12 < a < 12: return 0
-        a = int(a * 80 / 127)                     # (C: truncates toward zero)
-        return max(-80, min(80, a))
+        if -dz < a < dz: return 0
+        a = int(a * rng / 127)                    # (C: truncates toward zero)
+        return max(-rng, min(rng, a))
     def dpad_stick():
-        full = 40 if lmod else 80
+        full = rng // 2 if lmod else rng
         dx = (-1 if 'left' in held else 0) + (1 if 'right' in held else 0)
         dy = (1 if 'up' in held else 0) + (-1 if 'down' in held else 0)
         if lmod and dx and dy:
-            return 28 * dx, 28 * dy
+            return (rng * 7 // 20) * dx, (rng * 7 // 20) * dy
         return full * dx, full * dy
     smode = (s1 >> 15) & 31
     sx = sy = 0
@@ -121,6 +131,7 @@ def spec(keys, joy, s0, s1, fields):
             sx, sy = dpad_stick()                 # no stick to speak of: the D-pad
         else:
             sx, sy = use
+            if use != (0, 0): adig = True
     else:
         sx, sy = dpad_stick()                     # D-pad, or an unknown value
     dmode = (s1 >> 22) & 3                        # the N64's D-pad: 0 none, 1 the D-pad, 2 L stick, 3 R stick
@@ -136,17 +147,20 @@ def spec(keys, joy, s0, s1, fields):
         if px - 128 > 64: out.add('DRIGHT')
         if py - 128 < -64: out.add('DUP')
         if py - 128 > 64: out.add('DDOWN')
-    sx = max(-80, min(80, sx + tx))
-    sy = max(-80, min(80, sy + ty))
-    return sum(N[n] for n in out), sx, sy
+    sx = max(-rng, min(rng, sx + tx))
+    sy = max(-rng, min(rng, sy + ty))
+    return sum(N[n] for n in out), sx, sy, int(not adig)
 
 
 def settings():
     """every combination of the legacy settings' values (valid ones, and invalid codes)"""
     for mod, c, stick, dpad in itertools.product((0, 1, 2, 3, 4, 5, 6, 9), (0, 1, 2), (0, 1, 2, 9), (0, 1, 2, 3)):
         s0 = mod << 10 | 3 << 5 | 1 << 15 | 2                   # (crop, pak: other fields, ignored here)
-        s1 = 1 | c << 10 | stick << 15 | dpad << 22 | 1 << 25     # (free fields, Show FPS)
+        s1 = c << 10 | stick << 15 | dpad << 22 | 1 << 25         # (Show FPS)
         yield s0, s1
+    for dz, rg in itertools.product((0, 1, 2, 3, 4, 9), (0, 1, 2, 3, 4, 9)):      # the stick's dead zone and range with each stick source
+        for stick, dpad in itertools.product((0, 1, 2), (0, 1)):
+            yield 2 << 10 | dz << 20 | rg << 25, 1 << 10 | stick << 15 | dpad << 22
 
 
 def maps(rng):
@@ -197,12 +211,12 @@ def main():
         assert len(res) == len(cases), 'host harness did not return every case'
         total += len(cases)
         for c, line in zip(cases, res):
-            b, x, y = line.split()
-            want = spec(*c)
-            if (int(b, 16), int(x), int(y)) != want:
+            b, x, y, dg = line.split()
+            want = _spec(*c)
+            if (int(b, 16), int(x), int(y), int(dg)) != want:
                 bad += 1
                 if bad <= 10:
-                    print('MISMATCH keys %08x joy %08x set0 %08x set1 %08x map %s: C %s %s %s, spec %04x %d %d' % (*c[:4], c[4], b, x, y, *want))
+                    print('MISMATCH keys %08x joy %08x set0 %08x set1 %08x map %s: C %s %s %s %s, spec %04x %d %d %d' % (*c[:4], c[4], b, x, y, dg, *want))
     cases = []
     for s0, s1 in sets:
         for f in rng.sample(tables, 4) + [DEFAULT_MAP]:

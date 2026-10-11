@@ -3,8 +3,8 @@
  * which of the three the "Controls" setting picks. Pure functions of their arguments (no hardware), so that test/ctrl_host.c can run
  * them on the host (test/ctrl_test.py).
  *
- * A layout is: the Modifier (set0 [14:10]), the "C buttons" [14:10], "Stick" [19:15] and "D-pad" [23:22] settings (set1) and the table's
- * 30 fields (map[5]). Every other setting (crops, pak, Show FPS) stays the menu's. A family sets the Modifier and the table (and "C buttons"
+ * A layout is: the Modifier (set0 [14:10]), the stick's dead zone and range (set0 [29:20]), the "C buttons" [14:10], "Stick" [19:15] and
+ * "D-pad" [23:22] settings and the D-pad ramp [9:0] (set1) and the table's 30 fields (map[5]). Every other setting (crops, pak, Show FPS) stays the menu's. A family sets the Modifier and the table (and "C buttons"
  * where it says so), not "Stick" or "D-pad": the menu's choice of which analog stick moves stays; a game's saved layout has all of them.
  *
  * "Controls" (INTERACT7 [4:0], interact.json's first controller entry): 0 Menu (the menu's own table, as the Pocket wrote it), 1 Auto
@@ -16,9 +16,9 @@
 #include <stdint.h>
 #include <string.h>
 
-typedef struct { uint32_t set0, set1, m1, map[5]; } n64rt_ctrl_t;      /* m1: which bits of set1 the layout owns (a family's: only "C buttons", and only when it sets it) */
-#define N64RT_CTRL_MASK0 (31u << 10)
-#define N64RT_CTRL_MASK1 ((31u << 10) | (31u << 15) | (3u << 22))
+typedef struct { uint32_t set0, set1, m0, m1, map[5]; } n64rt_ctrl_t;  /* m0, m1: which bits of set0 / set1 the layout owns (a family's: the Modifier, and "C buttons" when it sets it) */
+#define N64RT_CTRL_MASK0 ((31u << 10) | (0x3FFu << 20))                  /* the Modifier, the stick's dead zone and range */
+#define N64RT_CTRL_MASK1 ((31u << 10) | (31u << 15) | (3u << 22) | 0x3FFu)  /* "C buttons", "Stick", "D-pad", the D-pad ramp */
 #define N64RT_CTRL_BYTES 64u                     /* the Controls slot's file */
 #define N64RT_CTRL_MAGIC 0x4D435431u             /* "MCT1" */
 
@@ -48,6 +48,7 @@ static inline void n64rt_ctrl_preset(unsigned fam, n64rt_ctrl_t *c)
     uint8_t f[30];
     memset(f, 0, sizeof f);
     memset(c, 0, sizeof *c);
+    c->m0 = 31u << 10;                           /* a family owns the Modifier */
     switch (fam) {
     case N64RT_FAM_PLATFORMER:                   /* Mario 64, Banjo, Zelda ... : A, B, C-left (Y), C-right (X); Select + X / Y / D-pad: the rest */
     case N64RT_FAM_SHOOTER:                      /* the same, and the trigger on R (Z), L is the N64's R (aim) */
@@ -120,6 +121,43 @@ static const n64rt_ctrl_game_t n64rt_ctrl_games[] = {
     N64RT_CG("NRD", N64RT_FAM_FIGHTER), N64RT_CG("N22", N64RT_FAM_FIGHTER), N64RT_CG("NBF", N64RT_FAM_FIGHTER),
 };
 #undef N64RT_CG
+/* ---- the user's database: a text file on the SD card (Assets/mirlo/common/n64ctrldb.txt, data.json's slot 6), one line per cartridge:
+ *   NSM?  platformer   # anything after a "#" is a comment
+ * the ID (four characters, "?" for any: usually the region) and a family name (standard, platformer, shooter, skate, racing, fighter) or
+ * "menu" (the menu's own layout for that game). The first line that matches wins, before the built-in table. A line that is not an ID
+ * and a known name is skipped; nothing in the file can make the lookup read beyond `len` bytes. -> the family, N64RT_DB_MENU, or
+ * N64RT_DB_NONE (no line matches: the built-in table decides) */
+#define N64RT_DB_NONE (-2)
+#define N64RT_DB_MENU (-1)
+static inline int n64rt_ctrl_db_lookup(const char *db, unsigned len, const unsigned char id[4])
+{
+    static const char *const names[] = { "standard", "platformer", "shooter", "skate", "racing", "fighter", "menu" };
+    unsigned i = 0;
+    while (i < len) {
+        while (i < len && (db[i] == ' ' || db[i] == '\t' || db[i] == '\r' || db[i] == '\n')) i++;
+        if (i >= len) break;
+        const unsigned ls = i;
+        while (i < len && db[i] != '\n') i++;
+        const unsigned le = i;                                  /* the line is db[ls, le) */
+        if (db[ls] == '#') continue;
+        unsigned p = ls;
+        int ok = le - ls >= 4u, match = 1;
+        for (unsigned c = 0; ok && c < 4u; c++, p++) {
+            const char ch = db[p];
+            if (!((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '?')) ok = 0;
+            else if (ch != '?' && (unsigned char)ch != id[c]) match = 0;
+        }
+        if (!ok || !match || p >= le || (db[p] != ' ' && db[p] != '\t')) continue;
+        while (p < le && (db[p] == ' ' || db[p] == '\t')) p++;
+        for (int n = 0; n < 7; n++) {
+            unsigned q = 0;
+            while (names[n][q] && p + q < le && db[p + q] == names[n][q]) q++;
+            if (!names[n][q] && (p + q >= le || db[p + q] == ' ' || db[p + q] == '\t' || db[p + q] == '\r' || db[p + q] == '#'))
+                return n == 6 ? N64RT_DB_MENU : n;
+        }
+    }
+    return N64RT_DB_NONE;
+}
 /* the family of the cartridge whose ID is `id` (four characters), or -1 */
 static inline int n64rt_ctrl_family(const unsigned char id[4])
 {
@@ -156,6 +194,7 @@ static inline int n64rt_ctrl_load(const volatile uint32_t *mem, unsigned file_by
     if (w[0] != N64RT_CTRL_MAGIC || w[8] != n64rt_ctrl_sum(w)) return 0;
     c->set0 = w[1] & N64RT_CTRL_MASK0;
     c->set1 = w[2] & N64RT_CTRL_MASK1;
+    c->m0 = N64RT_CTRL_MASK0;
     c->m1 = N64RT_CTRL_MASK1;
     for (int i = 0; i < 5; i++) c->map[i] = w[3 + i];
     return 1;
@@ -178,7 +217,7 @@ static inline const n64rt_ctrl_t *n64rt_ctrl_select(unsigned src, const n64rt_ct
 static inline void n64rt_ctrl_apply(const n64rt_ctrl_t *c, uint32_t *set0, uint32_t *set1, uint32_t map[5])
 {
     if (!c) return;
-    *set0 = (*set0 & ~N64RT_CTRL_MASK0) | c->set0;
+    *set0 = (*set0 & ~c->m0) | (c->set0 & c->m0);
     *set1 = (*set1 & ~c->m1) | (c->set1 & c->m1);
     for (int i = 0; i < 5; i++) map[i] = c->map[i];
 }

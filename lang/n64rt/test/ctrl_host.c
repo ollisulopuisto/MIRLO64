@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../n64rt_ctrl.h"
+#include "../n64rt_pad.h"
 
 int main(int argc, char **argv)
 {
@@ -15,6 +16,10 @@ int main(int argc, char **argv)
             n64rt_ctrl_preset(f, &c);
             printf("%u %x %x %x %x %x %x %x %x\n", f, c.set0, c.set1, c.m1, c.map[0], c.map[1], c.map[2], c.map[3], c.map[4]);
         }
+    } else if (argc == 4 && !strcmp(argv[1], "db")) {               /* db <file contents> <ID> -> the lookup */
+        printf("%d\n", n64rt_ctrl_db_lookup(argv[2], (unsigned)strlen(argv[2]), (const unsigned char *)argv[3]));
+    } else if (argc == 5 && !strcmp(argv[1], "ramp")) {            /* ramp cur target step -> the next stick value */
+        printf("%d\n", n64rt_pad_ramp((int8_t)atoi(argv[2]), (int8_t)atoi(argv[3]), atoi(argv[4])));
     } else if (argc == 3 && !strcmp(argv[1], "family")) {
         printf("%d\n", n64rt_ctrl_family((const unsigned char *)argv[2]));
     } else if (argc >= 9 && !strcmp(argv[1], "record")) {

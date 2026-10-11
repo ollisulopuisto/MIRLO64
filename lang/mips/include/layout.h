@@ -54,7 +54,10 @@
                                              * game as the save is: the Pocket loads it and writes it back when the core quits) */
 #define LAYOUT_CTRL_SLOT    5
 #define LAYOUT_CTRL_BYTES   64
-#define LAYOUT_FREE         0x43341100      /* nothing yet, up to the hidden plane */
+#define LAYOUT_CTRLDB       0x43341100      /* slot 6: the user's controller database, a text file (n64ctrldb.txt: n64rt_ctrl.h), loaded by the Pocket */
+#define LAYOUT_CTRLDB_SLOT  6               /* optional (no file: its size is 0), not nonvolatile */
+#define LAYOUT_CTRLDB_MAX   0x00004000
+#define LAYOUT_FREE         0x43345100      /* nothing yet, up to the hidden plane */
 #define LAYOUT_HID          0x43700000      /* the RDP's hidden-bit plane: the N64's other two coverage bits of each
                                              * 16-bit word of RDRAM, 1 MiB (lang/c/mrdp/mrdp.h; the scan-out reads it) */
 #define LAYOUT_RDRAM        0x43800000
