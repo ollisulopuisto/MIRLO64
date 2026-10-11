@@ -22,7 +22,7 @@ ls -l
 chmod +x qinst-lite-linux-25.1std-1129.run
 ./qinst-lite-linux-25.1std-1129.run --nox11 --noprogress -- --cli --download-dir "$DL" --install-dir "$HOME/altera/25.1std" \
   --accept-eula --components quartus,cyclonev
-QSH=$(find "$HOME/altera" -name quartus_sh -type f | head -1)
-test -n "$QSH"
+QSH=$HOME/altera/25.1std/quartus/bin/quartus_sh
+test -x "$QSH"
 echo "QUARTUS_BIN=$(dirname "$QSH")" >> "$GITHUB_ENV"
 "$QSH" --version
