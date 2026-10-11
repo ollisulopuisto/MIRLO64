@@ -70,7 +70,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        seed: [12, 27, 5, 20, 3, 41, 1, 7]
+        seed: [12, 27, 5, 20, 3, 41, 1, 7, 2, 4, 6, 8, 9, 10, 11, 13]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -109,6 +109,7 @@ jobs:
           cp projects/output_files/*.fit.summary out/ || true
           # where the margin is: the endpoints within 0.3 ns of failing, grouped (tools/area2/fails.sh), and the area by entity
           tools/area2/fails.sh projects 0.3 > out/paths.txt 2>&1 || true
+          tools/area2/fullpath.sh projects 6 > out/fullpath.txt 2>&1 || true
           python3 tools/area2/entity_table.py projects/output_files/mirlo.fit.rpt 15 > out/entities.txt 2>&1 || true
           head -30 out/paths.txt
           echo ${{ matrix.seed }} > out/seed.txt
