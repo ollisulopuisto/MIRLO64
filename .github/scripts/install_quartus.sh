@@ -20,7 +20,7 @@ unzip -tq cyclonev-25.1std.0.1129.qdz >/dev/null
 ls -l
 [ "${DOWNLOAD_ONLY:-0}" = 1 ] && exit 0
 chmod +x qinst-lite-linux-25.1std-1129.run
-./qinst-lite-linux-25.1std-1129.run --cli --download-dir "$DL" --install-dir "$HOME/altera/25.1std" \
+./qinst-lite-linux-25.1std-1129.run --nox11 --noprogress -- --cli --download-dir "$DL" --install-dir "$HOME/altera/25.1std" \
   --accept-eula --components quartus,cyclonev
 QSH=$(find "$HOME/altera" -name quartus_sh -type f | head -1)
 test -n "$QSH"
