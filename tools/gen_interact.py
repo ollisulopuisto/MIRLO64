@@ -36,7 +36,7 @@ OUTPUTS = [(1, "A"), (2, "B"), (3, "Z"), (4, "Start"), (5, "L"), (6, "R"), (7, "
 def build():
   entries = [
  {"name":"Show FPS","id":238,"type":"check","enabled":True,"persist":True,"address":"0x1000013C","defaultval":0,"value":1,"value_off":0,"writeonly":True},
- lst("Crop Vertical", 235, "0x1000010C", [(0, "None"), (8, "8 lines"), (12, "12 lines")], 1),
+ {"name":"Crop Vertical","id":235,"type":"slider_u32","enabled":True,"persist":True,"address":"0x1000010C","defaultval":8,"graphical":{"signed":False,"min":0,"max":30,"adjust_small":1,"adjust_large":4},"writeonly":True},   # (fork only: a slider, lines blanked at the picture's top and bottom; 5 bits, the video code takes any 0-31)
  lst("Crop Right", 236, "0x10000114", [(0, "None"), (1, "1 column")], 1),
  lst("Controller 1 pak", 214, "0x10000108", [(0, "None"), (1, "Controller Pak"), (2, "Transfer Pak")]),
  lst("Controls", 270, "0x10000150", [(0, "Menu"), (1, "Auto"), (2, "Standard"), (3, "Platformer / adventure"), (4, "Shooter"),

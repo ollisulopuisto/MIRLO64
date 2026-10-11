@@ -7,10 +7,12 @@ n = len(d)
 def vals(e):
     if e['type'] == 'list': return [o['value'] for o in e['options']]
     if e['type'] == 'check': return [e.get('value_off', 0), e['value']]
+    if e['type'] == 'slider_u32': g = e['graphical']; return [g['min'], e['defaultval'], g['max']]
     return [e['value']]
 def default(e):
     if e['type'] == 'list': return vals(e)[e['defaultval']]
     if e['type'] == 'check': return e['value'] if e['defaultval'] else e.get('value_off', 0)
+    if e['type'] == 'slider_u32': return e['defaultval']
     return 0
 word = lambda e: (int(e['address'], 16) - 0x10000100) >> 2
 read = lambda e: 0 if (e.get('writeonly') or e['type'] == 'action') else 1
