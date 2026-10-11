@@ -6,22 +6,23 @@ import itertools, os, random, subprocess, sys, tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # the Pocket's keys (the APF's bit numbers) and the N64 controller's bits
-K = dict(up=0, down=1, left=2, right=3, A=4, B=5, X=6, Y=7, L1=8, R1=9, L2=10, R2=11, select=14, start=15)
+K = dict(up=0, down=1, left=2, right=3, A=4, B=5, X=6, Y=7, L1=8, R1=9, L2=10, R2=11, L3=12, R3=13, select=14, start=15)
 N = dict(A=0x8000, B=0x4000, Z=0x2000, START=0x1000, DUP=0x0800, DDOWN=0x0400, DLEFT=0x0200, DRIGHT=0x0100,
          L=0x0020, R=0x0010, CUP=0x0008, CDOWN=0x0004, CLEFT=0x0002, CRIGHT=0x0001)
-CODE = {1: 'L1', 2: 'R1', 3: 'L2', 4: 'R2'}      # a button setting's code -> the Pocket key; 5 and others: none
+CODE = {1: 'L1', 2: 'R1', 3: 'L2', 4: 'R2', 6: 'select'}      # a button setting's code -> the Pocket key; 5 and others: none
 # the remap table: the ten keys (in the order of its fields), the output codes, and the defaults of each layer's fields
-TKEYS = ['A', 'B', 'X', 'Y', 'L1', 'R1', 'L2', 'R2', 'select', 'start']
+TKEYS = ['A', 'B', 'X', 'Y', 'L1', 'R1', 'L2', 'R2', 'select', 'start', 'L3', 'R3']
+HELD = 15                                       # the Held layer's first field; groups: 12 D-pad keys, 13 left stick, 14 right stick (+15 held)
 OUT = {1: 'A', 2: 'B', 3: 'Z', 4: 'START', 5: 'L', 6: 'R', 7: 'CUP', 8: 'CDOWN', 9: 'CLEFT', 10: 'CRIGHT',
        11: 'DUP', 12: 'DDOWN', 13: 'DLEFT', 14: 'DRIGHT'}
-BASE_DEFAULT = [1, 2, 10, 9, 3, 6, 31, 31, 8, 4]       # A B C-right C-left Z R none none C-down Start
-HELD_DEFAULT = [10, 8, 7, 9, 15, 15, 15, 15, 15, 15]   # C-right C-down C-up C-left, the rest as Base (15)
-DEFAULT_MAP = [0] * 24
+BASE_DEFAULT = [1, 2, 10, 9, 3, 6, 31, 31, 8, 4, 31, 31]       # A B C-right C-left Z R none none C-down Start none none
+HELD_DEFAULT = [10, 8, 7, 9, 15, 15, 15, 15, 15, 15, 15, 15]   # C-right C-down C-up C-left, the rest as Base (15)
+DEFAULT_MAP = [0] * 30
 
 
 def pack(fields):
-    """24 five-bit fields -> the four words INTERACT2..5, six to a word"""
-    return [sum((fields[6 * w + i] & 31) << (5 * i) for i in range(6)) for w in range(4)]
+    """30 five-bit fields -> the five words INTERACT2..6, six to a word"""
+    return [sum((fields[6 * w + i] & 31) << (5 * i) for i in range(6)) for w in range(5)]
 
 
 def spec(keys, joy, s0, s1, fields):
@@ -36,7 +37,7 @@ def spec(keys, joy, s0, s1, fields):
         held.discard(mod_key)                     # the modifier key never reaches the game
 
     def target(i, layer_held):
-        code = fields[(11 if layer_held else 0) + i] or (HELD_DEFAULT if layer_held else BASE_DEFAULT)[i]
+        code = fields[(HELD if layer_held else 0) + i] or (HELD_DEFAULT if layer_held else BASE_DEFAULT)[i]
         if code == 15:                            # same as Base (in the Base layer: none)
             if not layer_held:
                 return None
@@ -47,15 +48,17 @@ def spec(keys, joy, s0, s1, fields):
             t = target(i, rmod)
             if t:
                 out.add(t)
-    # the D-pad keys' group: 0 the Stick / D-pad settings, 1 stick, 2 half stick, 3 the N64's D-pad, 4 C buttons, 5 none, 6 same as Base
-    dsel, lmod = fields[10], False
-    if rmod:
-        if fields[21] == 0:
-            dsel, lmod = 0, True
-        elif fields[21] != 6:
-            dsel = fields[21]
-    if dsel > 4:
-        dsel = 5
+    # the groups (0 the D-pad keys, 1 the left stick, 2 the right stick): 0 the settings', 1 stick, 2 half stick, 3 the N64's D-pad,
+    # 4 C buttons, 5 none, 6 same as Base (held)
+    def group(g):
+        sel, lm = fields[12 + g], False
+        if rmod:
+            if fields[HELD + 12 + g] == 0:
+                sel, lm = 0, True
+            elif fields[HELD + 12 + g] != 6:
+                sel = fields[HELD + 12 + g]
+        return (5 if sel > 4 else sel), lm
+    dsel, lmod = group(0)
     tx = ty = 0
     if dsel:
         dx = ('right' in held) - ('left' in held)
@@ -70,6 +73,25 @@ def spec(keys, joy, s0, s1, fields):
         held -= {'up', 'down', 'left', 'right'}
     # joystick bytes: left X, left Y, right X, right Y (0x80 centre)
     lx, ly, rx, ry = (joy >> 0) & 255, (joy >> 8) & 255, (joy >> 16) & 255, (joy >> 24) & 255
+    def axg(v, flip):
+        a = v - 128
+        if flip: a = -a
+        if -12 < a < 12: return 0
+        a = int(a * 80 / 127)
+        return max(-80, min(80, a))
+    for g, (px, py) in ((1, (lx, ly)), (2, (rx, ry))):
+        sel, _ = group(g)
+        if not sel:
+            continue
+        if analog:
+            if sel == 1: tx += axg(px, False); ty += axg(py, True)
+            elif sel == 2: tx += int(axg(px, False) / 2); ty += int(axg(py, True) / 2)
+            elif sel in (3, 4):
+                for cond, c3, c4 in ((px - 128 < -64, 'DLEFT', 'CLEFT'), (px - 128 > 64, 'DRIGHT', 'CRIGHT'),
+                                     (py - 128 < -64, 'DUP', 'CUP'), (py - 128 > 64, 'DDOWN', 'CDOWN')):
+                    if cond: out.add(c3 if sel == 3 else c4)
+        if g == 1: lx = ly = 128          # the settings see it centred
+        else: rx = ry = 128
     # "C buttons" 1 adds the right stick
     if (s1 >> 10) & 31 == 1 and analog:
         if rx - 128 < -64: out.add('CLEFT')
@@ -121,7 +143,7 @@ def spec(keys, joy, s0, s1, fields):
 
 def settings():
     """every combination of the legacy settings' values (valid ones, and invalid codes)"""
-    for mod, c, stick, dpad in itertools.product((0, 1, 2, 3, 4, 5, 9), (0, 1, 2), (0, 1, 2, 9), (0, 1, 2, 3)):
+    for mod, c, stick, dpad in itertools.product((0, 1, 2, 3, 4, 5, 6, 9), (0, 1, 2), (0, 1, 2, 9), (0, 1, 2, 3)):
         s0 = mod << 10 | 3 << 5 | 1 << 15 | 2                   # (crop, pak: other fields, ignored here)
         s1 = 1 | c << 10 | stick << 15 | dpad << 22 | 1 << 25     # (free fields, Show FPS)
         yield s0, s1
@@ -131,10 +153,11 @@ def maps(rng):
     """remap tables: the defaults, then random ones (mostly valid codes, some invalid ones)"""
     yield DEFAULT_MAP
     codes = list(range(0, 16)) + [31, 20]
-    dcodes = list(range(0, 7)) + [9, 31]
-    for _ in range(40):
-        f = [rng.choice(codes) for _ in range(24)]
-        f[10], f[21] = rng.choice(dcodes), rng.choice(dcodes)
+    gcodes = list(range(0, 7)) + [9, 31]
+    for _ in range(60):
+        f = [rng.choice(codes) for _ in range(30)]
+        for g in (12, 13, 14, 27, 28, 29):
+            f[g] = rng.choice(gcodes)
         yield f
 
 
@@ -169,7 +192,7 @@ def main():
 
     def check(cases):                             # cases: (keys, joy, s0, s1, fields)
         nonlocal bad, total
-        inp = ''.join('%x %x %x %x %x %x %x %x\n' % (k, j, s0, s1, *pack(f)) for k, j, s0, s1, f in cases)
+        inp = ''.join('%x %x %x %x %x %x %x %x %x\n' % (k, j, s0, s1, *pack(f)) for k, j, s0, s1, f in cases)
         res = subprocess.run([exe], input=inp, capture_output=True, text=True, check=True).stdout.splitlines()
         assert len(res) == len(cases), 'host harness did not return every case'
         total += len(cases)
@@ -195,8 +218,8 @@ def main():
     for i, key in enumerate(TKEYS):
         for held in (0, 1):
             for code in range(32):
-                f = [0] * 24
-                f[(11 if held else 0) + i] = code
+                f = [0] * 30
+                f[(HELD if held else 0) + i] = code
                 f[i] = 3 if held and code == 15 else f[i]          # (Held's "same as Base" with a Base field set)
                 k = 1 << 28 | 1 << K[key] | (1 << K['R1'] if held else 0)
                 cases.append((k, 0x80808080, mod, 1, f))
@@ -204,9 +227,9 @@ def main():
         for code in range(10):
             for dirs in (['up'], ['down'], ['left'], ['right'], ['up', 'left'], ['down', 'right'], ['up', 'down']):
                 for base in (0, 1, 3):
-                    f = [0] * 24
-                    f[21 if held else 10] = code
-                    f[10] = base if held else code
+                    f = [0] * 30
+                    f[HELD + 12 if held else 12] = code
+                    f[12] = base if held else code
                     k = 1 << 28 | sum(1 << K[d] for d in dirs) | (1 << K['R1'] if held else 0)
                     cases.append((k, 0x80808080, mod, 1 | 1 << 22 * (base == 3), f))
     check(cases)
@@ -225,17 +248,34 @@ def main():
     assert h(['select']) == (N['CDOWN'], 0, 0) and h(['start']) == (N['START'], 0, 0) and h(['L1']) == (N['Z'], 0, 0)
     assert h(['left']) == (0, -40, 0) and h([]) == (0, 0, 0)      # (the Modifier key itself: nothing)
     # swapping Base and Held: A/B on the face buttons unheld is the old "C-button layer"; Held gives A/B
-    swap = [0] * 24
+    swap = [0] * 30
     swap[:4] = [10, 8, 7, 9]                                       # Base A, B, X, Y: C-right, C-down, C-up, C-left
-    swap[11:13] = [1, 2]                                           # Held A, B: A, B (Held X, Y: their defaults, the C buttons)
+    swap[HELD:HELD + 2] = [1, 2]                                           # Held A, B: A, B (Held X, Y: their defaults, the C buttons)
     g = lambda names, held: spec(1 << 28 | sum(1 << K[n] for n in names) | (1 << K['R1'] if held else 0), 0x80808080, 2 << 10, 0, swap)
     assert g(['A'], 0) == (N['CRIGHT'], 0, 0) and g(['A'], 1) == (N['A'], 0, 0) and g(['B'], 1) == (N['B'], 0, 0)
     assert g(['A', 'B'], 1) == (N['A'] | N['B'], 0, 0)
     # the D-pad keys on the C buttons while held, and half a stick unheld
-    dd = [0] * 24
-    dd[10], dd[21] = 2, 4
+    dd = [0] * 30
+    dd[12], dd[HELD + 12] = 2, 4
     dk = lambda held: spec(1 << 28 | 1 << K['up'] | 1 << K['left'] | (1 << K['R1'] if held else 0), 0x80808080, 2 << 10, 0, dd)
     assert dk(0) == (0, -28, 28) and dk(1) == (N['CUP'] | N['CLEFT'], 0, 0)
+    # Select as the Modifier; L3 / R3 in the table; the analog sticks' groups
+    sel = lambda names, f, joy=0x80808080, typ=3, s1=0: spec(typ << 28 | sum(1 << K[n] for n in names), joy, 6 << 10, s1, f)
+    assert sel(['select', 'X'], DEFAULT_MAP) == (N['CUP'], 0, 0) and sel(['select'], DEFAULT_MAP) == (0, 0, 0)
+    f = [0] * 30
+    f[10] = 1                                       # L3 -> A
+    f[11] = 3                                       # R3 -> Z
+    f[HELD + 10] = 14                               # held L3 -> D-right
+    assert sel(['L3', 'R3'], f) == (N['A'] | N['Z'], 0, 0)
+    assert sel(['select', 'L3'], f) == (N['DRIGHT'], 0, 0)
+    f = [0] * 30
+    f[13], f[14], f[HELD + 13] = 1, 4, 3        # left stick: the stick as it is, held the N64's D-pad; right stick: the C buttons
+    assert sel([], f, joy=0x808080E0) == (0, 60, 0)
+    assert sel(['select'], f, joy=0x808080E0) == (N['DRIGHT'], 0, 0)
+    assert sel([], f, joy=0x20808080) == (N['CUP'], 0, 0) and sel([], f, joy=0x80E08080) == (N['CRIGHT'], 0, 0)
+    assert sel([], f, joy=0x80808080, typ=1) == (0, 0, 0)       # a pad without a stick: nothing to give
+    f[13] = 2
+    assert sel([], f, joy=0x808080E0, s1=1 << 15) == (0, 30, 0)     # half a stick; the Stick setting sees the left stick centred
     print('pad_test: %d cases, %d legacy settings x %d tables: %s' % (total, len(sets), len(tables), 'FAIL (%d)' % bad if bad else 'PASS'))
     return 1 if bad else 0
 

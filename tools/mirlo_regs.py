@@ -53,12 +53,16 @@ BLOCKS = [
         ("INTERACT_CHANGED0", 0x04, R,  1, []),
         ("INTERACT1",         0x08, RW, 1, []),
         ("INTERACT_CHANGED1", 0x0C, R,  1, []),
-        # the controller remap table: 24 five-bit fields (interact bus words 16-39), six to a word, field f in bits [5(f%6)+4:5(f%6)]
+        # the controller remap table: 30 five-bit fields (interact bus words 16-45), six to a word, field f in bits [5(f%6)+4:5(f%6)]
         # of INTERACT2 + f/6; written only by the Pocket (interact.json), read-only here
         ("INTERACT2",         0x10, R,  1, []),
         ("INTERACT3",         0x14, R,  1, []),
         ("INTERACT4",         0x18, R,  1, []),
         ("INTERACT5",         0x1C, R,  1, []),
+        ("INTERACT6",         0x20, R,  1, []),
+        # bus word 46 ("Controls": which source the controller layout comes from) in [4:0]; word 47, the Pocket's two actions (save, forget
+        # this game's controls), the value written last in [12:8] and how many times it was written (a byte, wrapping) in [23:16]
+        ("INTERACT7",         0x24, R,  1, [("CONTROLS", 0, 5), ("ACTION", 8, 5), ("ACTION_COUNT", 16, 8)]),
     ]),
     ("APF_VIDEO", 0x0400, [
         # a read clears VBLANK_TRIGGERED (status register: the read strobe clears the flag)

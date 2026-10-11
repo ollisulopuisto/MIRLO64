@@ -27,6 +27,8 @@ jobs:
         run: .github/scripts/prep.sh
       - name: pad_test
         run: python3 lang/n64rt/test/pad_test.py | tee pad_test.log
+      - name: ctrl_test
+        run: python3 lang/n64rt/test/ctrl_test.py | tee -a pad_test.log
       - name: Runtime
         run: |
           make -C lang/n64rt

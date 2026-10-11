@@ -139,6 +139,18 @@
 #define CSR_APF_INTERACT_INTERACT5_OFS 0x31c
 #define CSR_APF_INTERACT_INTERACT5_ADDR (CSR_BASE + 0x31c)
 #define CSR_APF_INTERACT_INTERACT5_SIZE 1
+#define CSR_APF_INTERACT_INTERACT6_OFS 0x320
+#define CSR_APF_INTERACT_INTERACT6_ADDR (CSR_BASE + 0x320)
+#define CSR_APF_INTERACT_INTERACT6_SIZE 1
+#define CSR_APF_INTERACT_INTERACT7_OFS 0x324
+#define CSR_APF_INTERACT_INTERACT7_ADDR (CSR_BASE + 0x324)
+#define CSR_APF_INTERACT_INTERACT7_SIZE 1
+#define CSR_APF_INTERACT_INTERACT7_CONTROLS_OFFSET 0
+#define CSR_APF_INTERACT_INTERACT7_CONTROLS_SIZE 5
+#define CSR_APF_INTERACT_INTERACT7_ACTION_OFFSET 8
+#define CSR_APF_INTERACT_INTERACT7_ACTION_SIZE 5
+#define CSR_APF_INTERACT_INTERACT7_ACTION_COUNT_OFFSET 16
+#define CSR_APF_INTERACT_INTERACT7_ACTION_COUNT_SIZE 8
 
 /* APF_VIDEO */
 #define CSR_APF_VIDEO_BASE (CSR_BASE + 0x400)
@@ -436,6 +448,14 @@ static inline uint32_t apf_interact_interact2_read(void) { return csr_read_simpl
 static inline uint32_t apf_interact_interact3_read(void) { return csr_read_simple(CSR_APF_INTERACT_INTERACT3_ADDR); }
 static inline uint32_t apf_interact_interact4_read(void) { return csr_read_simple(CSR_APF_INTERACT_INTERACT4_ADDR); }
 static inline uint32_t apf_interact_interact5_read(void) { return csr_read_simple(CSR_APF_INTERACT_INTERACT5_ADDR); }
+static inline uint32_t apf_interact_interact6_read(void) { return csr_read_simple(CSR_APF_INTERACT_INTERACT6_ADDR); }
+static inline uint32_t apf_interact_interact7_read(void) { return csr_read_simple(CSR_APF_INTERACT_INTERACT7_ADDR); }
+static inline uint32_t apf_interact_interact7_controls_extract(uint32_t r) { return (r >> 0) & 0x1fu; }
+static inline uint32_t apf_interact_interact7_controls_read(void) { return apf_interact_interact7_controls_extract(apf_interact_interact7_read()); }
+static inline uint32_t apf_interact_interact7_action_extract(uint32_t r) { return (r >> 8) & 0x1fu; }
+static inline uint32_t apf_interact_interact7_action_read(void) { return apf_interact_interact7_action_extract(apf_interact_interact7_read()); }
+static inline uint32_t apf_interact_interact7_action_count_extract(uint32_t r) { return (r >> 16) & 0xffu; }
+static inline uint32_t apf_interact_interact7_action_count_read(void) { return apf_interact_interact7_action_count_extract(apf_interact_interact7_read()); }
 
 /* APF_VIDEO */
 static inline uint32_t apf_video_video_read(void) { return csr_read_simple(CSR_APF_VIDEO_VIDEO_ADDR); }
