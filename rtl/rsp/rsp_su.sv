@@ -42,6 +42,7 @@ module rsp_su (
     // the coprocessors
     output logic        c_valid,
     output logic [31:0] c_ins,
+    output logic        c_mm,         // c_ins is MFC2 or MTC2 (decoded a cycle ahead: the vector unit reads a register address by it)
     output logic [31:0] c_a,            // rs
     output logic [31:0] c_b,            // rt
     input  wire         c_done,
@@ -141,7 +142,7 @@ endfunction
 
 logic [11:0] pc_f;
 logic        d_valid;  logic [11:0] d_pc;
-logic        e_valid;  logic [11:0] e_pc;  logic [31:0] e_ins;  ctl_t e_c;
+logic        e_valid;  logic [11:0] e_pc;  logic [31:0] e_ins;  ctl_t e_c;  logic e_mm;
 logic        m_valid_r; logic [31:0] m_res; ctl_t m_c;
 logic        m_we_r;
 logic        w_we;     logic [4:0] w_wr;   logic [31:0] w_res;
@@ -242,6 +243,7 @@ assign m_wdata = e_c.size == 2'd0 ? {eb[7:0], 24'h0} : e_c.size == 2'd1 ? {eb[15
 // the coprocessors
 assign c_valid = e_valid && e_c.cop && !hazard;
 assign c_ins = e_ins;
+assign c_mm  = e_mm;
 assign c_a = ea;
 assign c_b = eb;
 
@@ -279,6 +281,7 @@ always_ff @(posedge clk) begin
         if (!stall_e) begin
             e_valid <= d_valid && (run || redirect) && !brk;   // (a taken branch's delay slot always runs)
             e_pc <= d_pc; e_ins <= ins_d; e_c <= decode(ins_d);
+            e_mm <= ins_d[31:26] == 6'h12 && !ins_d[25] && (ins_d[24:21] == 4'd0 || ins_d[24:21] == 4'd4);      // MFC2, MTC2
         end
         if (pc_load) begin
             pc_f <= {pc_in[11:2], 2'b00}; d_valid <= 1'b0;

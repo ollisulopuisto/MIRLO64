@@ -398,10 +398,7 @@ always_ff @(posedge clk) begin
     R_APF_INPUT_CONT2_JOY:              r_rdata <= cont_joy[1];
     R_APF_INPUT_CONT3_JOY:              r_rdata <= cont_joy[2];
     R_APF_INPUT_CONT4_JOY:              r_rdata <= cont_joy[3];
-    R_APF_INPUT_CONT1_TRIG:             r_rdata <= cont_trig[0];
-    R_APF_INPUT_CONT2_TRIG:             r_rdata <= cont_trig[1];
-    R_APF_INPUT_CONT3_TRIG:             r_rdata <= cont_trig[2];
-    R_APF_INPUT_CONT4_TRIG:             r_rdata <= cont_trig[3];
+    // (CONT*_TRIG, the dock pads' analog triggers, read 0: no firmware reads them, and their synchronisers and mux inputs were 100+ ALMs)
     R_APF_INTERACT_INTERACT0:           r_rdata <= ia0;
     R_APF_INTERACT_INTERACT_CHANGED0:   r_rdata <= {31'd0, ia_ch0};
     R_APF_INTERACT_INTERACT1:           r_rdata <= ia1;

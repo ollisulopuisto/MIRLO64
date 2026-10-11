@@ -1296,6 +1296,18 @@ By entity (fitter, seed 34, ALMs): the game CPU with the FPU 4,768 -> 4,561, the
 `n64_video` 1,024 -> 981, `mirlo_regs` 690 -> 657, the APF's pad controller 202 -> 143, the bridge's synchronisers
 (`to_bridge_s`) 67 -> 2, the whole design 18,288 -> 17,498.
 
+**Timing of the RSP's vector unit (2026-10-11).** The fits' worst paths (`tools/area2/fullpath.sh`, in every fit artifact) were 13 of 16 seeds' `sys` setup
+failures, the same family: the VCH / VCL / VCR result -- operands selected by `x_pass`, the 16-bit adder, "the sum is 0 / all ones" (`Equal`, two LUT levels), the
+compare condition, the result select, the register write into the MLAB, ten levels, 65 % of it routing. Two changes, neither moving a cycle (`sim/rsp/build_rtl.sh`
+with `LANES=4 MULW=1`, 400 random tasks of 900 instructions, identical to the C model and 1,019,473 cycles before and after):
+* the zero / all-ones flags of the adder are computed from its inputs, not its sum: bit i of s + b + cin is 0 when the carry into it is s_i ^ b_i, and a bit that
+  sums to 0 carries out s_i | b_i (to 1: s_i & b_i), so zero iff (s ^ b) == ((s | b) << 1 | cin), ones iff (s ^ b) ^ ((s & b) << 1 | cin) is all ones;
+  exhaustive over 2^33 inputs against the real sum;
+* MFC2 / MTC2 are decoded by `rsp_su` a cycle ahead (`c_mm`): the vector register's read address was behind a two-level decode of `e_ins` (the second family of
+  failures: `e_ins` -> `rb_adr` -> the register read -> `m_res`, and the DMEM write data).
+And `mirlo_regs` no longer reads CONT*_TRIG (the dock pads' triggers; nothing reads them): their synchronisers and mux inputs go. The remaining failures of
+the sweep were CPU paths (`m_addr` -> data cache hit -> write enable, the FPU's `is_mov` -> `rd_target`), -0.06 and -0.26 ns on one seed each.
+
 Tried and left: Quartus's read-during-write bypass of the six small inferred FIFOs (`rdp_mem`'s `rf` and `wf`, `rdp_dpc`,
 `port_mrdp`, `n64_video`'s `tq`, `cpu_port`'s `wf`: 285 registers and as many multiplexers) cannot be removed by
 `M10K, no_rw_check` (the attribute is not honoured for a read through a registered pointer); as MLAB it goes, but the 140 ALMs of

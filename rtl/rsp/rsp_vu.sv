@@ -38,6 +38,7 @@ module rsp_vu #(
 
     input  wire         valid,
     input  wire  [31:0] ins,
+    input  wire         mm,             // ins is MFC2 or MTC2 (rsp_su decodes it a cycle ahead)
     input  wire  [31:0] a,              // rs: the base of a load / store
     input  wire  [31:0] b,              // rt: MTC2, CTC2
     output logic        done,
@@ -170,7 +171,13 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [3:0] e, inpu
     bb = sub ? ~t : t;
     {cout, lo, cin_x} = {1'b0, s, 1'b1} + {1'b0, bb, cin};               // (s + bb + cin: the carry in as the chain's own bit)
     b16 = s[15] ^ bb[15] ^ cout;
-    zero = lo == 16'd0; ones = &lo;
+    // "the sum is 0" and "the sum is all ones", from the inputs, not from the sum: they would wait for the adder's carry chain and then
+    // spend two more LUT levels (VCH, VCL, VCR: adder, these, the compare, the result select, the register write was the longest path of
+    // the RSP, 10 levels). Bit i of s + bb + cin is 0 when the carry into it is s_i ^ bb_i, and a bit that sums to 0 carries out
+    // s_i | bb_i (to 1: s_i & bb_i), so, with the carry into bit 0 being cin, the sum is 0 iff (s ^ bb) == ((s | bb) << 1 | cin)
+    // and all ones iff (s ^ bb) ^ ((s & bb) << 1 | cin) is all ones. (Exhaustive over every s, bb and cin against the sum.)
+    zero = ((s ^ bb) ^ {s[14:0] | bb[14:0], cin}) == 16'd0;
+    ones = &((s ^ bb) ^ {s[14:0] & bb[14:0], cin});
     o.fl = {cout, b16, zero, ones};
     if (pre) {cout, b16, zero, ones} = fr;
     z17 = zero && !b16;                                      // the signed result is 0
@@ -526,7 +533,7 @@ wire  [15:0] mt_be   = (16'd1 << el) | (el == 4'd15 ? 16'd0 : 16'd2 << el);
 wire  [15:0] in_be   = lw_v ? lw_be : mt_now ? mt_be : 16'd0;
 wire         in_v    = lw_v || mt_now;
 wire         in_pk   = lw_v && lw_packed;
-wire  [4:0]  rb_live = (mfc2 || mtc2) ? vsn : in_tv ? tv_reg : vtn;   // the register the instruction in E reads
+wire  [4:0]  rb_live = mm ? vsn : in_tv ? tv_reg : vtn;                // (mm == mfc2 || mtc2: it is the register address's first select, and decoding it here was two LUT levels before the read)   // the register the instruction in E reads
 assign rb_adr = (lw_v && lw_merge) ? lw_reg : rb_live;
 logic [15:0] ld_d [8];
 logic [7:0]  ld_we;
