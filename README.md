@@ -1,242 +1,28 @@
-<p align="center"><img src="docs/mirlo64.png" width="480" alt="MIRLO64"></p>
+# MIRLO 64
 
-# MIRLO64
+MIRLO 64 is an N64 core made specifically to fit in the Analogue Pocket. It intends to replicate as best as possible the N64 architecture.
 
-MIRLO64 runs Nintendo 64 games from their `.z64` ROMs on the [Analogue Pocket](https://www.analogue.co/pocket), as an openFPGA core. It is an original system-on-chip written in SystemVerilog for the Pocket's Cyclone V FPGA: a MIPS CPU of the VR4300 class, an RSP and an RDP of its own, and the video, audio, controller and save hardware around them. No Nintendo code or data is included: the game's own code and its own libultra run on the CPU, its microcode runs on the RSP, and a small runtime does what is not in hardware.
-
-This is **version 0.1, experimental**. Read [Status and limitations](#status-and-limitations) before expecting a particular game to work.
-
-## What is in it
-
-* **Game CPU** (`rtl/mips/mips_core.sv`): a 32-bit MIPS of the VR4300 class, big-endian as the N64, at 93.75 MHz, with a single-precision FPU (`fpu_n64.sv`), direct-mapped 32 KiB instruction and 32 KiB data caches, and the VR4300's 64-bit integer instructions (the registers, `ld`/`sd`, the 64-bit ALU, shifts and `dmult` in hardware; `ddiv` and anything else left out is done by the runtime). In this branch (`main`, v0.1) it has no TLB of the VR4300's kind: translation tables in block RAM are filled by the runtime on TLB exceptions, and the game's own `tlbwi`/`tlbr`/`tlbp` are done by the runtime's monitor level ([docs/mips.md](docs/mips.md), "The TLB"). The `tlb` branch has the real 32-entry TLB.
-* **RSP** (`rtl/rsp`): the N64's scalar and vector units, running the game's own microcode ([docs/rsp.md](docs/rsp.md)).
-* **RDP** (`rtl/rdp`): draws the N64's own command stream: triangles walked with the N64's coverage rules, the 4 KiB TMEM with its three-point filter, the colour combiner and blender, and a 16-bit Z buffer ([docs/rdp.md](docs/rdp.md)).
-* **Video (VI)** (`rtl/soc/rcp_vi.sv`, `rtl/soc/n64_video.sv`): the VI's registers, the anti-alias, divot and dedither filters, gamma, and the scan-out to the Pocket's scaler: 320 x 240 at 59.94 Hz (NTSC) or 50 Hz (PAL) ([docs/resolution.md](docs/resolution.md)).
-* **Audio (AI)** (`rtl/soc/rcp_ai.sv`): the AI's DMA and queue, resampled to the Pocket's 48 kHz.
-* **MI, PI, SI and the PIF** (`rtl/soc/rcp_mi.sv`, `rcp_si.sv`): the registers and the DMA engines are hardware; the PIF's joybus commands (controllers, accessories, EEPROM) are done by the runtime from the Pocket's controllers.
-* **Controllers, accessories and saves**: up to four controllers (2-4 through the dock), a Controller Pak, a Transfer Pak that reaches a Game Boy cartridge in the Pocket's own slot, and EEPROM, SRAM and FlashRAM saves, with a save-type database on the SD card (`n64savedb.txt`).
-* **Runtime** (`lang/n64rt`, built as `n64rt.sys`, loaded by the core as data slot 3): starts the ROM with the memory set up as the console's boot code leaves it, then stays resident at the CPU's *monitor level* to do what is not in hardware: the RCP registers that are not hardware blocks, the PIF's commands, the FlashRAM's command set, the controllers' mapping. The game runs with its own libultra, unmodified.
-
-## Status and limitations
-
-What the repository records, and where it was checked:
-
-* **Simulation.** [docs/mips.md](docs/mips.md) reports Verilator runs of the whole SoC (`sim/mips_soc`) with real ROMs. The ROMs it names are 1080, Banjo-Kazooie, Banjo-Tooie, Donkey Kong 64, GoldenEye, Mario Kart 64, Majora's Mask, Ocarina of Time, Pilotwings 64, Pokemon Stadium, Star Fox 64 (both revisions), Super Mario 64 (including the European one) and Wave Race 64. What it describes of them is bounded: Super Mario 64 reaches its title, file select and intro and creates and re-reads its EEPROM save; Star Fox 64 reaches its logos and title; Pokemon Stadium reaches its title and the Game Pak Check; Ocarina of Time reaches its title frames and creates its SRAM save; the others "reached the same screens" with the 8 MiB of RDRAM that the core gives every game (Donkey Kong 64, Majora's Mask and Banjo-Tooie need it). The docs do not claim that these games are playable.
-* **Hardware.** The docs do not keep a per-game record of runs on a Pocket. Parts they say were not seen on one: the 50 Hz PAL output, and the bridge side of `core_top` (a game loaded from the card, a save written back), which no simulation covers and which the docs say wants a run on the Pocket.
-* **Known problems of v0.1:**
-  * **GoldenEye** has a deformed picture: its 440-pixel-wide framebuffer does not fit the fixed 320 x 240 output.
-  * **High-resolution interlaced modes are reduced.** A 640-wide framebuffer is shown at half width (pairs of pixels averaged) and a 480-row interlaced one shows its first field only, with the VI's filters off, so the menus of Pokemon Stadium or the logos of Donkey Kong 64 lose resolution. (The `tlb` branch changes this: see its README.)
-  * A game whose framebuffer is narrower than 320 pixels (Banjo-Kazooie's 292 x 213) is shown 1:1 with black around it.
-* **ROMs.** Up to 48 MiB. The larger ones (the 64 MiB cartridges) are not supported in this build: the part past 48 MiB is dropped.
-* **RSP and RDP.** The RSP does not implement LHV, LFV, LWV, SHV, SFV, SWV, VRNDP, VRNDN, VMULQ and VMACQ (the docs say no game they looked at uses them). The RDP draws only into 16-bit colour images, does not decode YUV, and skips "set key" and "set convert". Neither is cycle-accurate to the console (the RSP's DMA moves 4 bytes a cycle where the N64's moves 8, for one); the docs give CPU times from simulation but no frame rates.
-* **Console behaviour not reproduced.** [docs/mips.md](docs/mips.md) lists what still fails of n64-systemtest's groups: the MI's repeat mode, the cartridge's write latch, some PI_STATUS bits, DMAs with a misaligned PI_DRAM_ADDR, and the TLB group.
-* **Accessories.** No Rumble Pak: the Pocket and its dock give a core nothing to vibrate. Only controller 1 can have a pak. The Transfer Pak is checked in simulation against a model of a Game Boy cartridge.
-* **Saves.** The EEPROM's size (4 or 16 Kbit) cannot be told from the game's requests, so it comes from `n64savedb.txt`; a game that is not in the file (or no file) gets 4 Kbit. The type `sram96k` is not supported.
-* **Timing is tight.** The design fills about 95 % of the device's ALMs (17.4-17.5 thousand of 18,480, per docs/mips.md), and whether a build closes timing depends on the fitter's seed: see [Building](#building).
-
-## Requirements
-
-* An Analogue Pocket (firmware 1.1 or later, per `core.json`) and an SD card. A Dock for controllers 2-4 and docked pads.
-* Nintendo 64 ROMs of your own, in `.z64` format. None is provided.
-* Optional: a Game Boy or Game Boy Color cartridge in the Pocket's slot, for the Transfer Pak.
-
-## Installing
+## Installing on the Pocket
 
 1. Download `tortuga.Mirlo64_<version>.zip` from the [releases](https://github.com/tortugaveloz/MIRLO64/releases).
-2. Unzip it onto the **root** of the SD card, merging with the folders already there. It adds only its own files:
+2. Unzip it onto the **root** of the Pocket's SD card, merging with the folders already there. It adds only Mirlo's own files:
 
    ```
-   Assets/mirlo/common/          n64rt.sys (the runtime), n64savedb.txt, PUT_ROMS_HERE.txt
+   Assets/mirlo/common/          n64rt.sys (the runtime) and n64savedb.txt; where Mirlo's games go
    Cores/tortuga.Mirlo64/        the core: mirlo.rev (the bitstream), core.json, ...
-   Platforms/mirlo.json          the platform, in the Console category
+   Platforms/mirlo.json          the platform, under Console
    Platforms/_images/mirlo.bin   its image
    ```
 
-3. Put your ROMs in `Assets/mirlo/common/`. They must be `.z64` (big-endian: the file starts with the bytes `80 37 12 40`); the runtime stops with "the ROM is not a .z64 ROM" otherwise. A `.v64` (byte-swapped in pairs) or `.n64` (each 32-bit word reversed) ROM can be converted with this script (`python3 conv.py in.v64 out.z64`):
+3. Put the games (games in `.z64` format) in `Assets/mirlo/common/`.
+4. On the Pocket: **openFPGA → Console → Nintendo 64**, then pick a game.
 
-   ```python
-   import sys
-   src, dst = sys.argv[1:3]
-   d = bytearray(open(src, "rb").read())
-   if d[:4] == bytes.fromhex("80371240"):
-       pass                                    # already .z64
-   elif d[:4] == bytes.fromhex("37804012"):    # .v64
-       d[0::2], d[1::2] = d[1::2], d[0::2]
-   elif d[:4] == bytes.fromhex("40123780"):    # .n64
-       d[0::4], d[1::4], d[2::4], d[3::4] = d[3::4], d[2::4], d[1::4], d[0::4]
-   else:
-       sys.exit("not a Nintendo 64 ROM in a known byte order")
-   open(dst, "wb").write(d)
-   ```
+Saves (`.sav`) appear in `Saves/mirlo/common/` when you quit a game. To update the core, unzip a newer release the same way; it replaces the files in `Cores/tortuga.Mirlo64/`.
 
-4. On the Pocket: **openFPGA > Console > Mirlo**, then pick a ROM. To update, unzip a newer release the same way.
+## More
 
-## Using the core
+The technical overview, the core's settings and controls, how to build it and the tests are in [docs/overview.md](docs/overview.md); the design notes are in [docs/](docs/).
 
-### Settings
+## License
 
-The core's menu (`interact.json`; the Pocket's own Controls menu still remaps each button first). Defaults in bold.
-
-| setting | values | what it does |
-|---|---|---|
-| Crop Vertical | None, **8 lines**, 12 lines | blanks that many lines at the top and bottom of the picture |
-| Crop Right | None, **1 column** | blanks the picture's last column |
-| Controller 1 pak | **None**, Controller Pak, Transfer Pak | the accessory in controller 1 |
-| Stick dead zone | **Default (12)**, None, Small (6), Large (20), Huge (30) | how far a dock pad's analog stick moves before the N64 sees it |
-| Stick range | **Default (80)**, Wide (85), 75, 70, Small (60) | the largest value the N64 stick gets, from an analog stick or from the D-pad |
-| D-pad ramp | **Off**, Fast, Medium, Slow | a stick made of D-pad keys grows by steps instead of jumping to full (letting go, or reversing, is at once) |
-| Controls | Menu, **Auto**, Standard, Platformer / adventure, Shooter, Skate / snowboard, Racing, Fighter | where the layout comes from: the table you edit (Menu), or per game (below) |
-| Modifier | **None**, L, R, ZL, ZR, Select | while held, the Held layer of the table applies; its key never reaches the game |
-| 1. which layer, 2. which button, 3. it sends (or 3b. special), 4. Apply remap, **Apply remap** | see below | change one entry of the table |
-| Save for this game / Forget this game | (buttons) | write the table and settings to this game's own file, or delete it |
-
-The Pocket shows at most 16 entries of a core's menu, so the remap table is not a long list of entries: it is edited one entry at a time.
-
-**Remapping every control.** The remap form has four numbered steps: **1. Remap: which layer** (Base, or Held: the Modifier key held), **2. Remap: which button**, **3. Remap: it sends** (what it should do), and **4. Apply remap**. The keys are A, B, X, Y, L, R, ZL, ZR, Select, Start, L3 and R3 (ZL, ZR, L3 and R3 come from a dock pad), plus three groups: the D-pad keys, the left stick and the right stick of a dock pad. A key's **3. it sends** is one N64 output: A, B, Z, Start, L, R, C-up/down/left/right, D-up/down/left/right, None, or Default; in the Held layer **3b. Or (special)** = Same as Base gives the key what it does in the Base layer. For a group, **3b. Or (special)** is Stick, Half stick, N64 D-pad or C buttons (or None / Default in **3. it sends**), and with the Modifier held a group can do something else: the D-pad keys an analog stick, a stick the C buttons, and so on. The edits are to a table in the core's memory (Controls = Menu uses it; it starts as the defaults at every start): **Save for this game** keeps it. The defaults reproduce the earlier layout. Base: A is A, B is B, X is C-right, Y is C-left, L is Z, R is R, Select is C-down, Start is Start, ZL and ZR nothing (the N64's L is on nothing until you give it a key). Held: A is C-right, B is C-down, X is C-up, Y is C-left, the rest as Base. For a Tony Hawk layout set the base face keys to the C buttons and the held ones to A and B (or the reverse), with Select as the Modifier. The old Z button, L button, R button, Start button and C-button layer settings are gone: the table covers them (the Select+Start chord went with them). The defaults of the groups: the D-pad keys are the N64's stick at full deflection (half of it while the Modifier is held); **on a dock pad the left analog stick is the N64's stick and the right analog stick the C buttons**, with no setting needed (add or take away with the editor: set the *Left stick* or *Right stick* group to Stick, Half stick, N64 D-pad, C buttons or None, per layer). The D-pad keys and the left stick add up. The old **Stick**, **D-pad** and **C buttons** menu settings are gone (the editor's groups do what they did).
-
-**Per game.** The Pocket's menu is one for the whole core, so a game's own layout is a file: *Save for this game* writes the table you edited and the menu's Modifier, stick dead zone and range and D-pad ramp to `Saves/.../<game>.ctl` next to the game's `.sav`, and **Controls = Auto** (the default) uses it whenever that game runs. To tune a game: leave Controls on Auto (or pick a family), set **1. which layer, 2. which button, 3. it sends (or 3b. special), 4. Apply remap** and press **Apply remap**: it edits the layout you are playing with (a copy of the family's or the game's saved one), so the change is there at once; **Save for this game** keeps it. Changing the **Controls** setting ends the edit. A game without a file gets its **family**: Platformer / adventure (Mario 64, Banjo, Zelda ...), Shooter (GoldenEye, Perfect Dark, Turok ...), Skate / snowboard (Tony Hawk ...), Racing (Mario Kart, F-Zero X ...), Fighter (Smash, Mortal Kombat ...), by the cartridge ID (`lang/n64rt/n64rt_ctrl.h` lists them); a game that is in no family gets the menu's own layout. The families put the Modifier on Select unless you have chosen another key in the **Modifier** setting (L, R, ZL, ZR or Select: pick the shoulder if you want to keep a thumb on the D-pad; that key is then consumed, so whatever a layout gave it is gone) and the layers on the keys the games use most; they are starting points (a family is not tested against each game's own controls), so tune them as above. Choosing a family under Controls forces it for every game; Menu ignores the files and families. *Forget this game* deletes this game's layout. Controllers 2-4 come and go with the dock: a pad plugged in while a game runs answers from the game's next poll. The layout is described in docs/mips.md, "The core's settings for the controller".
-
-### Saves
-
-The Pocket writes them back to `Saves/mirlo/common/` when you quit the core. A file only appears once the game has saved.
-
-| file | what |
-|---|---|
-| `<game>.sav` | the cartridge's save: EEPROM (512 bytes, or 2 KiB for the 16 Kbit games), SRAM (32 KiB) or FlashRAM (128 KiB). The runtime sees which the game uses from its first access; for the EEPROM's size it reads `n64savedb.txt` |
-| `<game>.mpk` | the Controller Pak (32 KiB), when the setting is on; a new one is formatted |
-
-`Assets/mirlo/common/n64savedb.txt` (448 rows, built from public sources by `tools/build_savedb.py`) lists cartridge IDs with their save type; only the EEPROM's size is acted on today (which games have the 16 Kbit chip). To add a game, edit the file by hand: the format is in docs/mips.md, "The cartridge's EEPROM size and the save-type database".
-
-### JTAG UART
-
-The core's log and the serial boot of a program of your own go over a JTAG UART, with a USB Blaster on the Pocket's JTAG port and `tools/jtag/`. **The shipped bitstream has no JTAG UART**: `projects/mirlo.qsf` defines `MIRLO_NO_JTAG_UART=1`, which leaves the UART out (the runtime's log goes nowhere). To use it, remove that line and rebuild; the fit and its timing have not been checked without it.
-
-```bash
-tools/jtag/jtag_program_and_run.sh <bitstream.sof> <program.bin> <log> [seconds]
-```
-
-This programs the FPGA with `quartus_pgm` (set `QUARTUS_PGM` if it is not under `~/altera/25.1std`), uploads the program through the boot ROM's serial boot over the UART and logs its output; it needs `openocd`. `tools/jtag/jtag_boot.sh <program.bin>` uploads and drops into a console; `tools/jtag/jtag_uart_relay.py` alone gives the UART on a PTY. Use a genuine USB Blaster: clones have damaged Pockets.
-
-## Repository layout
-
-| directory | contents |
-|---|---|
-| `rtl/soc/` | the SoC (`mirlo_mips.sv`) and its parts: the CPU's system (`mips_sys.sv`, `cpu_port.sv`), the SDRAM controller (`sdr_*.sv`), the RCP blocks (`rcp_mi`, `rcp_vi`, `rcp_ai`, `rcp_si`, `rcp_dpc_view`), the scan-out (`n64_video.sv`), the registers (`mirlo_regs.sv`, generated decode in `mirlo_regs.svh`), the Game Boy cartridge port (`gb_cart.sv`), the JTAG UART |
-| `rtl/mips/` | the game CPU `mips_core.sv` and its FPU `fpu_n64.sv`; `mips_geom.sv` and `mips_lite.sv` belong to the earlier system (see below) |
-| `rtl/rsp/`, `rtl/rdp/` | the RSP and the RDP |
-| `rtl/mrdp/`, `rtl/geom/`, `rtl/vpu/`, `rtl/audio/` | the earlier system's rasterizer, geometry core, vector unit and audio core: not in the bitstream |
-| `target/pocket/`, `platform/pocket/` | the openFPGA glue: top level (`core_top.sv`), PLLs, data loader, APF bridge |
-| `projects/` | the Quartus project (`mirlo.qpf`, `mirlo.qsf`, `mirlo.sdc`) |
-| `lang/mips/` | the SDK's base: toolchain flags (`mips.mk`), picolibc and compiler-rt (`lib.mk`), program rules (`program.mk`), linker files, headers (`include/`, with the generated `csr.h`), the boot ROM (`boot/`), CPU and SoC tests (`test/`) |
-| `lang/n64rt/` | the runtime that becomes `n64rt.sys` (`loader/main.c`, `n64rt_*.c`) and its tests |
-| `lang/c/` | C examples and the earlier system's 3D SDK, firmware and model (see below) |
-| `sim/` | Verilator benches and models |
-| `tools/` | register-map generator, packaging, JTAG tools, the save-type database builder, `area2/` (fit and timing scripts) |
-| `pkg/pocket/` | the files that go on the SD card: core definition, platform, `n64savedb.txt` |
-| `docs/` | design notes |
-| `vendor/` | git submodules: picolibc and compiler-rt, for the C library |
-
-## Building
-
-### Tools
-
-* **Quartus Prime Lite 25.1std** with Cyclone V support. `fit.sh` below looks for it under `~/altera/25.1std/quartus/bin` (`QUARTUS_BIN` to change).
-* **A GCC for MIPS and its binutils.** `lang/mips/mips.mk` names them with `MIPS_CC` (default `mips-linux-gnu-gcc`) and `MIPS_BIN` (the binutils' prefix, default `mips-linux-gnu-`; a path prefix works), and the tools must be on `PATH`. Ubuntu's `gcc-mips-linux-gnu` and `binutils-mips-linux-gnu` are the defaults. The flags choose the byte order and ABI.
-* **Python 3** with **meson** and **ninja** (picolibc is built with them).
-* **Verilator**, for the simulations only.
-
-### Steps
-
-Run from the repository root.
-
-```bash
-git clone --recursive https://github.com/tortugaveloz/MIRLO64.git     # --recursive: vendor/ holds picolibc and compiler-rt
-cd MIRLO64
-export MIPS_CC=mips-linux-gnu-gcc MIPS_BIN=mips-linux-gnu-            # or your toolchain's
-
-# 1. The C library for the game CPU: picolibc, compiler-rt, the UART runtime -> lang/mips/build/game/
-make -C lang/mips -f lib.mk VARIANT=game
-
-# 2. The boot ROM -> lang/mips/boot/build/boot.hex
-make -C lang/mips/boot
-
-# 3. The RSP's reciprocal ROM (git ignores *.hex, so it is not in a clone)
-python3 sim/rsp/make_div_rom.py rtl/rsp/rsp_div_rom.hex
-
-# 4. The images the bitstream is built with: rtl/soc/init/boot.hex and rtl/soc/mirlo_mips_init.svh
-#    (both generated, ignored by git; the .svh holds absolute paths, so run this again if the tree moves)
-python3 tools/mips_inits.py
-
-# 5. The bitstream (see "Fitter seeds" below), then bit-reverse it as the Pocket wants it
-(cd projects && quartus_sh --flow compile mirlo)
-python3 tools/package_bitstream.py projects/output_files/mirlo.rbf mirlo.rev
-
-# 6. The runtime -> lang/n64rt/build/n64rt.bin (about 60 KB), which the core loads as n64rt.sys
-make -C lang/n64rt
-cp lang/n64rt/build/n64rt.bin n64rt.sys
-
-# 7. The SD-card zip
-python3 tools/make_release.py mirlo.rev n64rt.sys tortuga.Mirlo64_0.1.zip
-```
-
-Notes on the steps:
-
-* The register map (`tools/mirlo_regs.py`) generates `rtl/soc/mirlo_regs.svh` and `lang/mips/include/generated/{csr,soc,mem}.h`. Those files are committed, so a build does not need it; run `python3 tools/mirlo_regs.py` after changing the map, and then rebuild everything that includes the headers (the boot ROM, the runtime, the bitstream). The registers' addresses can change between revisions: take them from `csr.h`.
-* Neither the geometry core's nor the audio core's firmware is part of this bitstream or of `n64rt.sys` (the runtime is built with `RSP=1`; `lang/n64rt/Makefile` fixes it). The only generated memory images the bitstream is built with are the boot ROM and the RSP's reciprocal ROM: after changing the boot ROM, repeat steps 2, 4 and 5.
-* `lang/n64rt/Makefile` checks that `n64rt.bin` stays under 960 KiB: the ROM is loaded at 1 MiB, above the program.
-* `lang/mips/lib.mk` with `VARIANT=lite` is only for the earlier system's geometry and audio firmware.
-* Quartus warns that two files under `analogue-pocket-utils` (listed in `target/pocket/core.qip`) are missing. They are PSRAM modules; the PSRAMs are not used.
-
-### Fitter seeds
-
-The design fills most of the device and its timing is tight: a fit takes about ten minutes, and whether it closes timing depends on the seed. **`quartus_sh --flow compile mirlo` on the tree as it is builds the right design, but with the project's seed, 34, which according to docs/mips.md ("What fits") does not close: a hold violation of 0.03 ns on the CPU's clock in the fast corner.** Two things about the options:
-
-* The design's feature macros (`MIRLO_RSP`, `MIRLO_MON`, `MIRLO_VI`, `MIRLO_TLB_RAM`, `MIRLO_CPU_CLK`, ...) are no longer read by the RTL: the features are always in and the CPU's clock is fixed by the PLL (93.75 MHz). The macros the RTL still reads are `MIRLO_CPU_IC_LOG2`, `MIRLO_CPU_DC_LOG2` and `MIRLO_RSP_LANES` (their defaults, 10, 10 and 4, are the release's), `MIRLO_NO_FPG` and `MIRLO_NO_JTAG_UART` (set in `projects/mirlo.qsf`, with the few others the project needs). `tools/area2/fit.sh` still appends the old macros to the project it compiles: they are inert, and so are the same names in docs/mips.md.
-* What decides the result is the seed. The seeds that closed timing for v0.1 are **12, 27 and 5** (docs/mips.md's table of earlier fits also closes with 20, 3 and 41, and fails with 34 and 9). Either edit `set_global_assignment -name SEED` in `projects/mirlo.qsf` and compile, or let the script do it:
-
-```bash
-tools/area2/fit.sh <tag> <seed>      # e.g. tools/area2/fit.sh s12 12
-```
-
-`fit.sh` copies the tree into `s_<tag>/` (so edits cannot reach a run in progress; it and the symlink `projects_a2_<tag>` it leaves in the root are yours to delete), sets the seed there and starts the compile in the background: the log is `projects_a2_<tag>.compile.log` and the bitstream `s_<tag>/projects/output_files/mirlo.rbf`. Several tags can run in parallel. When a compile ends, `python3 tools/area2/closure.py s_<tag>/projects/output_files` gives its worst slack in all four timing corners (a negative number: it does not close); `tools/area2/summ.sh` gives the area. Then continue from `package_bitstream.py` in the steps above. A bitstream that did not close timing may misbehave in ways that look like a bug in the design.
-
-## Simulation and tests
-
-The SoC benches need Verilator (`VERILATOR` and `VERILATOR_ROOT` name it, defaulting to `~/local/usr/...`), and the C tests the MIPS toolchain of the steps above (and the libraries of step 1).
-
-| what | where |
-|---|---|
-| the whole SoC against an SDRAM chip model, with a game's ROM | `sim/mips_soc`: `./build.sh soc`, then `obj_soc/tb_soc <program.bin> -c <Mcycles> -o <dir>`; `ROM=<file.z64>` is the game, `SLOT<n>=<file>` the other data slots, the options are in `tb_soc.cpp` and docs/mips.md, "Simulation" |
-| SDRAM controller, PHY and arbiter | `sim/mips_soc`: `./build.sh sdr` |
-| CPU, RCP, TLB, controller and save tests, as programs for the SoC | `lang/mips/test`: `make -C lang/mips/test <test>` (the list is in its Makefile) builds `build/<test>.bin`, run on `tb_soc`; `tools/area2/soc_regress.sh` runs a set |
-| 8 MiB of RDRAM at every block | `sim/mips_soc/ram8_check.sh` |
-| the game CPU in lockstep with a reference model of the N64 | `sim/mips` (needs the model, which is not in this repository: see the script) |
-| RSP RTL against its model, DMA queue | `sim/rsp`: `build_rtl.sh`, `build_dma.sh`; `gen_rand_task.py` writes random tasks |
-| RDP RTL against the C model, random and real task dumps | `sim/rdp`: `build_rtl.sh`; `tools/area2/rdp_regress.sh` runs the random cases; `sim/rdp_dither` checks the dither tables |
-| VI filters and scan-out | `sim/vi_filter`: `build.sh`, `obj_vi/tb_vi` |
-| AI queue, interrupt and reader | `sim/ai`: `build.sh`, `obj_ai/tb_ai`; `tools/ai_check.py` compares the hardware's audio with the software algorithm's |
-| the Game Boy cartridge port | `sim/gb_cart/run.sh <rom.gb>` (`lang/n64rt/test/make_gb.py` makes one) |
-| runtime, host side (no toolchain: `gcc` and Python) | `python3 lang/n64rt/test/pad_test.py` (the controller mapping over every setting), `lang/n64rt/test/savedb_host.c` (the save-type lookup; the build line is in its header) |
-| runtime, on the SoC | `lang/n64rt/test`: the Controller Pak, Transfer Pak and SI tests need a decompilation of libultra (`ULTRALIB`), which is not in the repository; `rcp_bench.mk` and `tlb_bench.mk` build games that check the console's answers for the RCP's registers and time the TLB instructions |
-| the earlier system's units | `tools/mrdp_ucode.py test 2000`, `sim/mrdp`, `sim/vpu`, `sim/audio`, `sim/geom_full`, `make hosttest` in `lang/c/geom` |
-
-## Programs of your own
-
-`lang/mips` is a small SDK for programs that run on the game CPU, in C: `mips.mk` (flags: `-march=vr4300 -mabi=32 -EB -msingle-float`; doubles in software), `lib.mk`, `program.mk`, the linker files and C runtime, `include/` with the generated register headers. Examples are in `lang/c/examples` (`helloworld`, `fungus`, `dhrystone`, `keytest`); the tests of `lang/mips/test` are programs of this kind too. See [lang/README.md](lang/README.md) and [lang/c/README.md](lang/c/README.md).
-
-In this SoC the Pocket loads the game ROM at 1 MiB and the runtime at address 0, and the boot ROM jumps to `0x4000_0000`. A program of your own therefore takes the runtime's place: `lang/mips/test/padtest.c` is run that way (docs/mips.md, "The core's settings for the controller": copy the program as `Assets/mirlo/common/n64rt.sys`; the core still wants some ROM in the game slot, which is ignored). Comments in the Makefiles (`program.mk`, the examples) that say "data slot 0" describe an earlier memory layout. With a bitstream that has the JTAG UART, `tools/jtag` uploads a program over it instead. This path has not been rebuilt and run for this README.
-
-The project began as a different system, "Mirlo": a geometry core, an audio core and its own rasterizer (MRDP) beside the game CPU, with a 3D SDK (`lang/c/game`, `lang/c/geom`, `lang/c/audio`). The RTL (`rtl/mips/mips_geom.sv`, `mips_lite.sv`, `rtl/mrdp`, `rtl/geom`, `rtl/vpu`, `rtl/audio`) and the SDK stay in the tree, with their benches and [docs/geometry_core.md](docs/geometry_core.md) and [docs/mrdp.md](docs/mrdp.md), but **the SoC no longer instantiates those cores: programs written for them do not run on the current bitstream**. The RDP keeps MRDP's pixel pipeline, and `lang/c/mrdp/mrdp.c` is still its C model; those documents and `lang/c/game/README.md` describe the earlier system and are out of date in places.
-
-## Documentation
-
-* [docs/mips.md](docs/mips.md): the SoC: memory map, the game CPU, its TLB, the RCP blocks in hardware, the monitor and the runtime, saves and the save-type database, controllers, timing and area. It is a design log, and some passages name macros the RTL no longer reads.
-* [docs/rsp.md](docs/rsp.md) and [docs/rdp.md](docs/rdp.md): the RSP and the RDP, with how each is verified.
-* [docs/resolution.md](docs/resolution.md): the video frame and how to change the resolution. Its first section describes an earlier core.
-* [docs/hires_output_notes.md](docs/hires_output_notes.md): what was tried for 640 x 480 interlaced output on the Pocket.
-* [docs/control.md](docs/control.md): the register blocks (the map itself is `tools/mirlo_regs.py`).
-* [docs/geometry_core.md](docs/geometry_core.md), [docs/mrdp.md](docs/mrdp.md): the earlier system.
-
-## Credits and license
-
-MIRLO64 is released under the [Apache License 2.0](LICENSE). It includes and builds on third-party work under its own licenses (the Pocket's platform glue, Analogue's APF files, picolibc, compiler-rt and some ported code), listed in [NOTICE](NOTICE). Nintendo 64 is a trademark of Nintendo; this project is not affiliated with or endorsed by Nintendo or Analogue.
+MIRLO 64 is released under the [Apache License 2.0](LICENSE).
