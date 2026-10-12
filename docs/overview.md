@@ -93,7 +93,7 @@ The core's menu (`interact.json`; the Pocket's own Controls menu still remaps ea
 | Stick range | **Default (80)**, Wide (85), 75, 70, Small (60) | the largest value the N64 stick gets, from an analog stick or from the D-pad |
 | D-pad ramp | **Off**, Fast, Medium, Slow | a stick made of D-pad keys grows by steps instead of jumping to full (letting go, or reversing, is at once) |
 | Analog sticks (dock) | **L stick / R C buttons**, L stick / R none, L half / R C buttons, L D-pad / R C buttons, L C buttons / R stick, Both none | what a dock pad's two analog sticks do |
-| Save for this game / Forget this game | (buttons) | keep the layout in use (with your picks) in this game's own file, or delete it |
+| Save for this game / Forget this game | (buttons) | keep the layout in use (with your picks) in this game's own file, or delete it. The four layout lists are not remembered between starts (each starts on Auto), so after Forget the next start is Auto; the lists you change stay as they are until the core is restarted |
 
 The Pocket shows at most 16 entries of a core's menu, shows no help text and does not mark the chosen option, so the names carry the meaning.
 
