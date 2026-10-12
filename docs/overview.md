@@ -91,7 +91,7 @@ The core's menu (`interact.json`; the Pocket's own Controls menu still remaps ea
 | D-pad keys | **N64 stick**, N64 D-pad, Stick and D-pad, C buttons | what the D-pad does when Shift is not held (for name entry: N64 D-pad, or Stick and D-pad) |
 | Stick | **D-pad**, L stick, R stick | what drives the N64's analog stick |
 | C buttons | **None**, Right stick | the right stick as the C buttons |
-| Save for this game / Forget this game | (buttons) | keep the layout in use (with your picks) in this game's own file, or delete it |
+| Save for this game / Forget this game | (buttons) | keep the layout in use (with your picks) in this game's own file, or delete it. The four layout lists are not remembered between starts (each starts on Auto), so after Forget the next start is Auto; the lists you change stay as they are until the core is restarted |
 
 The Pocket shows at most 16 entries of a core's menu, shows no help text and does not mark the chosen option, so the names carry the meaning.
 

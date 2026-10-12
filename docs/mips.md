@@ -1021,6 +1021,9 @@ entries, failed so on a Pocket. The menu has 13 entries: Show FPS, Crop Vertical
 (Normal, Shift, Shift: D-pad, D-pad keys), Stick, C buttons, and the actions Save for this game, Forget this game. Names use only letters, digits, space and `( ) - . / :`
 (the characters the menus that loaded had). `tools/gen_interact.py` writes it and checks the limits.
 
+**The lists are not persistent.** The four layout lists have no `persist` (the Pocket does not keep their choice between starts), so each start is on Auto (the fields' reset value 0) and
+"Save for this game" is how a layout is kept; "Forget this game" then means Auto at the next start. The core cannot write a menu value back (writeonly).
+
 **Writeonly or readable.** Every entry of the shipped menu is `writeonly` (the Pocket stores the value and writes it; as in the first core's menu, which ran on a Pocket), so
 the Pocket's menu does not mark the selected option of a list. `tools/gen_interact.py --readable FILE` writes the variant the Pocket reads back every frame; not tried on a Pocket:
 the shipped menu stays writeonly until it is.
