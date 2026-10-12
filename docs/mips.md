@@ -999,7 +999,7 @@ each button sends: the runtime only sees the Pocket's key bits.
 | Crop Right | 236 | `0x1000_0114` (5: `interact0[19:15]`) | a list: 0 None, 1 1 column (**default**; the field is read as a 2-bit pixel count) |
 | Controller 1 pak | 214 | `0x1000_0108` (2: `interact0[4:0]`) | 0 None, 1 Controller Pak, 2 Transfer Pak |
 | Shift key | 228 | `0x1000_0110` (4: `interact0[14:10]`) | menu None, L, R, ZL, ZR, Select: values **0**, 1, 2, 3, 4, 6 (the old "Modifier") |
-| Normal: A B X Y / L R | 240 | `0x1000_0140` (16: `interact2[4:0]`) | **Auto (from the game)**, A B cR cL / Z R, cR cD cU cL / Z R, A B cR cL / R Z, A B cU Z / Z R: values 0-4 |
+| Normal: A B X Y / L R | 240 | `0x1000_0140` (16: `interact2[4:0]`) | **Auto (game)**, A B cR cL / Z R, cR cD cU cL / Z R, A B cR cL / R Z, A B cU Z / Z R: values 0-4 |
 | Shift: A B X Y / L R | 241 | `0x1000_0144` (17: `interact2[9:5]`) | **Auto**, Same as normal, cR cD cU cL, A B cU cD, / L R (shoulders): values 0-4 |
 | Shift: D-pad | 242 | `0x1000_0148` (18: `interact2[14:10]`) | **Auto**, Same as normal, C buttons, Half stick, N64 D-pad, Stick and D-pad: values 0-5 |
 | D-pad keys | 243 | `0x1000_014C` (19: `interact2[19:15]`) | **N64 stick**, N64 D-pad, Stick and D-pad, C buttons: values 0-3 |

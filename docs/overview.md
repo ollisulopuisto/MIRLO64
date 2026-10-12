@@ -85,7 +85,7 @@ The core's menu (`interact.json`; the Pocket's own Controls menu still remaps ea
 | Crop Right | None, **1 column** | blanks the picture's last column |
 | Controller 1 pak | **None**, Controller Pak, Transfer Pak | the accessory in controller 1 |
 | Shift key | **None**, L, R, ZL, ZR, Select | while held, the Shift layer applies; the key never reaches the game |
-| Normal: A B X Y / L R | **Auto (from the game)**, A B cR cL / Z R, cR cD cU cL / Z R, A B cR cL / R Z, A B cU Z / Z R | what the four face keys send, then (after the bar) the shoulders; cU cR cD cL are C-up, C-right, C-down, C-left |
+| Normal: A B X Y / L R | **Auto (game)**, A B cR cL / Z R, cR cD cU cL / Z R, A B cR cL / R Z, A B cU Z / Z R | what the four face keys send, then (after the bar) the shoulders; cU cR cD cL are C-up, C-right, C-down, C-left |
 | Shift: A B X Y / L R | **Auto**, Same as normal, cR cD cU cL, A B cU cD, / L R (shoulders) | what changes while Shift is held; the rest stays as normal |
 | Shift: D-pad | **Auto**, Same as normal, C buttons, Half stick, N64 D-pad, Stick and D-pad | what the D-pad does while Shift is held |
 | D-pad keys | **N64 stick**, N64 D-pad, Stick and D-pad, C buttons | what the D-pad does when Shift is not held (for name entry: N64 D-pad, or Stick and D-pad) |

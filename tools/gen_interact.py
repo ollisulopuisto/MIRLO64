@@ -29,7 +29,7 @@ def lst(name, ident, address, options, dflt=0, persist=True):
 def action(name, ident, value):
     return {"name": name, "id": ident, "type": "action", "enabled": True, "address": "0x10000154", "value": value, "writeonly": True}
 
-AUTO = (0, "Auto (from the game)")
+AUTO = (0, "Auto (game)")
 
 def build():
   entries = [
