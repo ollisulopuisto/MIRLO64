@@ -13,5 +13,5 @@ HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
     -CFLAGS -DREAL_CONTROLLER --Mdir "$HERE/obj_controller" \
     "$HERE/pocket_video_test.sv" "$HERE/../../target/pocket/pocket_video.sv" \
     "$HERE/../../target/pocket/pocket_video_memory.sv" "$HERE/../../rtl/soc/afifo.sv" \
-    "$HERE/../../rtl/soc/psram.sv" "$HERE/tb_pocket_video.cpp" -o tb_pocket_video
+    "$HERE/../../target/pocket/pocket_video_psram.sv" "$HERE/tb_pocket_video.cpp" -o tb_pocket_video
 "$HERE/obj_controller/tb_pocket_video"

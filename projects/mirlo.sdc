@@ -60,7 +60,7 @@
 # ==============================================================================
 
 # ==============================================================================
-# The PSRAMs (rtl/soc/psram.sv; used by the Pocket display frame store)
+# The PSRAMs (target/pocket/pocket_video_psram.sv; used by the Pocket display frame store)
 # ==============================================================================
 # Their clock rises three quarters into clk_sys's cycle, out of a DDR register
 # on the doubled clock (one in two of its falling edges). What the FPGA

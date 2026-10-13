@@ -45,7 +45,6 @@ set_global_assignment -name SAVE_DISK_SPACE OFF
 # negative, compile three seeds in parallel (copies of projects/ with a
 # different SEED each) and keep the one that closes. With
 # PLACEMENT_EFFORT_MULTIPLIER 10.0 (below).
-# Hybrid display mode: seed 5 closes all four timing corners (2026-10-13).
 set_global_assignment -name SEED 5
 # Off: smart recompilation can skip synthesis when only a memory's init file
 # changed -- the geometry core's ROM is one.
@@ -799,7 +798,8 @@ set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_
 # two -- as small as the old reduced set, since the unit's float<->fixed
 # conversion ops went when the triangle stream became fixed point.
 
-# The PSRAMs' pads (rtl/soc/psram.sv): every register at its pad
+
+# Display frame-store pads; preserve the controller's electrical timing.
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_a[*]
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_a[*]
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_dq[*]

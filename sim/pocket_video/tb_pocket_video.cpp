@@ -19,7 +19,7 @@ static void check(bool ok,const std::string& msg) { if (!ok) throw std::runtime_
 // Transaction-level CellularRAM model: initialisation, burst startup, row
 // boundaries, idle gaps, delayed responses and occasional command stalls.
 struct Memory {
-    std::vector<uint32_t> ram = std::vector<uint32_t>(262144,0xdeadbe);
+    std::vector<uint32_t> ram = std::vector<uint32_t>(524288,0xdeadbe);
     struct Response { uint64_t due; uint32_t value; };
     std::deque<Response> responses;
     uint64_t cycles=0, pause_until=0;
@@ -61,21 +61,21 @@ struct Memory {
 };
 static int preset(int mode,int dock,Bounds b) {
     if(mode==0) return 0;
-    if(mode==2 && b.w>=319 && b.w<=320 && b.h>0 && b.h<=240) return 0;
-    if(mode==1 && b.w>=319 && b.w<=320) {
+    if(mode==2 && b.w>=638 && b.w<=640 && b.h>0 && b.h<=240) return 0;
+    if(mode==1 && b.w>=638 && b.w<=640) {
         if(b.h==240)return 1; if(b.h==224)return 2; if(b.h==216)return 3;
     }
     if(mode==3) {
-        if(dock) { if(b.w==320 && b.h==240)return 0; }
+        if(dock) { if(b.w==640 && b.h==240)return 0; }
         else {
-            if(b.h==240 && b.w>=260)return 4;
-            if((b.h==224 || b.h==216) && b.w>=240)return 5;
-            if(b.h==213 && b.w>=230)return 6;
+            if(b.h==240 && b.w>=520)return 4;
+            if((b.h==224 || b.h==216) && b.w>=480)return 5;
+            if(b.h==213 && b.w>=460)return 6;
         }
     }
     return 7;
 }
-static const int widths[]={320,320,320,320,260,240,230,400};
+static const int widths[]={640,640,640,640,520,480,460,400};
 static const int heights[]={240,240,224,216,234,216,207,360};
 static unsigned mix(unsigned a,unsigned b,int f) { return (a*(256-f)+b*f+128)/256; }
 struct Test {
@@ -84,7 +84,7 @@ struct Test {
     unsigned pixels=0, rows=0;
     bool prev_de=false,prev_vs=false;
     int frame=-1, mode=0, dock=0, input_frame=0;
-    Bounds bounds{0,0,320,240}, previous{0,0,320,240};
+    Bounds bounds{0,0,640,240}, previous{0,0,640,240};
     uint64_t tested=0;
     bool source_valid=true, previous_valid=true, force_black=false;
     bool transitions[5][5]{};
@@ -118,20 +118,19 @@ struct Test {
             px=(int64_t(previous.x+(mode==1?0:half(previous.w-cw))+x)*4096)+2048;
             py=(int64_t(previous.y+half(previous.h-ch)+y)*4096)+2048;
         } else {
-            int64_t sx=(int64_t(previous.w)<<12)/400;
-            int64_t sy=(int64_t(previous.h)<<12)/(dock?300:360);
-            int64_t stretch_x=sx, stretch_y=(int64_t(previous.h)<<12)/360;
-            int64_t cover_x=std::min(sx,sy);
-            int64_t cover_y=dock && sx<sy ? (int64_t(previous.w)<<12)/480 : (dock?stretch_y:cover_x);
-            bool use_x=mode==2 ? sx>sy : sx<sy;
-            if(mode==2) sx=sy=std::max(sx,sy);
-            if(mode==3) sx=sy=std::min(sx,sy);
-            if(dock)sy=mode!=1 && use_x ? (int64_t(previous.w)<<12)/480 : (int64_t(previous.h)<<12)/360;
+            int64_t stretch_x=(int64_t(previous.w)<<12)/400;
+            int64_t stretch_y=(int64_t(previous.h)<<12)/360;
+            // VI-X samples have half the physical width of a line's height.
+            int64_t scale_y=((int64_t(previous.h)<<12)/(dock?300:360))*2;
+            bool from_x=mode==2 ? stretch_x>scale_y : stretch_x<scale_y;
+            int64_t ux=from_x?stretch_x:scale_y;
+            int64_t uy=from_x ? (int64_t(previous.w)<<12)/(dock?960:800) : stretch_y;
+            int64_t sx=mode==1?stretch_x:ux, sy=mode==1?stretch_y:uy;
             if(mode==4) {
-                sx=(stretch_x+cover_x)/2;
-                sy=(stretch_y+cover_y)/2;
+                sx=(stretch_x+ux)/2;
+                sy=(stretch_y+uy)/2;
                 check(sx<=stretch_x && sy<=stretch_y,"Hybrid must not add borders");
-                check(sx>=cover_x && sy>=cover_y,"Hybrid crops beyond cover");
+                check(sx>=ux && sy>=uy,"Hybrid crops beyond cover");
             }
             px=(int64_t(previous.x)<<12)+(int64_t(previous.w)<<11)-sx*399/2+sx*x;
             py=(int64_t(previous.y)<<12)+(int64_t(previous.h)<<11)-sy*359/2+sy*y;
@@ -143,8 +142,8 @@ struct Test {
         px=clamp(px,previous.x,previous.x+previous.w-1);
         py=clamp(py,previous.y,previous.y+previous.h-1);
         int ix=px>>12,iy=py>>12,fx=filter?(px>>4)&255:0,fy=filter?(py>>4)&255:0;
-        unsigned c00=colour(input_frame-1,ix,iy),c10=colour(input_frame-1,std::min(ix+1,319),iy);
-        unsigned c01=colour(input_frame-1,ix,std::min(iy+1,239)),c11=colour(input_frame-1,std::min(ix+1,319),std::min(iy+1,239));
+        unsigned c00=colour(input_frame-1,ix,iy),c10=colour(input_frame-1,std::min(ix+1,639),iy);
+        unsigned c01=colour(input_frame-1,ix,std::min(iy+1,239)),c11=colour(input_frame-1,std::min(ix+1,639),std::min(iy+1,239));
         unsigned c=0;
         for(int k=0;k<24;k+=8) c|=mix(mix((c00>>k)&255,(c10>>k)&255,fx),mix((c01>>k)&255,(c11>>k)&255,fx),fy)<<k;
         if(filter)++filtered_pixels; else ++native_pixels;
@@ -169,7 +168,7 @@ struct Test {
             ++pixels;
         }
         if(prev_de && !d.video_de) {
-            check(pixels==(mode?unsigned(widths[active_slot]):320u),"wrong output width"); ++rows; pixels=0;
+            check(pixels==(mode?unsigned(widths[active_slot]):640u),"wrong output width"); ++rows; pixels=0;
             check(d.video_rgb==unsigned(expected_slot<<13),"incorrect EOL slot");
         } else if (!d.video_de) check(d.video_rgb==0,"nonzero blank/frame feature bits");
         check(!d.video_skip || d.video_de,"SKIP outside DE");
@@ -197,10 +196,12 @@ struct Test {
         for(int t=0;t<frame_cycles;++t) {
             d.vs=t<8;
             if(change_window && t==100000) d.source_w=b.w-1;
-            int active_t=t-18000;
-            int iy=active_t/790, ix=(active_t%790)/2;
+            // Stress the shared bounds register with a much shorter blank
+            // interval than upstream scan-out's >18,000 video clocks.
+            int active_t=t-(std::getenv("NATIVE_EARLY_CAPTURE")?2048:18000);
+            int iy=active_t/790, ix=active_t%790;
             bool active=active_t>=0 && iy<240 && (active_t%790)<640;
-            d.de=active && !blank_capture; d.skip=d.de && (active_t&1); d.hs=active_t>=0 && active_t%790==0;
+            d.de=active && !blank_capture; d.skip=0; d.hs=active_t>=0 && active_t%790==0;
             d.rgb=active?colour(f,ix,iy):0;
             // Set the next menu values well before the next frame starts.
             if(t==frame_cycles-20) { d.screen_mode=new_mode; d.docked=new_dock; }
@@ -214,23 +215,31 @@ int main(int argc,char**argv) {
         Test t; t.d.rst_sys=1; t.d.rst_vid=1;
         for(int i=0;i<20;++i)t.tick(false);
         t.d.rst_sys=0;t.d.rst_vid=0;
+        if(std::getenv("NATIVE_EARLY_CAPTURE")) {
+            for(int f=0;f<30;++f)
+                t.run_frame(f,f/6,0,f%6<3?Bounds{0,0,640,240}:Bounds{20,9,597,222},false);
+            std::cout<<"PASS early capture and changing bounds\n";return 0;
+        }
         if(std::getenv("NATIVE_TRANSITION")) {
-            for(int f=0;f<12;++f) t.run_frame(f,f<6?3:0,f<6?0:1,f<6?Bounds{0,0,0,0}:Bounds{0,0,320,240},false);
+            for(int f=0;f<12;++f) t.run_frame(f,f<6?3:0,f<6?0:1,f<6?Bounds{0,0,0,0}:Bounds{0,0,640,240},false);
             std::cout<<"PASS transition\n";return 0;
         }
         if(std::getenv("NATIVE_DROPPED_FRAME")) {
             for(int f=0;f<28;++f)
-                t.run_frame(f,f<14?2:4,0,{0,0,320,240},false,false,f==7 || f==8 || f==21 || f==22);
+                t.run_frame(f,f<14?2:4,0,{0,0,640,240},false,false,f==7 || f==8 || f==21 || f==22);
             std::cout<<"PASS missing capture and recovery\n";return 0;
         }
         // Set settings in advance; each block includes two settling frames.
         std::vector<Bounds> windows;
         for(int cv: {0,8,12}) for(int cr: {0,1}) {
-            windows.push_back({0,cv,320-cr,240-2*cv});
-            windows.push_back({14,13+cv,292-cr,213-2*cv});
+            windows.push_back({0,cv,640-2*cr,240-2*cv});
+            windows.push_back({28,13+cv,584-2*cr,213-2*cv});
         }
-        windows.push_back({60,30,120,180});
-        windows.push_back({32,45,96,16});
+        windows.push_back({120,30,240,180});
+        windows.push_back({64,45,192,16});
+        windows.push_back({20,9,597,222}); // non-integer VI scale/window
+        windows.push_back({1,0,639,240}); // odd native width and centring
+        windows.push_back({639,239,1,1}); // last pixel in both axes
         windows.push_back({0,0,0,0});
         int f=0;
         for(int dock=0;dock<2;++dock) for(auto b:windows) for(int mode=0;mode<5;++mode) {
@@ -241,21 +250,21 @@ int main(int argc,char**argv) {
         // Every directed pair of modes, including Dock -> handheld.
         for(int dock=0;dock<2;++dock) for(int a=0;a<5;++a) for(int b=0;b<5;++b)
             for(int mode: {a,b}) for(int n=0;n<3;++n) {
-                t.run_frame(f,mode,dock,{14,21,291,197},false); ++f;
+                t.run_frame(f,mode,dock,{28,21,582,197},false); ++f;
             }
         for(int a=0;a<5;++a) for(int b=0;b<5;++b)
             check(t.transitions[a][b],"missing mode transition");
         // A window changing within capture invalidates just that source
         // frame, instead of mixing its geometry with the next picture.
-        for(int n=0;n<6;++n) { t.run_frame(f,2,0,{14,21,291,197},false,n==3); ++f; }
+        for(int n=0;n<6;++n) { t.run_frame(f,2,0,{28,21,582,197},false,n==3); ++f; }
 #ifndef REAL_CONTROLLER
         // A memory outage fills the capture FIFO. The incomplete capture
         // must be discarded and the next complete frame must recover.
         t.mem.pause_until=t.mem.cycles+208542*5;
         t.force_black=true;
-        t.run_frame(f++,2,0,{14,21,291,197},false);
+        t.run_frame(f++,2,0,{28,21,582,197},false);
         t.force_black=false; t.source_valid=false;
-        for(int n=0;n<3;++n) { t.run_frame(f++,2,0,{14,21,291,197},false); }
+        for(int n=0;n<3;++n) { t.run_frame(f++,2,0,{28,21,582,197},false); }
 #endif
         check(t.hybrid_pixels>1000000,"insufficient Hybrid coverage");
         check(t.native_pixels>1000000 && t.filtered_pixels>1000000,"insufficient native/filter coverage");

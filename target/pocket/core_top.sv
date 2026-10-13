@@ -1100,7 +1100,7 @@ module core_top (
   wire de;
   wire skip;
   wire [23:0] rgb888;                   // the scan-out's 8:8:8 (rtl/soc/n64_video.sv)
-  wire [8:0] video_x, video_y, video_w, video_h;
+  wire [9:0] video_x, video_y, video_w, video_h;
 
   // Pocket-only setting at bridge 0x10000140 (interact word 16).
   reg [2:0] screen_mode = 0;
@@ -1123,18 +1123,17 @@ module core_top (
   wire ps_dq_oe, ps_adv_n, ps_oe_n, ps_we_n, ps_cre, ps_clk_en;
   wire [1:0] ps_ce_n, ps_wait;
   wire [3:0] ps_bm_n;
-  psram display_ram (
+  pocket_video_psram display_ram (
       .clk(clk_sys), .rst(reset),
       .z_valid(display_valid), .z_ready(display_ready), .z_we(display_we),
       .z_addr(display_addr), .z_wdata(display_wdata), .z_wmask(4'hf), .z_last(display_last),
       .z_rvalid(display_rvalid), .z_rdata(display_rdata), .z_idle(display_idle),
-      .x_valid(1'b0), .x_we(1'b0), .x_addr(22'd0), .x_wdata(32'd0), .x_be(4'd0), .x_ack(), .x_rdata(),
       .cfg(4'b0101), .cfg_wr(1'b0), .ready(display_memory_ready), .wait_err(),
       .o_a(ps_a), .o_dq(ps_dq_o), .o_dq_oe(ps_dq_oe), .o_adv_n(ps_adv_n),
       .o_oe_n(ps_oe_n), .o_we_n(ps_we_n), .o_cre(ps_cre), .o_ce_n(ps_ce_n),
       .o_bm_n(ps_bm_n), .o_clk_en(ps_clk_en), .i_dq(ps_dq_i), .i_wait(ps_wait)
   );
-  psram_phy display_ram_phy (
+  pocket_video_psram_phy display_ram_phy (
       .clk(clk_sys), .clk2x(clk_mem), .o_a(ps_a), .o_dq(ps_dq_o), .o_dq_oe(ps_dq_oe),
       .o_adv_n(ps_adv_n), .o_oe_n(ps_oe_n), .o_we_n(ps_we_n), .o_cre(ps_cre),
       .o_ce_n(ps_ce_n), .o_bm_n(ps_bm_n), .clk_en(ps_clk_en), .i_dq(ps_dq_i), .i_wait(ps_wait),

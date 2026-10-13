@@ -5,7 +5,7 @@ module pocket_video_test (
     input wire clk_vid, rst_vid, clk_sys, rst_sys,
     input wire [2:0] screen_mode,
     input wire docked,
-    input wire [8:0] source_x, source_y, source_w, source_h,
+    input wire [9:0] source_x, source_y, source_w, source_h,
     input wire [23:0] rgb,
     input wire de, hs, vs, skip,
     output wire [23:0] video_rgb,
@@ -18,12 +18,10 @@ module pocket_video_test (
 );
     wire [31:0] read_data;
     pocket_video display (.*,.m_rdata(read_data));
-    psram ram (
+    pocket_video_psram ram (
         .clk(clk_sys), .rst(rst_sys), .z_valid(m_valid), .z_ready(m_ready),
         .z_we(m_we), .z_addr(m_addr), .z_wdata(m_wdata), .z_wmask(4'hf),
-        .z_last(m_last), .z_rvalid(m_rvalid), .z_rdata(read_data), .z_idle(m_idle),
-        .x_valid(1'b0), .x_we(1'b0), .x_addr(22'd0), .x_wdata(32'd0), .x_be(4'd0),
-        .x_ack(), .x_rdata(), .cfg(4'b0101), .cfg_wr(1'b0), .ready(memory_ready),
+        .z_last(m_last), .z_rvalid(m_rvalid), .z_rdata(read_data), .z_idle(m_idle), .cfg(4'b0101), .cfg_wr(1'b0), .ready(memory_ready),
         .wait_err(), .o_a(), .o_dq(), .o_dq_oe(), .o_adv_n(), .o_oe_n(),
         .o_we_n(), .o_cre(), .o_ce_n(), .o_bm_n(), .o_clk_en(),
         .i_dq(m_rdata), .i_wait(2'b00)
