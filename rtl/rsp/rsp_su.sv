@@ -42,11 +42,16 @@ module rsp_su (
     // the coprocessors
     output logic        c_valid,
     output logic [31:0] c_ins,
-    output logic        c_mm,         // c_ins is MFC2 or MTC2 (decoded a cycle ahead: the vector unit reads a register address by it)
     output logic [31:0] c_a,            // rs
     output logic [31:0] c_b,            // rt
     input  wire         c_done,
     input  wire  [31:0] c_res,          // MFC0, MFC2, CFC2
+    // the vector registers' read addresses (their memories register them): of the instruction E holds in the cycle
+    // to come, its rd field (vs), and the register it reads otherwise -- rd for MFC2 / MTC2, rt for the rest (vt);
+    // c_rb is that of the one in E now
+    output logic [4:0]  c_ra_n,
+    output logic [4:0]  c_rb_n,
+    output logic [4:0]  c_rb,
 
     // (simulation) each instruction as it leaves E, and each register write
     output logic        tr_e,
@@ -142,7 +147,7 @@ endfunction
 
 logic [11:0] pc_f;
 logic        d_valid;  logic [11:0] d_pc;
-logic        e_valid;  logic [11:0] e_pc;  logic [31:0] e_ins;  ctl_t e_c;  logic e_mm;
+logic        e_valid;  logic [11:0] e_pc;  logic [31:0] e_ins;  ctl_t e_c;
 logic        m_valid_r; logic [31:0] m_res; ctl_t m_c;
 logic        m_we_r;
 logic        w_we;     logic [4:0] w_wr;   logic [31:0] w_res;
@@ -243,9 +248,13 @@ assign m_wdata = e_c.size == 2'd0 ? {eb[7:0], 24'h0} : e_c.size == 2'd1 ? {eb[15
 // the coprocessors
 assign c_valid = e_valid && e_c.cop && !hazard;
 assign c_ins = e_ins;
-assign c_mm  = e_mm;
 assign c_a = ea;
 assign c_b = eb;
+function automatic logic [4:0] vrb(input logic [31:0] i);      // MFC2, MTC2 (COP2, rs 0 or 4): rd
+    return (i[31:26] == 6'h12 && i[25:24] == 2'b00 && i[22:21] == 2'b00) ? i[15:11] : i[20:16];
+endfunction
+assign c_ra_n = stall_e ? e_ins[15:11] : ins_d[15:11];
+assign c_rb_n = stall_e ? c_rb : vrb(ins_d);
 
 wire [31:0] e_res = e_c.link ? {20'h0, e_pc + 12'd8} : e_c.cop ? c_res : alu;
 assign stall_e = e_valid && (hazard || (e_c.cop && !c_done) || (m_stall && (e_c.load || e_c.store)));
@@ -281,8 +290,8 @@ always_ff @(posedge clk) begin
         if (!stall_e) begin
             e_valid <= d_valid && (run || redirect) && !brk;   // (a taken branch's delay slot always runs)
             e_pc <= d_pc; e_ins <= ins_d; e_c <= decode(ins_d);
-            e_mm <= ins_d[31:26] == 6'h12 && !ins_d[25] && (ins_d[24:21] == 4'd0 || ins_d[24:21] == 4'd4);      // MFC2, MTC2
         end
+        if (!stall_e) c_rb <= vrb(ins_d);
         if (pc_load) begin
             pc_f <= {pc_in[11:2], 2'b00}; d_valid <= 1'b0;
         end else if (brk) begin

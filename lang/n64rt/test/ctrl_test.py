@@ -84,7 +84,7 @@ def main():
 
     # the cartridge table: every ID is a cartridge of the save-type database
     root = os.path.join(HERE, '..', '..', '..')
-    db = open(os.path.join(root, 'pkg', 'pocket', 'Assets', 'mirlo', 'common', 'n64savedb.txt')).read()
+    db = open(os.path.join(root, 'pkg', 'pocket', 'Assets', 'n64', 'common', 'n64savedb.txt')).read()
     known = {m.group(1) for m in re.finditer(r'^([A-Z0-9]{3})[A-Z0-9?]\s', db, re.M)}
     src = open(os.path.join(HERE, '..', 'n64rt_ctrl.h')).read()
     ids = re.findall(r'N64RT_CG\("([A-Z0-9]{3})", N64RT_FAM_(\w+)\)', src)
