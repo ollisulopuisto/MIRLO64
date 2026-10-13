@@ -15,7 +15,6 @@
  *          [19:15]  n=5  "Crop Right" (the video; a list: 0 none, 1 pixel)
  *          [24:20]  n=6  "Stick dead zone" (n64rt_pad_deadzone)
  *          [29:25]  n=7  "Stick range" (n64rt_pad_range)
- *   word 1 [4:0]    n=8  "D-pad ramp" (n64rt_pad_ramp_step)
  *          [14:10]  n=10 "C buttons": 0 none, 1 also the right stick (as C buttons)
  *          [19:15]  n=11 "Stick": 0 the D-pad (full deflection), 1 the left analog stick, 2 the right analog stick; any other
  *                        value is the D-pad
@@ -120,21 +119,6 @@ static inline int8_t n64rt_pad_axis(uint32_t v, int flip, int dz, int rng)
     a = a * rng / 127;
     return (int8_t)(a > rng ? rng : a < -rng ? -rng : a);
 }
-/* "D-pad ramp" (interact1 [4:0]): the most a digital stick moves between two polls of the pad: 0 off, 1 40, 2 20, 3 10; any other off.
- * A stick that grows is slewed, one that shrinks, reverses or is released goes where it is going at once. */
-static inline int n64rt_pad_ramp_step(uint32_t set1)
-{
-    static const uint8_t st[4] = { 0, 40, 20, 10 };
-    const uint32_t c = set1 & 31u;
-    return c < 4u ? st[c] : 0;
-}
-static inline int8_t n64rt_pad_ramp(int8_t cur, int8_t target, int step)
-{
-    const int c = cur, t = target;
-    if (step <= 0 || t == 0 || c * t < 0 || (t < 0 ? -t : t) <= (c < 0 ? -c : c)) return target;
-    const int d = (t < 0 ? -t : t) - (c < 0 ? -c : c);
-    return (int8_t)(c + (t < 0 ? -1 : 1) * (d < step ? d : step));
-}
 /* the Pocket key a button setting names (0: no key) */
 static inline uint32_t n64rt_pad_key(uint32_t code, uint32_t dflt)
 {
@@ -188,13 +172,10 @@ static inline uint32_t n64rt_pad_gsel(const uint32_t *map, unsigned g, int held,
     }
     return sel == 7u ? 6u : sel > 4u ? 5u : sel;
 }
-/* k: the key word, j: the four stick bytes, set0 / set1: the two interact words, map: the five remap words (the runtime's table);
- * *digital: the stick came from keys only (n64rt_pad_ramp may slew it) */
-static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t set1, const uint32_t *map, uint16_t *button, int8_t *stick_x, int8_t *stick_y,
-                                 int *digital)
+/* k: the key word, j: the four stick bytes, set0 / set1: the two interact words, map: the five remap words (the runtime's table) */
+static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t set1, const uint32_t *map, uint16_t *button, int8_t *stick_x, int8_t *stick_y)
 {
     const int dz = n64rt_pad_deadzone(set0), rng = n64rt_pad_range(set0);
-    int adig = 0;                                                  /* an analog stick gave part of the stick */
     const uint32_t type = KEY_TYPE(k);
     /* stick bytes to believe: a type 3 pad's always, a type 2 pad's unless they are what a pad with none would send */
     const int analog = type == 3u || (type == 2u && j != 0u && j != 0xFFFFFFFFu);
@@ -253,7 +234,6 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
             case 1: case 2: {
                 const int dv = sel == 2u ? 2 : 1;
                 const int ax = n64rt_pad_axis(j >> sh, 0, dz, rng) / dv, ay = n64rt_pad_axis(j >> (sh + 8), 1, dz, rng) / dv;
-                if (ax || ay) adig = 1;
                 tx += ax; ty += ay;
                 break;
             }
@@ -295,7 +275,6 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
             x = n64rt_pad_axis(j >> sh, 0, dz, rng); y = n64rt_pad_axis(j >> (sh + 8), 1, dz, rng);
         }
         sx = x; sy = y;
-        if (sx || sy) adig = 1;
         if (type != 3u && sx == 0 && sy == 0) from_dpad = 1;       /* (a pad without a deflected stick, or none: the D-pad) */
     }
     if (from_dpad && !(dpad_swap && lmod)) {
@@ -323,6 +302,5 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
     *button = b;
     *stick_x = (int8_t)(ox > rng ? rng : ox < -rng ? -rng : ox);
     *stick_y = (int8_t)(oy > rng ? rng : oy < -rng ? -rng : oy);
-    *digital = !adig;
 }
 #endif

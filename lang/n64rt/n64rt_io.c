@@ -582,15 +582,7 @@ static void read_pad(OSContPad *p, int index)
     u32 map[5];
     const n64rt_ctrl_pick_t pk = ctrl_picks();
     n64rt_ctrl_effective(&s_ctrl, &pk, &s0, &s1, map);
-    int digital;
-    n64rt_pad_map(k, j, s0, s1, map, &p->button, &p->stick_x, &p->stick_y, &digital);
-    {                                           /* "D-pad ramp": a stick made of keys grows by steps (this pad's own state, a step per poll); */
-        const int step = digital ? n64rt_pad_ramp_step(s1) : 0;     /* ... a stick of an analog stick's is passed as it is, and the ramp forgets */
-        static int8_t rx[4], ry[4];
-        const int i = index & 3;
-        p->stick_x = rx[i] = n64rt_pad_ramp(rx[i], p->stick_x, step);
-        p->stick_y = ry[i] = n64rt_pad_ramp(ry[i], p->stick_y, step);
-    }
+    n64rt_pad_map(k, j, s0, s1, map, &p->button, &p->stick_x, &p->stick_y);
     p->errnum = 0;
 #ifdef N64RT_PADLOG
     /* (make PADLOG=1) what the dock sends and what the game gets, on the JTAG UART whenever a pad's words change, at most every 20 reads

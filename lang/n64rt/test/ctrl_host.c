@@ -39,8 +39,6 @@ int main(int argc, char **argv)
             } else if (!strcmp(cmd, "save")) { n64rt_ctrl_capture(&st, &pk, m0, m1, &st.saved); st.saved_ok = 1; }
             else if (!strcmp(cmd, "forget")) st.saved_ok = 0;
         }
-    } else if (argc == 5 && !strcmp(argv[1], "ramp")) {            /* ramp cur target step -> the next stick value */
-        printf("%d\n", n64rt_pad_ramp((int8_t)atoi(argv[2]), (int8_t)atoi(argv[3]), atoi(argv[4])));
     } else if (argc == 3 && !strcmp(argv[1], "family")) {
         printf("%d\n", n64rt_ctrl_family((const unsigned char *)argv[2]));
     } else if (argc >= 9 && !strcmp(argv[1], "record")) {

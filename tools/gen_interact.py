@@ -49,7 +49,6 @@ def build():
                                                  (3, "L D-pad / R C buttons"), (4, "L C buttons / R stick"), (5, "Both none")]),
  lst("Stick dead zone", 273, "0x10000118", [(0, "Default (12)"), (1, "None"), (2, "Small (6)"), (3, "Large (20)"), (4, "Huge (30)")]),
  lst("Stick range", 274, "0x1000011C", [(0, "Default (80)"), (1, "Wide (85)"), (2, "75"), (3, "70"), (4, "Small (60)")]),
- lst("D-pad ramp", 275, "0x10000120", [(0, "Off"), (1, "Fast"), (2, "Medium"), (3, "Slow")]),
  action("Save for this game", 271, 2),
  action("Forget this game", 272, 3),
   ]

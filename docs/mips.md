@@ -697,7 +697,6 @@ scan-out instead.
 | Analog sticks (dock) | `0x1000_0150` | `interact2[24:20]` | **L stick / R C buttons** (1), L stick / R none (0), L half / R C buttons (2), L D-pad / R C buttons (3), L C buttons / R stick (4), Both none (5) |
 | Stick dead zone | `0x1000_0118` | `interact0[24:20]` | **Default (12)** (0), None (1), Small (6) (2), Large (20) (3), Huge (30) (4) |
 | Stick range | `0x1000_011C` | `interact0[29:25]` | **Default (80)** (0), Wide (85) (1), 75 (2), 70 (3), Small (60) (4) |
-| D-pad ramp | `0x1000_0120` | `interact1[4:0]` | **Off** (0), Fast (1), Medium (2), Slow (3) |
 | Save for this game, Forget this game | `0x1000_0154` | `interact2[29]`, `[28]` | actions: a write of 2 saves, of 3 forgets |
 
 The four layout lists are not persistent (the Pocket starts them on Auto), so Save for this game is how a layout is kept. The
@@ -718,11 +717,9 @@ earlier builds are gone from the menu (the Pocket shows 16 entries at most); the
   (dock) changes that); the D-pad keys and the left stick add, clamped to the range. The analog sticks are believed for a pad the
   dock calls type 3 (with analog), and for type 2 ("without analog") unless the four bytes are all 0x00 or all 0xFF. A type 1
   pad (the Pocket's own controls) has none.
-- **The stick's feel** (`n64rt_pad_axis`, `n64rt_pad_ramp`; no RTL). Stick dead zone drops what is closer to the centre than that
+- **The stick's feel** (`n64rt_pad_axis`; no RTL). Stick dead zone drops what is closer to the centre than that
   many of 127; Stick range scales the rest to 0..range (a digital stick is the range, half of it, 0.35 of it on a diagonal, for
-  the half stick). D-pad ramp, applied to a stick the mapping reports as digital, lets a stick that grows move by at most the
-  step per poll toward its target (40, 20 or 10 of the 80: 2, 4 or 8 polls from rest to full); one that shrinks, reverses or is
-  released goes at once. It is per pad and per poll. All three are part of a game's saved layout; a family leaves them alone.
+  the half stick). Both are part of a game's saved layout; a family leaves them alone.
 
 `lang/mips/test/padtest.c` is a program that shows on the screen, for the four pads, the key word, the stick bytes and
 the N64 controller they make with the current settings. It is installed in the runtime's place
