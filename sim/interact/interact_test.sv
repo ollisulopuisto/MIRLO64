@@ -17,10 +17,9 @@ module interact_test;
     wire  [31:0] ia_q;
     wire  [4:0]  ia_crop_v;
     wire  [1:0]  ia_crop_r;
-    wire         ia_fps_en;
     wire  [3:0][31:0] cont0 = '0;             // the four pads: nothing pressed
     mirlo_regs regs (.clk, .rst, .r_req, .r_we, .r_addr, .r_wdata, .r_rdata,
-        .ia_address, .ia_data, .ia_wr, .ia_q, .ia_crop_v, .ia_crop_r, .ia_fps_en,
+        .ia_address, .ia_data, .ia_wr, .ia_q, .ia_crop_v, .ia_crop_r,
         .aud_fill(12'd0), .br_file_size(32'd0), .br_complete_trigger(1'b0), .br_current_address(32'd0), .br_command_result_code(3'd0),
         .br_host_reset_n(1'b1), .br_host_loaded(1'b1), .cont_key(cont0), .cont_joy(cont0), .cont_trig(cont0),
         .vblank(1'b0), .tv_pal(1'b0), .bus_errors(16'd0), .su_valid(1'b0), .su_data(32'd0), .cmd_ready(1'b1),
@@ -105,11 +104,9 @@ module interact_test;
         // the Pocket reads the editor's fields back (16-20), as it reads 2-15; the actions (21) and the rest read 0
         for (int w = 16; w < 64; w++) begin ia_read(6'(w), q); check($sformatf("ia_q of word %0d", w), q, (w < 21) ? 32'(model[w - 16]) : 32'd0); end
 
-        // the legacy fields still work as before: Crop Vertical (3), Crop Right (5), Show FPS (15), and their readback
+        // the legacy fields still work as before: Crop Vertical (3), Crop Right (5), and their readback
         ia_write(3, 8);  check("crop_v", 32'(ia_crop_v), 8);
         ia_write(5, 1);  check("crop_r", 32'(ia_crop_r), 1);
-        ia_write(15, 1); check("fps_en", 32'(ia_fps_en), 1);
-        ia_write(15, 0); check("fps_en off", 32'(ia_fps_en), 0);
         ia_read(3, q);  check("ia_q of field 3", q, 8);
         ia_write(4, 6);                                           // Modifier = Select
         csr_read(R_APF_INTERACT_INTERACT0, q); check("INTERACT0 fields", q, 32'd6 << 10 | 32'd8 << 5 | 32'd1 << 15 | 32'd0 << 15);

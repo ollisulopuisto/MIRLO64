@@ -14,7 +14,7 @@ env:
   QUARTUS_CACHE_KEY: quartus-lite-25.1std.0.1129-cyclonev-v2
   # Seeds to try, one runner each. v0.1's README says 12, 27, 5 closed timing for the
   # unpatched design; docs/mips.md lists 20, 3, 41 as closing in earlier fits (34 and 9 fail).
-  # The FPS patch changes RTL, so closure per seed may differ: more seeds are tried.
+  # The upstream merge changes RTL, so closure per seed may differ: more seeds are tried.
 
 jobs:
   software:

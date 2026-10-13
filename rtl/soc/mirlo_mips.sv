@@ -22,7 +22,6 @@
 `default_nettype none
 
 `include "mirlo_mips_init.svh"
-// The Pocket's PSRAMs are not used by this SoC (rtl/soc/psram.sv is not instantiated).
 
 module mirlo_mips #(
     parameter BOOTROM = `MIPS_INIT_BOOTROM,
@@ -67,7 +66,7 @@ module mirlo_mips #(
     input  wire   [31:0] apf_input_cont4_joy,
     input  wire   [31:0] apf_input_cont4_key,
     input  wire   [31:0] apf_input_cont4_trig,
-    input  wire    [5:0] apf_interact_address,
+    input  wire    [3:0] apf_interact_address,
     input  wire   [31:0] apf_interact_data,
     output logic  [31:0] apf_interact_q,
     input  wire          apf_interact_wr,
@@ -228,7 +227,7 @@ wire x_rsp   = x_addr[31:8] == 24'h2000_00;
 wire x_audio = 1'b0;
 wire x_tcm   = 1'b0;
 wire x_grom  = 1'b0;
-typedef enum logic [4:0] { X_IDLE, X_REGS, X_REGD, X_AUDIO, X_TCM, X_TCMD, X_ACK, X_RSP, X_PSX, X_PSZ, X_PSZR, X_MON, X_MOND, X_MIW1, X_MIW2, X_VIR, X_VIW, X_PIF, X_PIFR, X_CART } xst_t;
+typedef enum logic [4:0] { X_IDLE, X_REGS, X_REGD, X_AUDIO, X_TCM, X_TCMD, X_ACK, X_RSP, X_MON, X_MOND, X_MIW1, X_MIW2, X_VIR, X_VIW, X_PIF, X_PIFR, X_CART } xst_t;
 // the monitor level's memory (MIRLO_MON: mon_ram.sv): 2 KiB at 0xFFFF_8000
 wire x_mon = x_addr[31:11] == 21'h1FFFF0;
 logic [31:0] mon_rd;
@@ -262,9 +261,9 @@ logic        mi_line, mon_mi;
 logic        vi_line, vi_latch, vi_irq, vi_chg, vi_clr, vi_blk, vi_gm, mon_vi;
 logic        vi_aa, vi_dv, vi_dd;
 wire  [4:0]  vid_crop_v;           // the core's video options (interact.json): crop lines at the top and bottom,
-wire         vid_fps_en;
 wire  [1:0]  vid_crop_r;           // and pixels at the right (n64_video.sv)
 logic [25:0] vi_base;
+logic        vi_il;
 logic [31:0] vi_rd, ai_rd;
 logic        mon_ai, ai_clr, ai_chg, ai_req;
 logic        ai_irq /*verilator public_flat_rd*/, ai_fw /*verilator public_flat_rd*/, ai_step_we /*verilator public_flat_rd*/, ai_ack /*verilator public_flat_rd*/;   // (the bench's AILOG)
@@ -285,15 +284,6 @@ logic        d_req, d_we, d_ack;
 logic [23:0] d_adr;
 logic [3:0]  d_sel;
 logic [31:0] d_wdata;
-// the PSRAMs: 0x50 a ROM's end, 0x51 state and settings, 0x52 the depth memory
-wire x_ps    = 1'b0;
-localparam bit PS_Z = 1'b0;
-localparam bit PS_ZRDP = 1'b0;
-wire           rz_cdraw = 1'b0;
-localparam bit PS_ROM64 = 1'b0;
-logic        ps_cx_ack, ps_zt_ready, ps_zt_rvalid, ps_ready, ps_wait_err;
-logic [31:0] ps_x_rdata, ps_z_rdata;
-logic [3:0]  ps_cfg;
 mon_ram monram (.clk, .we(xs == X_MON && x_we), .a(x_addr[10:2]), .wd(x_wdata), .be(x_strb), .rd(mon_rd));
 wire geom_load = xs == X_IDLE && x_req && !x_ack && x_grom && x_we && x_strb == 4'hF;
 logic        xr_go;                                  // the CPU's register access, this cycle
@@ -311,7 +301,7 @@ logic        rsp_h_ready;
 wire         rsp_x_go = xs == X_RSP && (!rx_we || rsp_h_ready);
 always_ff @(posedge clk) begin
     x_ack <= 0;
-    if (rst) begin xs <= X_IDLE; bus_errors <= 0; ps_cfg <= 4'b0101; end
+    if (rst) begin xs <= X_IDLE; bus_errors <= 0; end
     else case (xs)
     X_IDLE: if (x_req && !x_ack) begin
         if (x_regs) xs <= X_REGS;
@@ -326,15 +316,6 @@ always_ff @(posedge clk) begin
         else if (x_d2 || x_rom) begin if (x_we && (x_rom || d2_flash)) begin x_rdata <= 0; x_ack <= 1; end else xs <= X_CART; end
         else if (x_grom) begin x_rdata <= 0; x_ack <= 1; end
         else if (x_rsp) begin rx_wdata <= x_wdata; rx_addr <= x_addr[6:2]; rx_we <= x_we; xs <= X_RSP; end
-        else if (x_ps) begin
-            if (x_addr[25:24] == 2'd0) xs <= X_PSX;
-            else if (x_addr[25:24] == 2'd2) xs <= X_PSZ;
-            else begin
-                if (x_we) ps_cfg <= x_wdata[3:0];
-                x_rdata <= {16'h5052, 6'd0, rz_cdraw, PS_ZRDP, PS_ROM64, PS_Z, ps_wait_err, ps_ready, ps_cfg};
-                x_ack <= 1;
-            end
-        end
         else begin x_rdata <= 0; x_ack <= 1; if (bus_errors != 16'hFFFF) bus_errors <= bus_errors + 16'd1; end
     end
     X_REGS: if (!bus_r_req) xs <= X_REGD;            // (the geom and audio cores' accesses go first)
@@ -353,9 +334,6 @@ always_ff @(posedge clk) begin
     X_TCM:  xs <= X_TCMD;
     X_TCMD: begin x_rdata <= t_dat_r; x_ack <= 1; xs <= X_IDLE; end
     X_RSP:  if (rsp_x_go) begin x_rdata <= rsp_x_rdata; x_ack <= 1; xs <= X_IDLE; end
-    X_PSX:  if (ps_cx_ack) begin x_rdata <= ps_x_rdata; x_ack <= 1; xs <= X_IDLE; end
-    X_PSZ:  if (ps_zt_ready) begin if (x_we) begin x_rdata <= 0; x_ack <= 1; xs <= X_IDLE; end else xs <= X_PSZR; end
-    X_PSZR: if (ps_zt_rvalid) begin x_rdata <= ps_z_rdata; x_ack <= 1; xs <= X_IDLE; end
     default: xs <= X_IDLE;
     endcase
 end
@@ -375,8 +353,10 @@ logic        r_uart_we, uart_rx_pop, uart_rxempty, uart_txfull;
 logic [7:0]  r_uart_byte, uart_rx_byte;
 logic [31:0] fb_base_csr, dbg_geom_msg;
 logic [11:0] fb_width;
-logic [5:0]  fb_x0, fb_y0;
+logic [7:0]  fb_y0;
 logic [8:0]  fb_rows;
+logic [9:0]  fb_px0, fb_pw;
+logic [10:0] fb_xs, fb_ys, fb_nw;
 logic        fb_gamma, fb_tall, fb_pal, tv_pal, vi_pal_rq;
 logic        fb_dma_enable, fb_vtg_enable, fb_mode, vblank;
 logic        gbc_on, gbc_trust, gbc_start, gbc_we, gbc_busy;
@@ -399,8 +379,8 @@ mirlo_regs regs (.clk, .rst,
     .cont_joy('{apf_input_cont4_joy, apf_input_cont3_joy, apf_input_cont2_joy, apf_input_cont1_joy}),
     .cont_trig('{apf_input_cont4_trig, apf_input_cont3_trig, apf_input_cont2_trig, apf_input_cont1_trig}),
     .ia_address(apf_interact_address), .ia_data(apf_interact_data), .ia_wr(apf_interact_wr), .ia_q(apf_interact_q),
-    .ia_crop_v(vid_crop_v), .ia_crop_r(vid_crop_r), .ia_fps_en(vid_fps_en),
-    .vblank, .fb_base(fb_base_csr), .fb_width, .fb_x0, .fb_y0, .fb_rows, .fb_tall, .fb_gamma, .fb_pal, .tv_pal, .fb_dma_enable, .fb_vtg_enable, .fb_mode,
+    .ia_crop_v(vid_crop_v), .ia_crop_r(vid_crop_r),
+    .vblank, .fb_base(fb_base_csr), .fb_width, .fb_y0, .fb_rows, .fb_px0, .fb_pw, .fb_xs, .fb_ys, .fb_nw, .fb_tall, .fb_gamma, .fb_pal, .tv_pal, .fb_dma_enable, .fb_vtg_enable, .fb_mode,
     .bus_errors, .geom_irq, .game_irq, .geom_run, .dbg_geom_msg,
     .su_valid, .su_ready, .su_data, .cmd_valid, .cmd_ready, .cmd_data,
     .mrdp_sync_count(mrdp_sync), .mrdp_load_count(mrdp_load), .mrdp_unknown_ops(mrdp_unknown), .mrdp_idle,
@@ -540,7 +520,7 @@ assign p_urgent[2] = 0;
 // docs/mips.md has them ("The memory of an N64 game"). A write:
 //   below 49 MiB        to the SDRAM, at that address: the program and the
 //                       ROM's first 48 MiB
-//   49 MiB to 65 MiB    dropped (no PSRAM second die: a 64 MiB ROM's last 16)
+//   49 MiB to 65 MiB    dropped (what a ROM has past its first 48 MiB)
 //   anything else       to the SDRAM, at the address's low 26 bits
 // A read is always the SDRAM's, at the address's low 26 bits: the Pocket
 // reads back the nonvolatile slots, and nothing of a ROM.
@@ -553,11 +533,11 @@ assign p_urgent[2] = 0;
 // starts, and the save slots of a data.json older than this map (they were
 // at the RDRAM's top) are read back as they were loaded -- with any game that
 // leaves that memory alone.
-logic        pa_ack, pa_done, br_ps_ack, br_ps_ackd, ps_br_done;
+logic        pa_ack, pa_done, br_ps_ack, br_ps_ackd;
 wire  [6:0]  br_mib    = wishbone_master_adr[24:18];
 wire         br_ps     = br_mib[6:4] == 3'd3 ? br_mib[3:0] != 4'd0 : br_mib == 7'h40;      // 0x31 to 0x40
 wire         br_rd     = br_mib[6:3] == 4'b0111;                                           // 0x38 to 0x3F
-wire         br_x      = br_ps && wishbone_master_we;                                      // the PSRAM's, or dropped: it ends the access
+wire         br_x      = br_ps && wishbone_master_we;                                      // dropped: it ends the access
 wire         br_ps_req = wishbone_master_cyc && wishbone_master_stb && br_x && (!br_rd || pa_done) &&
                          !br_ps_ack && !br_ps_ackd;                                        // (the master drops its request after the ack)
 // MIRLO_PI: the PI's engine (rcp_mi.sv) is a second master of this port, while the bridge is idle (pa_dma: its access)
@@ -591,7 +571,7 @@ port_apf pa (.clk, .rst, .cyc(pa_dma ? pd_req : wishbone_master_cyc && (!br_x ||
     .p_valid(p_valid[4]), .p_we(p_we[4]), .p_addr(p_addr[4]), .p_wdata(p_wdata[4]), .p_be(p_be[4]),
     .p_ready(p_ready[4]), .p_rvalid(p_rvalid[4]), .p_rdata);
 always_ff @(posedge clk) begin
-    br_ps_ack  <= PS_ROM64 ? ps_br_done : br_ps_req;
+    br_ps_ack  <= br_ps_req;
     br_ps_ackd <= br_ps_ack;
     if (!wishbone_master_cyc) pa_done <= 1'b0;          // (a write to both: the SDRAM has it)
     else if (pa_ack && !pa_dma && br_x) pa_done <= 1'b1;
@@ -601,16 +581,11 @@ assign wishbone_master_dat_r = pa_dat_r;
 assign wishbone_master_err = 1'b0;
 assign p_urgent[4] = 0;
 
-// ---------------------------------------------------------------- the PSRAMs
-assign ps_br_done = 1'b0;
-assign ps_cx_ack = 1'b0; assign ps_zt_ready = 1'b0; assign ps_zt_rvalid = 1'b0; assign ps_ready = 1'b0; assign ps_wait_err = 1'b0;
-assign ps_x_rdata = '0; assign ps_z_rdata = '0;
-
 // ---------------------------------------------------------------- the VI (MIRLO_VI: rcp_vi.sv)
 // With MONITOR.CTL's VI bit the scan-out's base, gamma and black are the VI registers'; else the CSRs'
 rcp_vi vi (.clk, .rst, .sc_line(vi_line), .sc_latch(vi_latch), .tv_pal, .tv_def(fb_pal), .vi_pal(vi_pal_rq), .thr(vi_thr),
     .a(x_addr[5:2]), .wd(x_wdata), .wr_s(xs == X_VIW), .rd(vi_rd), .vi_clr,
-    .irq(vi_irq), .chg(vi_chg), .base(vi_base), .black(vi_blk), .gamma(vi_gm), .aa(vi_aa), .divot(vi_dv), .dedither(vi_dd));
+    .irq(vi_irq), .chg(vi_chg), .base(vi_base), .il(vi_il), .black(vi_blk), .gamma(vi_gm), .aa(vi_aa), .divot(vi_dv), .dedither(vi_dd));
 // ---------------------------------------------------------------- the AI (MIRLO_AI: rcp_ai.sv)
 // The Pocket's audio FIFO has two writers: the CSR's (the runtime's software AI, a program's) and the AI's
 rcp_ai ai (.clk, .rst, .a(x_addr[4:2]), .wd(x_wdata), .wr_s(ai_op && x_we), .rd(ai_rd), .clr(ai_clr), .irq(ai_irq), .chg(ai_chg),
@@ -631,8 +606,8 @@ wire        vi_gam  = mon_vi ? vi_gm : fb_gamma;
 // ---------------------------------------------------------------- the scan-out
 localparam bit VIDEO_N64FB = 1'b1;  // the framebuffer is the game's: RGBA5551, the left pixel in the high half
 n64_video #(.ORIGIN_MASK(24'hFFFFFF), .N64FB(VIDEO_N64FB)) video (.clk, .rst, .clk_vid, .rst_vid,
-    .enable(fb_en), .vi_origin(fb_base[25:0]), .vblank,
-    .vi_width(fb_width), .vi_tall(fb_tall), .vi_black(1'b0), .vi_pal(mon_vi ? vi_pal_rq : fb_pal), .tv_pal, .gamma(vi_gam), .vi_aa(mon_vi && vi_aa), .vi_divot(mon_vi && vi_dv), .vi_dedither(mon_vi && vi_dd), .crop_v(vid_crop_v), .crop_r(vid_crop_r), .vi_lines(9'd240), .vi_x0(fb_x0), .vi_y0(fb_y0), .vi_rows(fb_rows), .osd_en(1'b0), .fps_en(vid_fps_en), .osd_val('0),
+    .enable(fb_en), .vi_origin(fb_base[25:0]), .vi_avg(mon_vi && vi_il), .vblank,
+    .vi_width(fb_width), .vi_black(1'b0), .vi_pal(mon_vi ? vi_pal_rq : fb_pal), .tv_pal, .gamma(vi_gam), .vi_aa(mon_vi && vi_aa), .vi_divot(mon_vi && vi_dv), .vi_dedither(mon_vi && vi_dd), .crop_v(vid_crop_v), .crop_r(vid_crop_r), .vi_lines(9'd240), .vi_px0(fb_px0), .vi_pw(fb_pw), .vi_y0(fb_y0), .vi_rows(fb_rows), .vi_xs(fb_xs), .vi_ys(fb_ys), .vi_nw(fb_nw), .osd_en(1'b0), .fps_en(1'b0), .osd_val('0),
     .m_valid(p_valid[0]), .m_addr(p_addr[0]), .m_urgent(p_urgent[0]), .m_ready(p_ready[0]),
     .m_rvalid(p_rvalid[0]), .m_rdata(p_rdata),
     .vi_line(vi_line), .vi_frame(mon_field), .vi_latch,

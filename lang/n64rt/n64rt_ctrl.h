@@ -4,7 +4,7 @@
  * host (test/ctrl_test.py).
  *
  * A layout is: the Shift key (set0 [14:10]), the stick's dead zone and range (set0 [29:20]), the D-pad ramp (set1 [4:0]) and the table's
- * 30 fields (map[5]). Every other setting (crops, pak, Show FPS) stays the menu's. A family sets the Shift key and the table, not the stick's
+ * 30 fields (map[5]). Every other setting (crops, pak) stays the menu's. A family sets the Shift key and the table, not the stick's
  * feel (dead zone, range, ramp): those are the player's; a game's saved layout has all of them.
  *
  * The menu has four layout lists (INTERACT2 [4:0] .. [19:15]): Normal (the face keys, shoulders and Select), Shift (the face keys and

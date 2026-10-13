@@ -10,9 +10,9 @@ It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and 
 
 * **CPU**: a MIPS of the VR4300 class at 93.75 MHz, with its FPU and caches.
 * **RSP and RDP**: both in hardware. The RSP runs the game's own microcode and the RDP draws the game's own command stream.
-* **Video**: 320 x 240, NTSC (59.94 Hz) and PAL (50 Hz), following the game and its region, with the N64's anti-alias, divot and dither filters.
+* **Video**: the picture the game's video registers describe, in a 640 x 240 frame, NTSC (59.94 Hz) and PAL (50 Hz), following the game and its region, with the N64's anti-alias, divot and dither filters.
 * **Audio**: the game's own audio, at the Pocket's 48 kHz.
-* **Memory**: 8 MiB of RAM for every game, as a console with the Expansion Pak.
+* **Memory**: 8 MiB of RAM, as a console with the Expansion Pak, or 4 MiB with the Pak taken out in the core's settings.
 * **Controllers**: up to four through the Dock, controls are customizable.
 * **Accessories and saves**: Controller Pak, Transfer Pak compatible with physical GB cartridges in the Pocket GB slot, and EEPROM, SRAM and FlashRAM saves.
 
@@ -22,9 +22,8 @@ A small runtime, `n64rt.sys`, loads the game and does what is not in hardware. T
 
 MIRLO 64 is experimental and not every game works. What is known of v0.1:
 
-* **Games with a frame buffer that is not 320 pixels wide show a garbled picture.**
-* **High-resolution interlaced pictures are shown at a reduced size.**
-* ROMs of up to 48 MiB. Of a larger one, only the first 48 MiB are loaded.
+* **Interlaced pictures are shown as 640 x 240**: each line is the average of two of the picture's rows.
+* ROMs of up to 48 MiB. A larger one is not started: the core shows "ROM exceeds maximum file size of 48 MiB."
 * Rumble Pak is not supported. This is currently a limitation in the Dock.
 * Only controller 1 can have a pak.
 * The size of a cartridge's EEPROM comes from a list on the SD card (`n64savedb.txt`). A game that is not in it gets a 4 Kbit one.
@@ -37,7 +36,7 @@ MIRLO 64 is experimental and not every game works. What is known of v0.1:
    ```
    Assets/mirlo/common/          n64rt.sys (the runtime) and n64savedb.txt; where Mirlo's games go
    Cores/tortuga.Mirlo64/        the core: mirlo.rev (the bitstream), core.json, ...
-   Platforms/mirlo.json          the platform, under Console
+   Platforms/mirlo.json          the platform: Console > Nintendo 64
    Platforms/_images/mirlo.bin   its image
    ```
 
@@ -60,17 +59,20 @@ The core's own menu on the Pocket. The default of each is in bold.
 |---|---|---|
 | Crop Vertical | None, **8 lines**, 12 lines | Blanks that many lines at the top and the bottom of the picture |
 | Crop Right | None, **1 column** | Blanks the picture's last column |
+| Expansion Pak | **On**, off | With it the console has 8 MiB of RAM, without it 4 MiB; takes effect when the game is started again |
 | Controller 1 pak | **None**, Controller Pak, Transfer Pak | The accessory in controller 1 |
 | Stick | **D-pad**, L stick, R stick | What moves the N64's analog stick |
-| D-pad | **None**, D-pad, L stick, R stick | What moves the N64's D-pad |
-| Z button | None, **L**, R, ZL, ZR | The Pocket's button for Z |
-| L button | **None**, L, R, ZL, ZR | The Pocket's button for the N64's L |
-| R button | None, L, **R**, ZL, ZR | The Pocket's button for the N64's R |
 | C buttons | **None**, Right stick | The right stick as the C buttons, besides the face buttons |
-| Start button | None, **Start**, Select+Start | The Pocket's button for Start |
-| Modifier | **None**, L, R, ZL, ZR | Held, it turns the face buttons into the four C buttons and it makes the D-pad presses half a joystick press |
+| Shift key | **None**, L, R, ZL, ZR, Select | Held, it switches to the second layer of the controls below; the key never reaches the game |
+| Normal: A B X Y / L R | **Auto**, A B cR cL / Z R, cR cD cU cL / Z R, A B cR cL / R Z, A B cU Z / Z R | What the face buttons send (A B X Y), then (after the bar) L and R; cU cR cD cL are the C buttons |
+| Shift: A B X Y / L R | **Auto**, Same as normal, cR cD cU cL, A B cU cD, / L R (shoulders) | The same while the Shift key is held |
+| Shift: D-pad | **Auto**, Same as normal, C buttons, Half stick, N64 D-pad, Stick and D-pad | What the D-pad gives while the Shift key is held |
+| D-pad keys | **N64 stick**, N64 D-pad, Stick and D-pad, C buttons | What the Pocket's D-pad gives |
+| Save for this game, Forget this game | (actions) | Keep the layout in use, with your picks, in this game's own file (`<game>.ctl`), or delete it |
 
-**This fork's menu** has the layered controls (Shift key, Normal / Shift / Shift: D-pad / D-pad keys lists, Save / Forget for this game) in place of the Stick to Modifier rows above: see [docs/overview.md](docs/overview.md).
+**Auto** in a layout list takes the layout you saved for the game, else the game's family (Platformer, Shooter, Skate, Racing or
+Fighter, from the cartridge's ID), else the standard one. The four lists start on Auto at every launch; a list that names a layout
+puts it over what Auto would give. The Pocket's menu does not mark the chosen option of a list.
 
 ### Saves
 
@@ -101,7 +103,11 @@ make -C lang/n64rt && cp lang/n64rt/build/n64rt.bin n64rt.sys      # the runtime
 python3 tools/make_release.py mirlo.rev n64rt.sys tortuga.Mirlo64_0.1.zip
 ```
 
-**The fitter's seed matters.** The design fills about 95 % of the FPGA and its timing is tight, so whether a compile closes timing depends on the seed (`SEED` in `projects/mirlo.qsf`). v0.1 closed with seeds 12, 27 and 5. `tools/area2/fit.sh <tag> <seed>` compiles a copy of the tree with a seed, and `tools/area2/closure.py` gives the worst slack: a bitstream is good only if no analysis is negative.
+**The fitter's seed matters.** The design fills about 95 % of the FPGA and its timing is tight, so whether a compile closes timing depends on the seed (`SEED` in `projects/mirlo.qsf`). `tools/area2/fit.sh <tag> <seed>` compiles a copy of the tree with a seed, and `tools/area2/closure.py` gives the worst slack: a bitstream is good only if no analysis is negative. The seeds that close for the hardware's sources as they are in the tree are recorded in `projects/fits.json`, best first (`tools/fits.py seed` prints the first; `tools/fits.py record <projects directory>...` writes the file after a sweep). A change to the hardware asks for a new sweep: `tools/fits.py check` tells whether the record is of these sources.
+
+### Nightly builds
+
+Every night at 00:00 (Europe/Madrid) the default branch is built with the recorded seed and, if that compile closes timing, published as an artifact of the [Nightly workflow](https://github.com/tortugaveloz/MIRLO64/actions/workflows/nightly.yml), kept for two weeks: a zip to unpack onto the SD card's root, like a release. `tools/nightly.sh` is that build, and it can be run by hand. A pull request that changes `projects/fits.json` is built the same way: the seed it records must close. A nightly is the tree of that day: it has not been tried on a Pocket the way a release has.
 
 ## Repository layout
 

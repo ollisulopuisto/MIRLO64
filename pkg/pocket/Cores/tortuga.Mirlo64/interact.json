@@ -1,7 +1,7 @@
 {"interact":{"magic":"APF_VER_1","variables":[
-{"name":"Show FPS","id":238,"type":"check","enabled":true,"persist":true,"address":"0x1000013C","defaultval":0,"value":1,"value_off":0,"writeonly":true},
 {"name":"Crop Vertical","id":235,"type":"list","enabled":true,"persist":true,"address":"0x1000010C","defaultval":1,"options":[{"value":0,"name":"None"},{"value":8,"name":"8 lines"},{"value":12,"name":"12 lines"}],"writeonly":true},
 {"name":"Crop Right","id":236,"type":"list","enabled":true,"persist":true,"address":"0x10000114","defaultval":1,"options":[{"value":0,"name":"None"},{"value":1,"name":"1 column"}],"writeonly":true},
+{"name":"Expansion Pak","id":238,"type":"check","enabled":true,"persist":true,"address":"0x10000138","defaultval":1,"value":0,"value_off":1,"writeonly":true},
 {"name":"Controller 1 pak","id":214,"type":"list","enabled":true,"persist":true,"address":"0x10000108","defaultval":0,"options":[{"value":0,"name":"None"},{"value":1,"name":"Controller Pak"},{"value":2,"name":"Transfer Pak"}],"writeonly":true},
 {"name":"Shift key","id":228,"type":"list","enabled":true,"persist":true,"address":"0x10000110","defaultval":0,"options":[{"value":0,"name":"None"},{"value":1,"name":"L"},{"value":2,"name":"R"},{"value":3,"name":"ZL"},{"value":4,"name":"ZR"},{"value":6,"name":"Select"}],"writeonly":true},
 {"name":"Normal: A B X Y / L R","id":240,"type":"list","enabled":true,"address":"0x10000140","defaultval":0,"options":[{"value":0,"name":"Auto (from the game)"},{"value":1,"name":"A B cR cL / Z R"},{"value":2,"name":"cR cD cU cL / Z R"},{"value":3,"name":"A B cR cL / R Z"},{"value":4,"name":"A B cU Z / Z R"}],"writeonly":true},
