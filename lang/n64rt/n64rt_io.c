@@ -1448,6 +1448,22 @@ static void dbg_tick(void)
         n64rt_dbg_sample(&s_dbg, busy, n64rt_rsp_running(), !mrdp_status_idle_read(), s_frames);
     }
     if (type < 2u || !width) return;
+    /* The picture is drawn once into a scratch buffer (cached RAM, no frame buffer's stride): when a column is added, the rate changes or the
+     * pixel format does. A tick only copies its rows into the frame buffers (uncached): drawing the graph afresh into each, every tick,
+     * took the game down to 8 fps. */
+    const int b32 = type == 3u;
+    static u32 s_gfx[N64RT_DBG_BANDS * N64RT_DBG_BAND * N64RT_DBG_COLS], s_num[10u * N64RT_DBG_COLS];
+    static u32 s_gfx_head = ~0u, s_gfx_fmt = ~0u, s_num_fps = ~0u, s_num_fmt = ~0u;
+    if ((opt & 2u) && (s_gfx_head != s_dbg.head || s_gfx_fmt != (u32)b32)) {
+        n64rt_dbg_draw(&s_dbg, s_gfx, N64RT_DBG_COLS, b32, 0u, 0u);
+        s_gfx_head = s_dbg.head; s_gfx_fmt = (u32)b32;
+    }
+    if ((opt & 1u) && (s_num_fps != s_fps || s_num_fmt != (u32)b32)) {
+        n64rt_dbg_draw_number(s_num, N64RT_DBG_COLS, b32, 0u, 0u, s_fps);
+        s_num_fps = s_fps; s_num_fmt = (u32)b32;
+    }
+    if (!b32 && (width & 1u)) return;                                  /* (as the drawing: an odd stride is skipped) */
+    const u32 wpr = b32 ? N64RT_DBG_COLS : N64RT_DBG_COLS / 2u;       /* words a scratch row */
     /* into every frame buffer the game uses (the origin and the ring of the ones it handed the VI lately): the one the VI shows next is the
      * one the game has just drawn, without our pixels; drawn into the shown one alone the picture would carry them in every other field */
     u32 fbs[5] = { org, s_fb_ring[0], s_fb_ring[1], s_fb_ring[2], s_fb_ring[3] };
@@ -1457,8 +1473,19 @@ static void dbg_tick(void)
         for (u32 m = 0; m < k; m++) dup |= fbs[m] == fbs[k];
         if (dup) continue;
         volatile u32 *fb = (volatile u32 *)(uintptr_t)(0xA0000000u | fbs[k]);
-        if (opt & 2u) n64rt_dbg_draw(&s_dbg, fb, width, type == 3u, 4u, 12u);
-        if (opt & 1u) n64rt_dbg_draw_number(fb, width, type == 3u, 4u, (opt & 2u) ? 46u : 12u, s_fps);
+        if (opt & 2u) {
+            for (u32 r = 0; r < N64RT_DBG_BANDS * N64RT_DBG_BAND; r++) {
+                volatile u32 *row = fb + (b32 ? (12u + r) * width + 4u : ((12u + r) * width + 4u) / 2u);
+                for (u32 x = 0; x < wpr; x++) row[x] = s_gfx[r * wpr + x];
+            }
+        }
+        if (opt & 1u) {
+            const u32 y0 = (opt & 2u) ? 46u : 12u, nw = b32 ? 22u : 11u;
+            for (u32 r = 0; r < 10u; r++) {
+                volatile u32 *row = fb + (b32 ? (y0 + r) * width + 4u : ((y0 + r) * width + 4u) / 2u);
+                for (u32 x = 0; x < nw; x++) row[x] = s_num[r * wpr + x];
+            }
+        }
     }
 }
 #else
