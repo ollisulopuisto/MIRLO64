@@ -9,7 +9,7 @@ sim/rsp/make_div_rom.py). Each seed fits in its own copy of rtl/ platform/ targe
 projects/mirlo.qsf), and the result goes to OUT/fit-<seed>-closed-<true|false>/ (closure.txt, the summaries, and for a closed seed mirlo.rbf and the
 packaged mirlo.rev). Several seeds run side by side (--jobs, default 4: a fit takes about 3-4 GB). The timing check is the CI's
 (tools/area2/closure.py: the worst slack of all the corners, closed when it is >= 0)."""
-import argparse, concurrent.futures, os, re, shutil, subprocess, sys, time
+import argparse, concurrent.futures, ctypes, os, re, shutil, subprocess, sys, time
 
 R = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 PY = sys.executable
@@ -22,6 +22,64 @@ def run(cmd, cwd=None, log=None):
     finally:
         if f:
             f.close()
+
+
+# The box is shared with other sessions: a registry file per running compile in LOCKS (E:\locks), "<session>-<n>.txt" -- session, project,
+# working dir, start time, PID --; a file whose PID is gone, or older than 3 hours, is stale. A compile starts only with at least 6 GB of
+# free RAM and fewer than 4 registry files; nothing here ever kills a process by name (the Pocket projects' agreed rules).
+def pid_alive(pid):
+    if os.name == "nt":
+        out = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid, "/NH"], capture_output=True, text=True).stdout
+        return str(pid) in out
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def free_ram_gb():
+    if os.name != "nt":
+        return 99.0
+    class MS(ctypes.Structure):
+        _fields_ = [("l", ctypes.c_ulong), ("load", ctypes.c_ulong)] + [(n, ctypes.c_ulonglong) for n in ("tp", "ap", "tpf", "apf", "tv", "av", "ae")]
+    m = MS(); m.l = ctypes.sizeof(m)
+    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
+    return m.ap / 2.0 ** 30
+
+
+def live_locks(locks):
+    n = 0
+    for fn in os.listdir(locks):
+        f = os.path.join(locks, fn)
+        if not fn.endswith(".txt"):
+            continue
+        try:
+            pid = int(re.search(r"^pid: *(\d+)", open(f).read(), re.M).group(1))
+            stale = time.time() - os.path.getmtime(f) > 3 * 3600 or not pid_alive(pid)
+        except Exception:
+            stale = time.time() - os.path.getmtime(f) > 3 * 3600
+        if stale:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        else:
+            n += 1
+    return n
+
+
+def acquire(locks, tag, work):
+    if not locks:
+        return None
+    os.makedirs(locks, exist_ok=True)
+    while True:
+        if free_ram_gb() >= 6.0 and live_locks(locks) < 4:
+            f = os.path.join(locks, "pocket-n64-%s.txt" % tag)
+            open(f, "w").write("session: pocket-n64\nproject: mirlo (tools/winfit/fit.py)\nworkdir: %s\nstart: %s\npid: %d\n" %
+                               (work, time.strftime("%Y-%m-%d %H:%M:%S"), os.getpid()))
+            return f
+        time.sleep(30)
 
 
 def prep(boot):
@@ -37,9 +95,10 @@ def prep(boot):
             sys.exit("failed: " + " ".join(cmd))
 
 
-def one(seed, out, quartus):
+def one(seed, out, quartus, locks=None):
     t0 = time.time()
     work = os.path.join(out, "s_%d" % seed)
+    lockfile = acquire(locks, str(seed), work)
     shutil.rmtree(work, ignore_errors=True)
     for d in ("rtl", "platform", "target", "projects"):
         shutil.copytree(os.path.join(R, d), os.path.join(work, d), ignore=shutil.ignore_patterns("db", "incremental_db", "output_files"))
@@ -69,6 +128,8 @@ def one(seed, out, quartus):
         shutil.copy(rbf, dst)
         run([PY, os.path.join(R, "tools", "package_bitstream.py"), os.path.join(dst, "mirlo.rbf"), os.path.join(dst, "mirlo.rev")], cwd=R)
     shutil.rmtree(work, ignore_errors=True) if closed is False and not os.environ.get("KEEP") else None
+    if lockfile and os.path.exists(lockfile):
+        os.remove(lockfile)
     return seed, rc, worst, closed, time.time() - t0
 
 
@@ -79,13 +140,14 @@ def main():
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--out", default=os.path.join(R, "winfit_out"))
     ap.add_argument("--boot")
+    ap.add_argument("--locks", default=os.environ.get("QUARTUS_LOCKS", ""), help="the registry directory shared with the other sessions (E:\\locks)")
     a = ap.parse_args()
     if not a.quartus:
         sys.exit("--quartus DIR (the quartus_sh's directory) or QUARTUS_BIN")
     os.makedirs(a.out, exist_ok=True)
     prep(a.boot)
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.jobs) as ex:
-        futs = [ex.submit(one, s, a.out, a.quartus) for s in a.seeds]
+        futs = [ex.submit(one, s, a.out, a.quartus, a.locks) for s in a.seeds]
         for f in concurrent.futures.as_completed(futs):
             seed, rc, worst, closed, secs = f.result()
             print("seed %d: exit %d, worst slack %s, %s, %.0f min" % (seed, rc, "n/a" if worst is None else "%+.3f" % worst,
