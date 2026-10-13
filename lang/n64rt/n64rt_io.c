@@ -1474,6 +1474,9 @@ static void dbg_tick(void)
         u32 dup = 0;
         for (u32 m = 0; m < k; m++) dup |= fbs[m] == fbs[k];
         if (dup) continue;
+        /* a buffer the overlay can write: word aligned (a game's origin need not be: an unaligned word store is an address error, and the
+         * runtime halts the game) and the rows it reaches inside the 8 MiB */
+        if ((fbs[k] & 3u) || fbs[k] + (46u + 10u) * width * (b32 ? 4u : 2u) > 0x00800000u) continue;
         volatile u32 *fb = (volatile u32 *)(uintptr_t)(0xA0000000u | fbs[k]);
         if (opt & 2u) {
             for (u32 r = 0; r < N64RT_DBG_BANDS * N64RT_DBG_BAND; r++) {
