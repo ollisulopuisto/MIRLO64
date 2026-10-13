@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Writes pkg/pocket/Cores/tortuga.Mirlo64/interact.json: the core's settings menu.
 
-Every entry is `writeonly` (the Pocket stores the value and writes it; it never reads it back): the configuration that loads and works on a
-Pocket, and the original author's. `--readable` writes the variant the Pocket reads back every frame (Analogue's docs: read, modify, write
-back), which would let its menu show the selected option: rtl/soc/mirlo_regs.sv answers the reads and sim/interact_bridge runs the Pocket's cycle
-against that variant in CI, but it has not been tried on a Pocket, and a Pocket that read wrong values would write them back. Only the actions
-stay writeonly in it.
+FORK: the entries are readable (the Pocket reads each value back every frame -- Analogue's docs: read, modify, write back -- and its menu shows
+the selected option): rtl/soc/mirlo_regs.sv answers the reads (words 22 and up, Screen Size, core_top.sv does) and sim/interact_bridge runs
+the Pocket's cycle against the menu in CI. Not tried on a Pocket yet, and a Pocket that read wrong values would write them back. The actions stay
+writeonly. `--writeonly` writes the original author's variant (every entry writeonly: the Pocket stores the value and never reads it back,
+a configuration known to load and work, with no selection shown).
    gen_interact.py                     the shipped pkg/pocket/Cores/tortuga.Mirlo64/interact.json
-   gen_interact.py --readable [FILE]   the readable variant (to FILE, or the shipped path with --install)
+   gen_interact.py --writeonly [FILE]  the writeonly variant (to FILE, or the shipped path with --install)
 
 The Pocket shows at most 16 entries of interact.json (Analogue's docs: "Up to 16 UI entries ... can be shown"; a longer file is a load
 error), a name is at most 23 characters, a list has at most 16 options, and the names use only letters, digits, space and ( ) - . / :
@@ -17,14 +17,14 @@ Standard); their picks are not remembered between starts (persist false), so For
 kept setup is Save for this game. Bus words (0x1000_0100 + 4 x n): 16 Normal, 17 Shift, 18 Shift: D-pad, 19 D-pad keys, 21 the actions (a write of 2 Saves, 3 Forgets)."""
 import json, os, sys
 
-READABLE = False
+READABLE = True
 
 def lst(name, ident, address, options, dflt=0, persist=True):
     e = {"name": name, "id": ident, "type": "list", "enabled": True}
     if persist:
         e["persist"] = True
     e.update({"address": address, "defaultval": dflt, "options": [{"value": v, "name": n} for v, n in options]})
-    e["writeonly"] = True                 # (build() drops it for the readable variant)
+    e["writeonly"] = True                 # (main() drops it for the readable variant)
     return e
 
 def action(name, ident, value):
@@ -59,9 +59,13 @@ def build():
 def main():
     global READABLE
     args = sys.argv[1:]
-    READABLE = "--readable" in args
+    READABLE = "--writeonly" not in args
     rest = [a for a in args if not a.startswith("--")]
     entries = build()
+    if READABLE:
+        for e in entries:
+            if e["type"] != "action":
+                e.pop("writeonly", None)
     assert len(entries) <= 16, "the Pocket shows 16 entries of interact.json at most"
     assert len({e["id"] for e in entries}) == len(entries)
     for e in entries:
@@ -73,8 +77,6 @@ def main():
     out = '{"interact":{"magic":"APF_VER_1","variables":[\n' + ",\n".join(json.dumps(e, separators=(",", ":")) for e in entries) + '\n],"messages":[]}}\n'
     shipped = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pkg", "pocket", "Cores", "tortuga.Mirlo64", "interact.json")
     path = rest[0] if rest else shipped
-    if READABLE and not rest and "--install" not in args:
-        sys.exit("--readable needs a FILE (or --install to replace the shipped menu)")
     open(path, "w").write(out)
     print("%d entries (%s) -> %s" % (len(entries), "readable" if READABLE else "writeonly", path))
 

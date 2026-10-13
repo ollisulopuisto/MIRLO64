@@ -532,6 +532,8 @@ module core_top (
   wire [5:0] interact_rd_addr;
   wire [5:0] interact_wr_addr;
 
+  wire [31:0] soc_interact_q;
+  // word 22 (Screen Size) is the Pocket's own: the SoC does not hold it, so its read comes from here (the registered address, as the SoC's q is)
   wire [31:0] interact_q;
 
   wire [31:0] interact_read_data;
@@ -974,7 +976,7 @@ module core_top (
 
       .apf_interact_address(interact_addr),
       .apf_interact_data(interact_data),
-      .apf_interact_q(interact_q),
+      .apf_interact_q(soc_interact_q),
       // The SoC has interact words 0-21 (the layout lists are 16-20, the actions 21). Pocket-only
       // settings (word 22 onwards) are not passed to it.
       .apf_interact_wr(interact_wr && interact_addr < 6'd22),
@@ -1104,6 +1106,8 @@ module core_top (
 
   // Pocket-only setting at bridge 0x10000158 (interact word 22).
   reg [2:0] screen_mode = 0;
+  // the Pocket reads word 22 back too: the SoC does not hold it, so its read comes from here (the registered address, as the SoC's q is)
+  assign interact_q = prev_interact_addr == 6'd22 ? {29'd0, screen_mode} : soc_interact_q;
   (* async_reg = "true" *) reg [1:0] video_reset_sync = 2'b11;
   always @(posedge clk_vid) video_reset_sync <= {video_reset_sync[0], reset};
   always @(posedge clk_sys) begin
