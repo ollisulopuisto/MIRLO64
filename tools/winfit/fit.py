@@ -93,6 +93,9 @@ def prep(boot):
                 [PY, os.path.join(R, "tools", "mips_inits.py")]):
         if run(cmd, cwd=R) != 0:
             sys.exit("failed: " + " ".join(cmd))
+    svh = os.path.join(R, "rtl", "soc", "mirlo_mips_init.svh")      # (a tree's mips_inits.py may write the paths with backslashes: not in a Verilog string)
+    t = open(svh).read()
+    open(svh, "w").write(re.sub(r'(`define MIPS_INIT_\w+ ")([^"]*)"', lambda m: m.group(1) + m.group(2).replace("\\", "/") + '"', t))
 
 
 FITSH = False
