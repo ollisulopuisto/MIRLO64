@@ -95,6 +95,9 @@ def prep(boot):
             sys.exit("failed: " + " ".join(cmd))
 
 
+FITSH = False
+
+
 def one(seed, out, quartus, locks=None):
     t0 = time.time()
     work = os.path.join(out, "s_%d" % seed)
@@ -106,6 +109,12 @@ def one(seed, out, quartus, locks=None):
     s = open(qsf).read()
     s, n = re.subn(r"^set_global_assignment -name SEED .*$", "set_global_assignment -name SEED %d" % seed, s, flags=re.M)
     assert n == 1, "no SEED line in mirlo.qsf"
+    if FITSH:       # the macros tools/area2/fit.sh adds (what a recorded fit of projects/fits.json was made with)
+        m = re.search(r"for m in (.*?); do", open(os.path.join(R, "tools", "area2", "fit.sh")).read())
+        for mac in m.group(1).split():
+            mac = mac.replace("${CPUCLK:-32}", "32")
+            if not mac.startswith("$"):
+                s += 'set_global_assignment -name VERILOG_MACRO "MIRLO_%s"\n' % mac
     open(qsf, "w").write(s)
     proj = os.path.join(work, "projects")
     rc = run([os.path.join(quartus, "quartus_sh"), "--flow", "compile", "mirlo"], cwd=proj, log=os.path.join(out, "compile_%d.log" % seed))
@@ -140,12 +149,14 @@ def main():
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--out", default=os.path.join(R, "winfit_out"))
     ap.add_argument("--boot")
+    ap.add_argument("--fitsh", action="store_true", help="add the macros of the tree's tools/area2/fit.sh, as the recorded fits of projects/fits.json have")
     ap.add_argument("--tree", help="fit this tree (a checkout of another branch) instead of the one this script is in")
     ap.add_argument("--locks", default=os.environ.get("QUARTUS_LOCKS", ""), help="the registry directory shared with the other sessions (E:\\locks)")
     a = ap.parse_args()
     if not a.quartus:
         sys.exit("--quartus DIR (the quartus_sh's directory) or QUARTUS_BIN")
-    global R
+    global R, FITSH
+    FITSH = a.fitsh
     if a.tree:
         R = os.path.abspath(a.tree)
     os.makedirs(a.out, exist_ok=True)
