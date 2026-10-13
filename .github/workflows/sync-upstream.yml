@@ -7,11 +7,18 @@ name: Sync upstream
 # A scheduled workflow runs from the default branch: this file must be on it (patched-v0.1), and the default branch has to be set
 # in the repository's settings. A merge that brings in a change to .github/workflows needs a token with the "workflow" scope:
 # put one in the repository secret SYNC_TOKEN, else such a push is refused and the run says so.
+# When a merge brought something, build.yml runs on fork-patches: a full fit when the hardware's sources changed, else the runtime and
+# the package on the bitstream of the last fit (tools/daily_build.sh); the zip is the run's artifact mirlo64-release.
 # Upstream's own scheduled workflow (Nightly) would build and fail here at every midnight: it is disabled by the last step.
 on:
   schedule:
     - cron: '17 5 * * *'
   workflow_dispatch:
+    inputs:
+      build:
+        description: "Build fork-patches after the sync even if upstream brought nothing"
+        type: boolean
+        default: false
 permissions:
   contents: write
   issues: write
@@ -45,6 +52,11 @@ jobs:
         run: |
           # (-R: with the remote "upstream" gh would otherwise name the upstream repository)
           gh issue create -R "$GITHUB_REPOSITORY" --title "Upstream sync stopped ($(date +%F))" --body "$(printf 'tools/sync_upstream.sh:\n\n```\n%s\n```\n\nMerge by hand, then run this workflow again.' "$(cat report.txt)")" || true
+      - name: A build when upstream brought something (tools/daily_build.sh)
+        if: steps.sync.outputs.merged == '1' || inputs.build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/daily_build.sh
       - name: Disable upstream's Nightly workflow in this fork
         env:
           GH_TOKEN: ${{ github.token }}
