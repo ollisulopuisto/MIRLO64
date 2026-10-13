@@ -1397,6 +1397,27 @@ static void mon_field_log(void)
 }
 #endif
 
+#if defined(N64RT_OWN) && defined(N64RT_RSP)
+/* The debug graph (the fork's "Debug" menu entry, values 2 and 3 = interact1[6]): a sample of the game CPU, the RSP and the RDP at each tick,
+ * and the graph drawn into the frame buffer the VI shows (n64rt_dbg.h). */
+#include "n64rt_dbg.h"
+u32 n64rt_mon_pc(void);
+int n64rt_rsp_running(void);
+static n64rt_dbg_t s_dbg;
+static void dbg_tick(void)
+{
+    if (!((apf_interact_interact1_read() >> 6) & 1u)) return;
+    const u32 pc = n64rt_mon_pc(), pa = pc & 0x1FFFFFFFu;
+    int busy = 1;
+    if ((pc >> 29) >= 4u && (pc >> 29) <= 5u && pa >= 4u && pa < 0x00800000u) busy = !n64rt_dbg_idle(hw_rd(pa), hw_rd(pa - 4u));
+    n64rt_dbg_sample(&s_dbg, busy, n64rt_rsp_running(), !mrdp_status_idle_read(), n64rt_swaps);
+    const u32 type = hw_rd(0x04400000u) & 3u, org = hw_rd(0x04400004u) & 0x007FFFFFu, width = hw_rd(0x04400008u) & 0xFFFu;
+    if (type < 2u || !org || !width) return;
+    n64rt_dbg_draw(&s_dbg, (volatile u32 *)(uintptr_t)(0xA0000000u | org), width, type == 3u, 4u, 12u);
+}
+#else
+static inline void dbg_tick(void) { }
+#endif
 /* the monitor's wake-up: what the hardware has seen */
 void n64rt_vi_hw_event(void);
 void n64rt_ai_hw_event(void);
@@ -1420,6 +1441,7 @@ void n64rt_rcp_events(void)
         }
     }
     if (pend & 4u) {                                  /* a tick */
+        dbg_tick();
         if (s_vi_hw) {
             /* (no field wakes the monitor: its count follows the ticks, 262,144 SoC cycles each, a field 1,042,710 -- the console's
              * 59.940 Hz: 4096 * 262,144 / 1,042,710 = 1029.8; it was 1,045,440 and 1027 -- and the frame buffers the game has

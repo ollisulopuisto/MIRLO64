@@ -34,7 +34,7 @@ AUTO = (0, "Auto (game)")
 
 def build():
   entries = [
- {"name":"Show FPS","id":238,"type":"check","enabled":True,"persist":True,"address":"0x1000013C","defaultval":0,"value":1,"value_off":0,"writeonly":True},
+ lst("Debug", 276, "0x10000124", [(0, "Off"), (1, "FPS"), (2, "Graph"), (3, "FPS and graph")], persist=False),   # (fork only: FPS is RTL, the graph the runtime's: n64rt_dbg.h)
  {"name":"Crop Vertical","id":235,"type":"slider_u32","enabled":True,"persist":True,"address":"0x1000010C","defaultval":8,"graphical":{"signed":False,"min":0,"max":30,"adjust_small":1,"adjust_large":4},"writeonly":True},   # (fork only: a slider, lines blanked at the picture's top and bottom; 5 bits, the video code takes any 0-31)
  lst("Crop Right", 236, "0x10000114", [(0, "None"), (1, "1 column")], 1),
  lst("Controller 1 pak", 214, "0x10000108", [(0, "None"), (1, "Controller Pak"), (2, "Transfer Pak")]),

@@ -273,6 +273,7 @@ void n64rt_gfx_task(OSTask *t) { rsp_start(t); }
 int  n64rt_audio_task(OSTask *t) { rsp_start(t); return 1; }
 u32  n64rt_gfx_poll(void) { return rsp_poll(); }
 int  n64rt_gfx_busy(void) { return s_running != 0 || s_dp_wait; }
+int  n64rt_rsp_running(void) { return !(SP_STATUS & SP_ST_HALT); }      /* (the debug graph's sample, n64rt_io.c) */
 
 /* The cartridge's DMA into RDRAM, held back while the RDP has a frame to
  * draw. The N64's PI moves a 256-byte piece in tens of microseconds, so

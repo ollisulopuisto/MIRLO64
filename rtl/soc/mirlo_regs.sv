@@ -61,7 +61,7 @@ module mirlo_regs (
     output logic [31:0] ia_q,
     output wire  [4:0]  ia_crop_v,          // interact: "Crop Vertical" (lines; field 3) and "Crop Right" (pixels; field 5)
     output wire  [1:0]  ia_crop_r,
-    output wire         ia_fps_en,          // interact: "Show FPS" (field 15, slot 1 bit 25)
+    output wire         ia_fps_en,          // interact: "Debug" lists FPS (field 9: bit 0 of the value, slot 1 bit 5)
     // video
     input  wire         vblank,             // sys: the scan-out is in vblank
     output logic [31:0] fb_base,
@@ -184,7 +184,7 @@ always_ff @(posedge clk) begin
 end
 
 // ---- APF interact: fields 2-15 in the two slots -- docs/control.md.
-// Show FPS uses slot 1 bit 25 (field 15).
+// The "Debug" list (field 9, slot 1 [9:5]): bit 0 of its value is the FPS counter (here), bit 1 the runtime's graph (n64rt_dbg.h).
 logic [31:0] ia0, ia1;
 logic        ia_ch0, ia_ch1;
 // The controller remap editor (interact.json has 16 entries at most, so the table is not one entry per field: the runtime keeps it in
@@ -199,7 +199,7 @@ wire         iaf_sel = ia_address[5:3] == 3'b010 && ia_address[2:0] < 3'd5;     
 wire  [31:0] iaw0 = {2'd0, ia_act_b, ia_act_a, 3'd0, iaf[4], iaf[3], iaf[2], iaf[1], iaf[0]};
 assign ia_crop_v = ia0[9:5];
 assign ia_crop_r = ia0[16:15];
-assign ia_fps_en = ia1[25];
+assign ia_fps_en = ia1[5];
 always_ff @(posedge clk) begin
     if (rst) begin
         ia0 <= 32'(8) << 5 | 32'(1) << 15; ia1 <= 0; ia_ch0 <= 0; ia_ch1 <= 0;

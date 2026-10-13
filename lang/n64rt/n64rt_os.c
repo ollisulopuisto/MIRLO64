@@ -1486,6 +1486,8 @@ void n64rt_exception(void)
  * ctx.epc; the game's registers are the context's. */
 /* (4 KiB aligned: n64rt_exc.S's fast path reaches every field of it from %hi(n64rt_mon_ctx) alone) */
 n64rt_ctx_t n64rt_mon_ctx __attribute__((aligned(4096)));
+/* the game's PC when the monitor was entered (the debug graph's sample, n64rt_io.c) */
+u32 n64rt_mon_pc(void) { return n64rt_mon_ctx.epc; }
 /* The fast path (n64rt_exc.S, exception_entry): the game's plain lw / sw of a register that is a copy of another
  * word -- the SP's and the DPC's (the RSP hardware's at 0x2000_0000), PI_DRAM_ADDR, PI_CART_ADDR and the PI's
  * domain registers, the RI's (the runtime's own tables) -- done in the entry itself with $k0 and $k1 only, nothing

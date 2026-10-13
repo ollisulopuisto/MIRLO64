@@ -992,6 +992,7 @@ each button sends: the runtime only sees the Pocket's key bits.
 | Crop Vertical | 235 | `0x1000_010C` (3: `interact0[9:5]`) | None, 8 lines (**default**), 12 lines (the scan-out: `docs/rdp.md`) |
 | Crop Right | 236 | `0x1000_0114` (5: `interact0[19:15]`) | a list: 0 None, 1 1 column (**default**; the field is read as a 2-bit pixel count) |
 | Controller 1 pak | 214 | `0x1000_0108` (2: `interact0[4:0]`) | 0 None, 1 Controller Pak, 2 Transfer Pak |
+| Debug | 276 | `0x1000_0124` (9: `interact1[9:5]`) | **Off** (0), FPS (1), Graph (2), FPS and graph (3): bit 0 is the video's frame counter, bit 1 the runtime's graph (`n64rt_dbg.h`); not persistent (fork only) |
 | Shift key | 228 | `0x1000_0110` (4: `interact0[14:10]`) | menu None, L, R, ZL, ZR, Select: values **0**, 1, 2, 3, 4, 6 (the old "Modifier") |
 | Normal: A B X Y / L R | 240 | `0x1000_0140` (16: `interact2[4:0]`) | **Auto (game)**, A B cR cL / Z R, cR cD cU cL / Z R, A B cR cL / R Z, A B cU Z / Z R: values 0-4 |
 | Shift: A B X Y / L R | 241 | `0x1000_0144` (17: `interact2[9:5]`) | **Auto**, Same as normal, cR cD cU cL, A B cU cD, / L R (shoulders): values 0-4 |
@@ -1018,7 +1019,7 @@ the menu says; Start, which is not listed either, has always arrived as it is).
 
 **Why lists and not one entry per field.** The Pocket shows at most 16 entries of `interact.json` ("Up to 16 UI entries ... can be shown", Analogue's docs;
 a name is 23 characters at most, a list 16 options), and a longer file is a "Load error in interact" at the core's start -- the first remap builds, with 30
-entries, failed so on a Pocket. The menu has 13 entries: Show FPS, Crop Vertical, Crop Right, Controller 1 pak, Shift key, the four layout lists
+entries, failed so on a Pocket. The menu has 13 entries: Debug, Crop Vertical, Crop Right, Controller 1 pak, Shift key, the four layout lists
 (Normal, Shift, Shift: D-pad, D-pad keys), Stick, C buttons, and the actions Save for this game, Forget this game. Names use only letters, digits, space and `( ) - . / :`
 (the characters the menus that loaded had). `tools/gen_interact.py` writes it and checks the limits.
 

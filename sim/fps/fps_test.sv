@@ -67,11 +67,15 @@ module fps_test;
         force video.tv_pal = injected_pal;
         repeat (4) tick();
         rst_vid = 0; rst = 0;
-        if (ia_fps_en !== 0) $fatal(1, "Show FPS reset must be off");
+        if (ia_fps_en !== 0) $fatal(1, "Debug (FPS) reset must be off");
         write_field(14, 1);                  // independent controller bit must survive
-        write_field(15, 1);
+        write_field(9, 1);                   // Debug: FPS
         if (ia_fps_en !== 1 || regs.ia1[24] !== 1) $fatal(1, "FPS field enable clobbered controller bit");
-        write_field(15, 0);
+        write_field(9, 2);                   // Debug: Graph only (the runtime's): the counter is off
+        if (ia_fps_en !== 0 || regs.ia1[24] !== 1) $fatal(1, "Graph only left the FPS counter on");
+        write_field(9, 3);
+        if (ia_fps_en !== 1) $fatal(1, "FPS and graph did not enable the counter");
+        write_field(9, 0);
         if (ia_fps_en !== 0 || regs.ia1[24] !== 1) $fatal(1, "FPS field disable clobbered controller bit");
         sample(60, 30, 0, 'h30);
         sample(50, 25, 1, 'h25);

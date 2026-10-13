@@ -105,11 +105,13 @@ module interact_test;
         // the Pocket reads the editor's fields back (16-20), as it reads 2-15; the actions (21) and the rest read 0
         for (int w = 16; w < 64; w++) begin ia_read(6'(w), q); check($sformatf("ia_q of word %0d", w), q, (w < 21) ? 32'(model[w - 16]) : 32'd0); end
 
-        // the legacy fields still work as before: Crop Vertical (3), Crop Right (5), Show FPS (15), and their readback
+        // the legacy fields still work as before: Crop Vertical (3), Crop Right (5), Debug (9: the FPS counter is bit 0), and their readback
         ia_write(3, 8);  check("crop_v", 32'(ia_crop_v), 8);
         ia_write(5, 1);  check("crop_r", 32'(ia_crop_r), 1);
-        ia_write(15, 1); check("fps_en", 32'(ia_fps_en), 1);
-        ia_write(15, 0); check("fps_en off", 32'(ia_fps_en), 0);
+        ia_write(9, 1);  check("fps_en", 32'(ia_fps_en), 1);
+        ia_write(9, 2);  check("fps_en off, graph only", 32'(ia_fps_en), 0);
+        ia_write(9, 3);  check("fps_en with the graph", 32'(ia_fps_en), 1);
+        ia_write(9, 0);  check("fps_en off", 32'(ia_fps_en), 0);
         ia_read(3, q);  check("ia_q of field 3", q, 8);
         ia_write(4, 6);                                           // Modifier = Select
         csr_read(R_APF_INTERACT_INTERACT0, q); check("INTERACT0 fields", q, 32'd6 << 10 | 32'd8 << 5 | 32'd1 << 15 | 32'd0 << 15);

@@ -82,7 +82,7 @@ This interface provides IO to the Pocket's `interact.json` (`Core Settings`) API
 | `12`      | `0x1000_0130`               | `interact1[21:20]`                         |
 | `13`      | `0x1000_0134`               | `interact1[23:22]`                         |
 | `14`      | `0x1000_0138`               | `interact1[24]`                            |
-| `15`      | `0x1000_013C`               | `interact1[25]` (Show FPS; see [FPS overlay](fps.md)) |
+| `15`      | `0x1000_013C`               | `interact1[25]` |
 | `16`..`19` | `0x1000_0140`..`0x1000_014C` | the controller layout lists, five-bit fields: Normal, Shift, Shift: D-pad and D-pad keys (each 0 = Auto); the CPU reads them in `interact2` `[4:0]`, `[9:5]`, `[14:10]`, `[19:15]`. The Pocket reads none of words 16-21 back (every entry is writeonly): they read as 0 on its side |
 | `21` | `0x1000_0154` | the Pocket's actions: a write with bit 1 set flips `interact2[29]` (Save for this game), with bits 0 and 1 set `interact2[28]` and `[29]` (Forget this game) |
 
