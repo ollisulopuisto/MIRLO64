@@ -56,6 +56,11 @@ jobs:
             n64rt.sys
             pkg/pocket/Cores/tortuga.Mirlo64/interact.json
             pad_test.log
+      # the one image a fit needs that only a MIPS compiler makes (for a fit on a machine without one: tools/winfit/)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boot-rom
+          path: lang/mips/boot/build/boot.hex
 
   quartus-cache:
     name: Download and cache Quartus installers
