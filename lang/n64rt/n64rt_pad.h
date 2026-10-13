@@ -20,7 +20,7 @@
  *          [19:15]  n=11 "Stick": 0 the D-pad (full deflection), 1 the left analog stick, 2 the right analog stick; any other
  *                        value is the D-pad
  *          [23:22]  n=13 "D-pad": 0 none, 1 the D-pad, 2 the left analog stick, 3 the right analog stick
- *          [9:5]    n=9  "Debug" (the fork: bit 0 the FPS counter in the video, bit 1 the runtime's graph, n64rt_dbg.h)
+ *          [9:5]    n=9  "Debug" (the fork: bit 0 the FPS number, bit 1 the graph, both drawn by the runtime, n64rt_dbg.h)
  *          [25]     n=15 free (was "Show FPS")
  *          the rest free (n=8, 9, 12, 14 were "EEPROM size", "Z button", "Start" and "C-button layer")
  *

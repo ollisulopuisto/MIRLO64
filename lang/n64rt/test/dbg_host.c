@@ -57,6 +57,24 @@ int main(void)
     CHECK(fb32[(12 + 8 + 7) * W + xn] == N64RT_DBG_RGB32(48, 248, 48), "32-bit RSP bar");
     CHECK(fb32[12 * W + 3] == 0 && fb32[12 * W + xn + 1] == 0, "32-bit: outside untouched");
 
+    /* the frame rate: "27" at (4, 46) in 16-bit pixels, one digit, three digits, an odd stride */
+    memset(fb, 0, sizeof fb);
+    n64rt_dbg_draw_number(fb, W, 0, 4, 46, 27);
+    { const int px = 4, py = 46;                          /* the '2' (rows of its font: ###, ..#, ###, #.., ###; each pixel is 2 x 2) */
+      CHECK(PX16(px + 0, py + 0) == N64RT_DBG_RGB16(31, 31, 31) && PX16(px + 5, py + 1) == N64RT_DBG_RGB16(31, 31, 31), "the 2's top row");
+      CHECK(PX16(px + 0, py + 2) == N64RT_DBG_RGB16(4, 4, 4) && PX16(px + 4, py + 2) == N64RT_DBG_RGB16(31, 31, 31), "the 2's second row: only the right pixel");
+      CHECK(PX16(px + 0, py + 6) == N64RT_DBG_RGB16(31, 31, 31) && PX16(px + 5, py + 6) == N64RT_DBG_RGB16(4, 4, 4), "the 2's fourth row: only the left pixel");
+      CHECK(PX16(px + 7 + 0, py + 0) == N64RT_DBG_RGB16(31, 31, 31) && PX16(px + 7 + 0, py + 2) == N64RT_DBG_RGB16(4, 4, 4), "the 7's top row, then the rest only on the right");
+      CHECK(PX16(px + 7 + 4, py + 4) == N64RT_DBG_RGB16(31, 31, 31), "the 7's stem");
+      CHECK(PX16(px + 14, py) == N64RT_DBG_RGB16(4, 4, 4), "no third digit: the background");
+      CHECK(PX16(px - 1, py) == 0 && PX16(px, py + 10) == 0, "outside untouched"); }
+    memset(fb32, 0, sizeof fb32);
+    n64rt_dbg_draw_number(fb32, W, 1, 4, 46, 7);
+    CHECK(fb32[46 * W + 4] == N64RT_DBG_RGB32(248, 248, 248) && fb32[46 * W + 3] == 0, "32-bit: the 7's first pixel");
+    memset(odd, 0, sizeof odd); n64rt_dbg_draw_number(odd, 321, 0, 4, 0, 5);
+    any = 0; for (unsigned i = 0; i < 400; i++) any |= odd[i] != 0;
+    CHECK(!any, "an odd stride draws no number");
+
     if (errors) { printf("dbg_host: FAIL (%d)\n", errors); return 1; }
     printf("dbg_host: PASS\n");
     return 0;

@@ -73,4 +73,32 @@ static inline void n64rt_dbg_draw(const n64rt_dbg_t *d, volatile uint32_t *fb, u
         }
     }
 }
+
+/* The frame rate, as a number (the runtime draws it: the video block's own counter went with the OSD that upstream removed): up to three
+ * decimal digits, 3 x 5 pixels of font scaled by two (6 x 10 each, one pixel between), white on the graph's dark grey, top left at (x0, y0). */
+static const uint16_t n64rt_dbg_font[10] = {      /* a digit's 15 bits, row by row, the top row in bits 14..12, a row's left pixel in its bit 2 */
+    0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x79EF, 0x7249, 0x7BEF, 0x7BCF };
+static inline void n64rt_dbg_draw_number(volatile uint32_t *fb, uint32_t stride_px, int bpp32, uint32_t x0, uint32_t y0, uint32_t value)
+{
+    if (!bpp32 && ((stride_px | x0) & 1u)) return;
+    if (value > 999u) value = 999u;
+    const unsigned digits = value >= 100u ? 3u : value >= 10u ? 2u : 1u;
+    const unsigned d3[3] = { value / 100u, (value / 10u) % 10u, value % 10u };
+    const unsigned width = 3u * 7u;                                       /* pixels: three cells of 6 + 1 */
+    for (unsigned r = 0; r < 10u; r++) {
+        volatile uint32_t *row = fb + (bpp32 ? (y0 + r) * stride_px + x0 : ((y0 + r) * stride_px + x0) / 2u);
+        uint32_t pix[24];                                                  /* a row's pixels (width, rounded up to even) */
+        for (unsigned x = 0; x < 24u; x++) pix[x] = n64rt_dbg_px(0, 0, bpp32);
+        for (unsigned k = 0; k < digits; k++) {
+            const unsigned d = d3[3u - digits + k], fr = r / 2u;
+            for (unsigned c = 0; c < 6u; c++) {
+                const int on = (n64rt_dbg_font[d] >> (14u - 3u * fr - c / 2u)) & 1u;
+                pix[k * 7u + c] = on ? n64rt_dbg_px(3, 1, bpp32) : n64rt_dbg_px(0, 0, bpp32);
+            }
+        }
+        (void)width;
+        if (bpp32) { for (unsigned x = 0; x < 22u; x++) row[x] = pix[x]; }
+        else for (unsigned x = 0; x < 22u; x += 2u) row[x / 2u] = pix[x] << 16 | pix[x + 1u];
+    }
+}
 #endif

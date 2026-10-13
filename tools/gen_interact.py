@@ -34,9 +34,10 @@ AUTO = (0, "Auto (game)")
 
 def build():
   entries = [
- lst("Debug", 276, "0x10000124", [(0, "Off"), (1, "FPS"), (2, "Graph"), (3, "FPS and graph")], persist=False),   # (fork only: FPS is RTL, the graph the runtime's: n64rt_dbg.h)
+ lst("Debug", 276, "0x10000124", [(0, "Off"), (1, "FPS"), (2, "Graph"), (3, "FPS and graph")], persist=False),   # (fork only: both the runtime's, n64rt_dbg.h)
  {"name":"Crop Vertical","id":235,"type":"slider_u32","enabled":True,"persist":True,"address":"0x1000010C","defaultval":8,"graphical":{"signed":False,"min":0,"max":30,"adjust_small":1,"adjust_large":4},"writeonly":True},   # (fork only: a slider, lines blanked at the picture's top and bottom; 5 bits, the video code takes any 0-31)
  lst("Crop Right", 236, "0x10000114", [(0, "None"), (1, "1 column")], 1),
+ {"name":"Expansion Pak","id":238,"type":"check","enabled":True,"persist":True,"address":"0x10000138","defaultval":1,"value":0,"value_off":1,"writeonly":True},   # (upstream's: checked writes 0 = the Pak in)
  lst("Controller 1 pak", 214, "0x10000108", [(0, "None"), (1, "Controller Pak"), (2, "Transfer Pak")]),
  lst("Shift key", 228, "0x10000110", [(0, "None"), (1, "L"), (2, "R"), (3, "ZL"), (4, "ZR"), (6, "Select")]),
  lst("Normal: A B X Y / L R", 240, "0x10000140", [AUTO, (1, "A B cR cL / Z R"), (2, "cR cD cU cL / Z R"), (3, "A B cR cL / R Z"),
