@@ -3,6 +3,8 @@
 and its legal values (a list's option values, a check's value_off / value; an action's one value)."""
 import json, sys
 d = json.load(open(sys.argv[1]))['interact']['variables']
+word = lambda e: (int(e['address'], 16) - 0x10000100) >> 2
+d = [e for e in d if word(e) < 22]      # (words 22 and up -- Screen Size -- are the Pocket's own: core_top keeps them from the SoC)
 n = len(d)
 def vals(e):
     if e['type'] == 'list': return [o['value'] for o in e['options']]
@@ -14,7 +16,6 @@ def default(e):
     if e['type'] == 'check': return e['value'] if e['defaultval'] else e.get('value_off', 0)
     if e['type'] == 'slider_u32': return e['defaultval']
     return 0
-word = lambda e: (int(e['address'], 16) - 0x10000100) >> 2
 read = lambda e: 0 if (e.get('writeonly') or e['type'] == 'action') else 1
 out = ["localparam int NE = %d;" % n]
 def fn(name, expr, ret="int"):
