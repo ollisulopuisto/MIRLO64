@@ -141,10 +141,10 @@ checks exported bounds while retaining its scan-out and runtime-fit tests.
 
 Use `tools/package_bitstream.py` and `tools/make_release.py` with the matching
 runtime to package the build. Install `mirlo.rev`, `video.json` and
-`interact.json` together, then fully quit and reload. Physical Pocket/Dock
-validation of this 640-wide port remains outstanding (the earlier 320-wide
-build has been tested on Pocket); digital simulation
-and timing closure do not establish electrical operation or visual quality.
+`interact.json` together, then fully quit and reload. The contributor tested
+this 640-wide build on a physical Pocket and reported no issues. Dock
+behaviour is covered by simulation; physical Dock testing has not been
+confirmed.
 
 API references: [presets](https://www.analogue.co/developer/docs/openfpga/core-definition-files/video-json),
 [video bus](https://www.analogue.co/developer/docs/openfpga/bus-communication),
