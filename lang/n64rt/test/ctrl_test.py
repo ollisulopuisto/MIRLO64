@@ -75,7 +75,7 @@ def main():
     # fighter: C-up (jump) on X, Z on Y and L, L on a dock pad's ZL
     expect('fighter', ['X'], ['CUP']); expect('fighter', ['Y'], ['Z']); expect('fighter', ['L1'], ['Z']); expect('fighter', ['L2'], ['L'])
     expect('fighter', ['select'], ['CDOWN']); expect('fighter', ['A'], ['A'])
-    # a family owns the Modifier and the table, nothing of the stick's feel (dead zone, range, ramp are the player's)
+    # a family owns the Modifier and the table, nothing of the stick's feel (dead zone and range are the player's)
     for f, p in presets.items():
         if p['m1'] or p['s1']:
             fail('family %d owns set1 bits: %x / %x' % (f, p['m1'], p['s1']))
@@ -103,7 +103,7 @@ def main():
     # a game's saved layout: it comes back, and any damage to it, or a short file, refuses it
     s0, s1, m = 6 << 10 | 0x7FFF | 0x2AA << 20, 3 | 0x3FFF000, [0x12345678 & 0x3FFFFFFF, 1, 2, 3, 0x3FFFFFFF]
     args = ['%x' % s0, '%x' % s1, *('%x' % w for w in m)]
-    want = '1 %x %x %s' % (s0 & (31 << 10 | 0x3FF << 20), s1 & 0x1F, ' '.join('%x' % w for w in m))
+    want = '1 %x %x %s' % (s0 & (31 << 10 | 0x3FF << 20), 0, ' '.join('%x' % w for w in m))
     got = run(ctrl, 'record', *args).strip()
     if got != want:
         fail('record: %s, expected %s' % (got, want))
@@ -209,19 +209,6 @@ def main():
     if eff(0, 3, menu=(feel, 0))[0] != feel | 6 << 10: fail('a family changed the stick\'s feel: %x' % eff(0, 3, menu=(feel, 0))[0])
     if eff(0, 3, menu=(feel | 1 << 10, 0))[0] != feel | 1 << 10: fail('a family overrode the menu Modifier with the feel set')
     if eff(1, 3, menu=(feel, 0))[0] != 3 << 10: fail('a game\'s saved layout kept the menu\'s feel: %x' % eff(1, 3, menu=(feel, 0))[0])
-    # the D-pad ramp: grows by the step, never past the target; a release, a reversal or a smaller target is at once; off is the target
-    ramp = lambda c, t, st: int(run(ctrl, 'ramp', str(c), str(t), str(st)).strip())
-    for cur, tgt, step, want in ((0, 80, 20, 20), (20, 80, 20, 40), (70, 80, 20, 80), (0, -80, 40, -40), (-40, -80, 40, -80), (60, 0, 20, 0),
-                                 (60, -80, 20, -80), (80, 40, 20, 40), (0, 80, 0, 80), (0, 40, 10, 10), (5, 3, 10, 3), (0, 80, -5, 80)):
-        if ramp(cur, tgt, step) != want:
-            fail('ramp %d -> %d by %d: %d, expected %d' % (cur, tgt, step, ramp(cur, tgt, step), want))
-    for step in (10, 20, 40):                        # from rest to full: the polls the step implies, no overshoot, no stall
-        v, n = 0, 0
-        while v != 80 and n < 100:
-            nv = ramp(v, 80, step)
-            if not v < nv <= 80: fail('ramp stalled or overshot at %d (step %d)' % (v, step)); break
-            v, n = nv, n + 1
-        if n != -(-80 // step): fail('ramp with step %d took %d polls' % (step, n))
     print('ctrl_test: %s' % ('FAIL (%d)' % bad if bad else 'PASS'))
     return 1 if bad else 0
 

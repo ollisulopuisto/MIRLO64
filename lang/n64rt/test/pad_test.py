@@ -30,10 +30,9 @@ def spec(*args):
 
 
 def _spec(keys, joy, s0, s1, fields):
-    """-> (button, stick_x, stick_y, digital) by the table in the task: written from the spec, not from the C"""
+    """-> (button, stick_x, stick_y) by the table in the task: written from the spec, not from the C"""
     dz = {1: 0, 2: 6, 3: 20, 4: 30}.get((s0 >> 20) & 31, 12)          # "Stick dead zone" interact0 [24:20]
     rng = {1: 85, 2: 75, 3: 70, 4: 60}.get((s0 >> 25) & 31, 80)       # "Stick range" interact0 [29:25]
-    adig = False
     held = {n for n, bit in K.items() if keys >> bit & 1}
     typ = keys >> 28
     analog = typ == 3 or (typ == 2 and joy not in (0, 0xFFFFFFFF))     # type 2: its stick bytes are believed unless a pad with none would send them
@@ -95,7 +94,6 @@ def _spec(keys, joy, s0, s1, fields):
             if sel in (1, 2):
                 dv = 2 if sel == 2 else 1
                 ax_, ay_ = int(axg(px, False) / dv), int(axg(py, True) / dv)
-                if ax_ or ay_: adig = True
                 tx += ax_; ty += ay_
             elif sel in (3, 4):
                 for cond, c3, c4 in ((px - 128 < -64, 'DLEFT', 'CLEFT'), (px - 128 > 64, 'DRIGHT', 'CRIGHT'),
@@ -132,7 +130,6 @@ def _spec(keys, joy, s0, s1, fields):
             sx, sy = dpad_stick()                 # no stick to speak of: the D-pad
         else:
             sx, sy = use
-            if use != (0, 0): adig = True
     else:
         sx, sy = dpad_stick()                     # D-pad, or an unknown value
     dmode = (s1 >> 22) & 3                        # the N64's D-pad: 0 none, 1 the D-pad, 2 L stick, 3 R stick
@@ -150,7 +147,7 @@ def _spec(keys, joy, s0, s1, fields):
         if py - 128 > 64: out.add('DDOWN')
     sx = max(-rng, min(rng, sx + tx))
     sy = max(-rng, min(rng, sy + ty))
-    return sum(N[n] for n in out), sx, sy, int(not adig)
+    return sum(N[n] for n in out), sx, sy
 
 
 def settings():
@@ -212,12 +209,12 @@ def main():
         assert len(res) == len(cases), 'host harness did not return every case'
         total += len(cases)
         for c, line in zip(cases, res):
-            b, x, y, dg = line.split()
+            b, x, y = line.split()
             want = _spec(*c)
-            if (int(b, 16), int(x), int(y), int(dg)) != want:
+            if (int(b, 16), int(x), int(y)) != want:
                 bad += 1
                 if bad <= 10:
-                    print('MISMATCH keys %08x joy %08x set0 %08x set1 %08x map %s: C %s %s %s %s, spec %04x %d %d %d' % (*c[:4], c[4], b, x, y, dg, *want))
+                    print('MISMATCH keys %08x joy %08x set0 %08x set1 %08x map %s: C %s %s %s, spec %04x %d %d' % (*c[:4], c[4], b, x, y, *want))
     cases = []
     for s0, s1 in sets:
         for f in rng.sample(tables, 4) + [DEFAULT_MAP]:

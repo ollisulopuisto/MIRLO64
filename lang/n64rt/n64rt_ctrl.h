@@ -3,9 +3,9 @@
  * how the menu's picks lay over them. Pure functions of their arguments (no hardware), so that test/ctrl_host.c can run them on the
  * host (test/ctrl_test.py).
  *
- * A layout is: the Shift key (set0 [14:10]), the stick's dead zone and range (set0 [29:20]), the D-pad ramp (set1 [4:0]) and the table's
+ * A layout is: the Shift key (set0 [14:10]), the stick's dead zone and range (set0 [29:20]) and the table's
  * 30 fields (map[5]). Every other setting (crops, pak) stays the menu's. A family sets the Shift key and the table, not the stick's
- * feel (dead zone, range, ramp): those are the player's; a game's saved layout has all of them.
+ * feel (dead zone, range): those are the player's; a game's saved layout has all of them.
  *
  * The menu has four layout lists (INTERACT2 [4:0] .. [19:15]): Normal (the face keys, shoulders and Select), Shift (the face keys and
  * shoulders while the Shift key is held), Shift: D-pad and D-pad keys. Where a list is on Auto (0), the layout comes from, in this order:
@@ -20,7 +20,7 @@ typedef struct { uint32_t set0, set1, m0, m1, map[5]; int mod_default; } n64rt_c
                                                                                           * mod_default: its Modifier is a default, the menu's wins if it names one */
 #define N64RT_CTRL_MOD   (31u << 10)                 /* set0: the Modifier */
 #define N64RT_CTRL_MASK0 (N64RT_CTRL_MOD | (0x3FFu << 20))   /* ... and the stick's dead zone [24:20] and range [29:25] */
-#define N64RT_CTRL_MASK1 0x1Fu                       /* set1: the D-pad ramp [4:0] */
+#define N64RT_CTRL_MASK1 0u                          /* set1: no bit of it is part of a layout */
 #define N64RT_CTRL_BYTES 64u                     /* the Controls slot's file */
 #define N64RT_CTRL_MAGIC 0x4D435431u             /* "MCT1" */
 
