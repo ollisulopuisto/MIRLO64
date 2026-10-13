@@ -64,10 +64,10 @@ module interact_bridge_test;
     wire [31:0] bridge_rd_data = interact_read_data;   // (core_top's mux, for 0x1000_01XX)
 
     wire [3:0][31:0] cont0 = '0;
-    wire  [4:0] unused_crop_v; wire [1:0] unused_crop_r; wire unused_fps;
+    wire  [4:0] unused_crop_v; wire [1:0] unused_crop_r;
     mirlo_regs regs (.clk(clk_sys), .rst, .r_req(1'b0), .r_we(1'b0), .r_addr(16'd0), .r_wdata(32'd0),
         .ia_address(interact_addr), .ia_data(interact_data), .ia_wr(interact_wr), .ia_q(interact_q),
-        .ia_crop_v(unused_crop_v), .ia_crop_r(unused_crop_r), .ia_fps_en(unused_fps),
+        .ia_crop_v(unused_crop_v), .ia_crop_r(unused_crop_r),
         .aud_fill(12'd0), .br_file_size(32'd0), .br_complete_trigger(1'b0), .br_current_address(32'd0), .br_command_result_code(3'd0),
         .br_host_reset_n(1'b1), .br_host_loaded(1'b1), .cont_key(cont0), .cont_joy(cont0), .cont_trig(cont0),
         .vblank(1'b0), .tv_pal(1'b0), .bus_errors(16'd0), .su_valid(1'b0), .su_data(32'd0), .cmd_ready(1'b1),

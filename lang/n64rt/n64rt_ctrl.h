@@ -4,7 +4,7 @@
  * host (test/ctrl_test.py).
  *
  * A layout is: the Shift key (set0 [14:10]), the "C buttons" [14:10], "Stick" [19:15] and "D-pad" [23:22] settings (set1) and the table's
- * 30 fields (map[5]). Every other setting (crops, pak, Show FPS) stays the menu's.
+ * 30 fields (map[5]). Every other setting (crops, pak) stays the menu's.
  *
  * The menu has four layout lists (INTERACT2 [4:0] .. [19:15]): Normal (the face keys, shoulders and Select), Shift (the face keys and
  * shoulders while the Shift key is held), Shift: D-pad and D-pad keys. Where a list is on Auto (0), the layout comes from, in this order:

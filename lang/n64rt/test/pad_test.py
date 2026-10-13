@@ -146,7 +146,7 @@ def settings():
     """every combination of the legacy settings' values (valid ones, and invalid codes)"""
     for mod, c, stick, dpad in itertools.product((0, 1, 2, 3, 4, 5, 6, 9), (0, 1, 2), (0, 1, 2, 9), (0, 1, 2, 3)):
         s0 = mod << 10 | 3 << 5 | 1 << 15 | 2                   # (crop, pak: other fields, ignored here)
-        s1 = 1 | c << 10 | stick << 15 | dpad << 22 | 1 << 25     # (free fields, Show FPS)
+        s1 = 1 | c << 10 | stick << 15 | dpad << 22 | 1 << 25     # (a free field)
         yield s0, s1
 
 
