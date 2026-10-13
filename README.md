@@ -19,6 +19,27 @@ MIRLO 64 is an N64 core made specifically to fit in the Analogue Pocket. It inte
 
 Saves (`.sav`) appear in `Saves/mirlo/common/` when you quit a game. To update the core, unzip a newer release the same way; it replaces the files in `Cores/tortuga.Mirlo64/`.
 
+## Display size
+
+**Core Settings → Screen Size** offers:
+
+- **Original** (default): the existing 320 × 240, 4:3 presentation.
+- **Fit (maintain aspect ratio)**: enlarge the selected picture while keeping all of it visible.
+- **Fill screen (stretch)**: fill the display by scaling each axis independently.
+- **Hybrid**: fill the display with half the source crop of ideal Overscale and approximately half the distortion of Stretch.
+- **Fill screen (overscale)**: preserve proportions and crop the centred overflow; this can hide HUD elements.
+
+The additional modes remove the core's padding and apply **Crop Vertical**
+and **Crop Right** before scaling. Borders drawn inside a game's framebuffer
+remain. Native pixels are retained for supported picture sizes; other sizes
+and Hybrid use bilinear filtering. These modes add approximately one frame
+of delay (17 ms NTSC / 20 ms PAL). Original retains its existing latency.
+Dock uses a 4:3 output area; the Pocket panel is 10:9.
+
+Install the rebuilt `mirlo.rev`, `video.json` and `interact.json` together,
+then fully quit and reload the core. See [display modes](docs/display-modes.md)
+for preset coverage, implementation details, tests and hardware validation.
+
 ## License
 
 MIRLO 64 is released under the [Apache License 2.0](LICENSE).

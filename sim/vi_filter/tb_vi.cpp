@@ -205,6 +205,14 @@ int main(int argc, char **argv)
             if (!seq.empty()) t->vi_pal = sys_of(frames);       // (V_j asks for F_j's system)
             vs_at = sys_cyc; hs_n = 0; hs_short = 0; hs_ds.clear();
             if (frames >= 3) {
+                unsigned ph = R ? R : 240;
+                unsigned bottom = std::min(240u, Y0 + ph - CV);
+                unsigned height = ph > 2*CV && bottom > Y0+CV ? bottom-Y0-CV : 0;
+                if (t->picture_x != 0 || t->picture_y != Y0+CV ||
+                    t->picture_w != 320-CR || t->picture_h != height) {
+                    printf("picture bounds: %u,%u %ux%u\n", t->picture_x, t->picture_y, t->picture_w, t->picture_h);
+                    errs++;
+                }
                 if (rows.size() != H) { printf("frame %d: %zu rows\n", frames, rows.size()); errs++; }
                 for (unsigned ys = 0; ys < rows.size() && ys < H; ys++) {
                     if (ys < Y0) {                          // above the window: black

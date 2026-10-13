@@ -24,7 +24,8 @@
 //  - the FIFO crosses sys -> vid; each word carries the frame's epoch bit, so
 //    what is left of a frame is dropped by the vid side instead of resetting
 //    a dual-clock FIFO.
-//  - one frame size, the Pocket's scaler slot 0 (320 x 240): outside DE the pads are 0. `vblank` is the timing's vblank
+//  - one frame size (320 x 240): outside DE these outputs are 0. The Pocket adapter selects the display aspect ratio.
+//    `vblank` is the timing's vblank
 //    as a sys level (APF_VIDEO).
 //  - vi_latch: the frame boundary as a sys pulse, on the cycle of the vi_line of the line it is on (rcp_vi.sv counts
 //    the lines from it).
@@ -89,6 +90,7 @@ module n64_video #(
     output logic        vga_hsync,
     output logic        vga_vsync,
     output logic        vga_de,
+    output wire [8:0]   picture_x, picture_y, picture_w, picture_h, // cropped bounds, clk_vid
     output logic        vga_skip        // the pixel is not this clock's (a pixel of two clocks: its second)
 );
 
@@ -678,6 +680,16 @@ always_ff @(posedge clk_vid) begin
     crop_bot <= py0 + 10'(win_s2[29:21]) - cvl;
     crop_rgt <= px0 + (dec_v ? 10'(win_s2[8:0]) : {win_s2[8:0], 1'b0}) - {8'd0, cv_s2[6:5]};
 end
+// Describe the very same window and masks used by the outgoing RGB. The
+// Pocket frame store captures this metadata with the pixels, not live CSRs.
+wire [9:0] picture_left = dec_v ? 10'd0 : px0;
+wire [9:0] picture_right = crop_rgt > 320 ? 10'd320 : crop_rgt;
+wire [9:0] picture_bottom = crop_bot > 240 ? 10'd240 : crop_bot;
+assign picture_x = 9'(picture_left);
+assign picture_y = 9'(crop_top > 240 ? 10'd240 : crop_top);
+assign picture_w = picture_right > picture_left ? 9'(picture_right - picture_left) : 9'd0;
+assign picture_h = (10'(win_s2[29:21]) > (cvl << 1) && picture_bottom > crop_top)
+                 ? 9'(picture_bottom - crop_top) : 9'd0;
 wire  crop = blk_s[1] || vcount > {1'b0, lin_s2}      // (active lines are vcount 1..240)
           || vcount <= crop_top || vcount > crop_bot || hcount > crop_rgt;
 

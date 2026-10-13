@@ -1,6 +1,8 @@
 set_global_assignment -name SYSTEMVERILOG_FILE        [file join $::quartus(qip_path) "apf_wishbone_master.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE        [file join $::quartus(qip_path) "audio.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE        [file join $::quartus(qip_path) "core_top.sv"]
+set_global_assignment -name SYSTEMVERILOG_FILE        [file join $::quartus(qip_path) "pocket_video.sv"]
+set_global_assignment -name SYSTEMVERILOG_FILE        [file join $::quartus(qip_path) "pocket_video_memory.sv"]
 set_global_assignment -name VERILOG_FILE              [file join $::quartus(qip_path) "core_bridge_cmd.v"]
 set_global_assignment -name SDC_FILE                  [file join $::quartus(qip_path) "core_constraints.sdc"]
 set_global_assignment -name SYSTEMVERILOG_FILE        [file join $::quartus(qip_path) "data_loader.sv"]
@@ -12,6 +14,4 @@ set_global_assignment -name SYSTEMVERILOG_FILE        [file join $::quartus(qip_
 set_global_assignment -name SYSTEMVERILOG_FILE        [file join $::quartus(qip_path) "sync_fifo.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE        [file join $::quartus(qip_path) "wishbone.sv"]
 
-set_global_assignment -name SYSTEMVERILOG_FILE        [file join $::quartus(qip_path) "../../../../analogue-pocket-utils/ip/mem/dual_psram.sv"]
-set_global_assignment -name SYSTEMVERILOG_FILE        [file join $::quartus(qip_path) "../../../../analogue-pocket-utils/ip/mem/psram.sv"]
 set_global_assignment -name QIP_FILE                  [file join $::quartus(qip_path) "chip_id.qip"]

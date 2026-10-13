@@ -24,8 +24,9 @@ applies for any other resolution.
 
 ## Frame size (N64 games: always 320 x 240)
 
-`rtl/soc/n64_video.sv` sends the Pocket ONE frame, the scaler slot 0 of
-`video.json`:
+`rtl/soc/n64_video.sv` generates one frame size. The Pocket adapter passes it
+through in Original mode. The other modes frame the cropped game picture through a separate
+PSRAM frame store, using native pixels where possible:
 
 | slot | frame       | clocks a pixel | clocks a line | lines a field | rate          |
 |------|-------------|----------------|---------------|---------------|---------------|
@@ -56,8 +57,9 @@ Hz). The Pocket's output stays 12.5 MHz / 2 clocks a pixel / 320 x 240: only the
 (400) change, and the frame rate follows (50 Hz is inside the 47..61 Hz the scaler takes; not yet seen on a Pocket).
 
 (The 268 x 240 frame and `VTG_MODE` of the earlier
-cores are gone: the register stays, it does nothing.) Outside DE the pads are 0:
-there is no scaler-slot word and no frame feature bits.
+cores are gone: the register stays, it does nothing.) The scan-out produces zero
+outside DE. The Pocket adapter adds the scaler-slot command described below;
+there are no frame feature bits.
 
 **A hi-res picture is shown in that frame, reduced without a buffer.** An earlier branch
 (`own-st3`, `integ` up to fe65db8) sent a 640 x 480 interlaced picture as the
@@ -89,6 +91,19 @@ field at a step of 2).
 
 A framebuffer narrower than 320 (Banjo-Kazooie's 292 x 213) is shown 1:1 with
 black around it, inside the 320 x 240 frame.
+
+## Display scaling on Pocket
+
+The Pocket adapter exports Original, Fit, Stretch, Hybrid and Overscale in
+`Screen Size` (interact ID 237, bridge address `0x10000140`). It announces one
+of eight presets at the end of each line, effective for the following frame.
+The scan-out above remains 320 × 240; only the adapter's output changes.
+See [Display modes](display-modes.md) for framing, presets, latency and tests.
+
+Original's 4:3 presentation occupies 1600 × 1200 on the 1600 × 1440 panel,
+with 120 panel pixels above and below. Crop masks and smaller game windows
+can leave further borders inside it. Original is not restricted to integer
+scaling; its proportional fit happens to be 5× at this size.
 
 ## Changing the resolution by hand
 

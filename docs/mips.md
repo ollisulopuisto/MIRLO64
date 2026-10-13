@@ -1314,10 +1314,14 @@ registers, ~0.7 ALM per ALUT; some bring others with them):
 
 The Pocket has two PSRAMs beside the SDRAM (cram0, cram1: each two 64 Mbit
 CellularRAM dies, address and data on the same sixteen lines). They are
-tied off: the two macros that brought them in (below) were removed from the RTL
-(2026-10, branch own-cleanrtl; the code is in the history before that commit),
-and `rtl/soc/psram.sv` is not instantiated. With them, `psram.sv` drove the two chips alike, as two memories of 4 M words of 32 bits (a
-word's upper half on cram0):
+no longer used by the N64 SoC: the two macros that brought them in (below)
+were removed from the RTL (2026-10, branch own-cleanrtl; the code is in the
+history before that commit). The Pocket display adapter now instantiates
+`rtl/soc/psram.sv` for the scaled [display modes](display-modes.md),
+using die 0 for its RGB888 frame buffers with the controller's default
+latency setting (`cfg=5`). The game-memory interface remains unchanged.
+The controller drives both chips alike, as two memories of 4 M words of
+32 bits (a word's upper half on cram0). The earlier SoC uses were:
 
 * **`MIRLO_Z_PSRAM`**: their first dies are the RDP's depth memory
   ([rdp.md](rdp.md)), in synchronous bursts (fixed latency, 62.8 MHz: BCR
