@@ -15,7 +15,7 @@ git diff --quiet && git diff --cached --quiet || { echo "sync: the work tree is 
 git fetch -q "$REMOTE" || exit 2
 git fetch -q "$UPSTREAM" main || exit 2
 prev_orig=$(git rev-parse --abbrev-ref HEAD)
-report=(); status=0; pushes=()
+report=(); status=0; pushes=(); merged_any=0; fit_needed=0
 # main
 if git merge-base --is-ancestor "$REMOTE/main" "$UPSTREAM/main"; then
     if [ "$(git rev-parse "$REMOTE/main")" != "$(git rev-parse "$UPSTREAM/main")" ]; then
@@ -34,7 +34,7 @@ for b in "${CHAIN[@]}"; do
 
 Co-Authored-By: sync_upstream.sh <noreply@github.com>" "$prev" >/dev/null 2>&1; then
         hw=$(git diff --name-only "$REMOTE/$b" HEAD -- rtl target platform projects ':!projects/fits.json' | wc -l | tr -d ' ')
-        report+=("$b: merged ${prev#*/}$([ "$hw" != 0 ] && echo " -- FIT NEEDED ($hw hardware files changed)")"); pushes+=("$b:refs/heads/$b")
+        report+=("$b: merged ${prev#*/}$([ "$hw" != 0 ] && echo " -- FIT NEEDED ($hw hardware files changed)")"); pushes+=("$b:refs/heads/$b"); merged_any=1; [ "$hw" != 0 ] && fit_needed=1
     else
         report+=("$b: CONFLICT merging ${prev#*/}: $(git diff --name-only --diff-filter=U | tr '\n' ' ')"); git merge --abort; status=1
     fi
@@ -43,4 +43,5 @@ done
 [ "${PUSH:-0}" = 1 ] && for p in "${pushes[@]:-}"; do [ -n "$p" ] && git push -q "$REMOTE" "$p"; done
 git checkout -q "$prev_orig" 2>/dev/null || true
 printf 'sync: %s\n' "${report[@]}"
+[ -n "${GITHUB_OUTPUT:-}" ] && { echo "merged=$merged_any"; echo "fit_needed=$fit_needed"; } >> "$GITHUB_OUTPUT"
 exit $status
