@@ -143,6 +143,7 @@ def one(seed, out, quartus, locks=None):
 
 
 def main():
+    global R, FITSH
     ap = argparse.ArgumentParser()
     ap.add_argument("seeds", nargs="+", type=int)
     ap.add_argument("--quartus", default=os.environ.get("QUARTUS_BIN", ""))
@@ -155,7 +156,6 @@ def main():
     a = ap.parse_args()
     if not a.quartus:
         sys.exit("--quartus DIR (the quartus_sh's directory) or QUARTUS_BIN")
-    global R, FITSH
     FITSH = a.fitsh
     if a.tree:
         R = os.path.abspath(a.tree)
