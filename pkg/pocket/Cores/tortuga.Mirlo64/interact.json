@@ -1,5 +1,4 @@
 {"interact":{"magic":"APF_VER_1","variables":[
-{"name":"Debug","id":276,"type":"list","enabled":true,"address":"0x10000124","defaultval":0,"options":[{"value":0,"name":"Off"},{"value":1,"name":"FPS"},{"value":2,"name":"Graph"},{"value":3,"name":"FPS and graph"}],"writeonly":true},
 {"name":"Crop Vertical","id":235,"type":"slider_u32","enabled":true,"persist":true,"address":"0x1000010C","defaultval":8,"graphical":{"signed":false,"min":0,"max":30,"adjust_small":1,"adjust_large":4},"writeonly":true},
 {"name":"Crop Right","id":236,"type":"list","enabled":true,"persist":true,"address":"0x10000114","defaultval":1,"options":[{"value":0,"name":"None"},{"value":1,"name":"1 column"}],"writeonly":true},
 {"name":"Expansion Pak","id":238,"type":"check","enabled":true,"persist":true,"address":"0x10000138","defaultval":1,"value":0,"value_off":1,"writeonly":true},
@@ -13,5 +12,6 @@
 {"name":"Stick dead zone","id":273,"type":"list","enabled":true,"persist":true,"address":"0x10000118","defaultval":0,"options":[{"value":0,"name":"Default (12)"},{"value":1,"name":"None"},{"value":2,"name":"Small (6)"},{"value":3,"name":"Large (20)"},{"value":4,"name":"Huge (30)"}],"writeonly":true},
 {"name":"Stick range","id":274,"type":"list","enabled":true,"persist":true,"address":"0x1000011C","defaultval":0,"options":[{"value":0,"name":"Default (80)"},{"value":1,"name":"Wide (85)"},{"value":2,"name":"75"},{"value":3,"name":"70"},{"value":4,"name":"Small (60)"}],"writeonly":true},
 {"name":"Save for this game","id":271,"type":"action","enabled":true,"address":"0x10000154","value":2,"writeonly":true},
-{"name":"Forget this game","id":272,"type":"action","enabled":true,"address":"0x10000154","value":3,"writeonly":true}
+{"name":"Forget this game","id":272,"type":"action","enabled":true,"address":"0x10000154","value":3,"writeonly":true},
+{"name":"Debug","id":276,"type":"list","enabled":true,"address":"0x10000124","defaultval":0,"options":[{"value":0,"name":"Off"},{"value":1,"name":"FPS"},{"value":2,"name":"Graph"},{"value":3,"name":"FPS and graph"}],"writeonly":true}
 ],"messages":[]}}
