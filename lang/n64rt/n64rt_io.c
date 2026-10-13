@@ -1458,14 +1458,11 @@ static void dbg_tick(void)
     static u32 s_dbg_phase;
     if ((s_dbg_phase++ & 3u) != 0u) return;                            /* sampled at every tick, shown once a field (the debug aids must not slow the game) */
     const u32 wpr = b32 ? N64RT_DBG_COLS : N64RT_DBG_COLS / 2u;       /* words a scratch row */
-    /* into every frame buffer the game uses (the origin and the ring of the ones it handed the VI lately): the one the VI shows next is the
-     * one the game has just drawn, without our pixels; drawn into the shown one alone the picture would carry them in every other field */
-    u32 fbs[5] = { org, s_fb_ring[0], s_fb_ring[1], s_fb_ring[2], s_fb_ring[3] };
-    for (u32 k = 0; k < 5u; k++) {
+    /* into the frame buffer the VI shows alone (the origin). The ring of the ones the game handed the VI lately kept the overlay in more of the
+     * fields, but an origin the game uses for something else for a moment (Star Fox) is not a buffer to write into: it froze the picture. */
+    u32 fbs[1] = { org };
+    for (u32 k = 0; k < 1u; k++) {
         if (!fbs[k]) continue;
-        u32 dup = 0;
-        for (u32 m = 0; m < k; m++) dup |= fbs[m] == fbs[k];
-        if (dup) continue;
         /* a buffer the overlay can write: word aligned (a game's origin need not be: an unaligned word store is an address error, and the
          * runtime halts the game) and the rows it reaches inside the 8 MiB */
         if ((fbs[k] & 3u) || fbs[k] + (46u + 10u) * width * (b32 ? 4u : 2u) > 0x00800000u) continue;
