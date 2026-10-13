@@ -1463,6 +1463,8 @@ static void dbg_tick(void)
         s_num_fps = s_fps; s_num_fmt = (u32)b32;
     }
     if (!b32 && (width & 1u)) return;                                  /* (as the drawing: an odd stride is skipped) */
+    static u32 s_dbg_phase;
+    if ((s_dbg_phase++ & 3u) != 0u) return;                            /* sampled at every tick, shown once a field (the debug aids must not slow the game) */
     const u32 wpr = b32 ? N64RT_DBG_COLS : N64RT_DBG_COLS / 2u;       /* words a scratch row */
     /* into every frame buffer the game uses (the origin and the ring of the ones it handed the VI lately): the one the VI shows next is the
      * one the game has just drawn, without our pixels; drawn into the shown one alone the picture would carry them in every other field */
