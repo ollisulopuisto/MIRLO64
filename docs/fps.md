@@ -25,6 +25,9 @@ stores a tick) cost a little CPU time. Not seen on a Pocket yet. A frame buffer 
 ## The frame rate
 
 `n64rt_dbg_draw_number`: up to three digits (3 x 5 pixel font, scaled by two) at pixel (4, 46) with the graph on, (4, 12) without. It is the number of
-frame buffer swaps (`n64rt_swaps`) in the last 240 ticks, about a second: the frames the game showed, not its logic rate. A game that shows a
-buffer twice (30 fps in 60 Hz) reads 30. The number is drawn at every tick like the graph.
+changes of VI_ORIGIN between two ticks in the last 240 ticks, about a second: the frames the game showed, not its logic rate (a game that shows a
+buffer twice, 30 fps on a 60 Hz screen, reads 30; a game that draws in place and never swaps reads 0). The graph's white band counts the same.
 
+The graph and the number are drawn into every frame buffer the game uses (the VI's origin and the ring of the last four it handed the VI), at every
+tick: the buffer the VI shows next is the one the game has just drawn, without our pixels, and drawn into the shown buffer alone they would be there in
+every other field.

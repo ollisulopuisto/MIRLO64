@@ -1437,18 +1437,29 @@ static void dbg_tick(void)
     const u32 opt = (apf_interact_interact1_read() >> 5) & 3u;     /* the Debug list: bit 0 the frame rate, bit 1 the graph */
     if (!opt) return;
     const u32 type = hw_rd(0x04400000u) & 3u, org = hw_rd(0x04400004u) & 0x007FFFFFu, width = hw_rd(0x04400008u) & 0xFFFu;
-    static u32 s_fps_ticks, s_fps_swaps0, s_fps;                   /* the frame rate: the frames of the last 240 ticks (about a second) */
-    if (++s_fps_ticks >= 240u) { s_fps = n64rt_swaps - s_fps_swaps0; s_fps_swaps0 = n64rt_swaps; s_fps_ticks = 0; }
+    /* the frames the game showed: changes of VI_ORIGIN between two ticks (the VI is in hardware: n64rt_swaps is the software VI's) */
+    static u32 s_prev_org, s_frames, s_fps_ticks, s_fps_frames0, s_fps;
+    if (org && org != s_prev_org) { s_prev_org = org; s_frames++; }
+    if (++s_fps_ticks >= 240u) { s_fps = s_frames - s_fps_frames0; s_fps_frames0 = s_frames; s_fps_ticks = 0; }   /* about a second */
     if (opt & 2u) {
         const u32 pc = n64rt_mon_pc(), pa = pc & 0x1FFFFFFFu;
         int busy = 1;
         if ((pc >> 29) >= 4u && (pc >> 29) <= 5u && pa >= 4u && pa < 0x00800000u) busy = !n64rt_dbg_idle(hw_rd(pa), hw_rd(pa - 4u));
-        n64rt_dbg_sample(&s_dbg, busy, n64rt_rsp_running(), !mrdp_status_idle_read(), n64rt_swaps);
+        n64rt_dbg_sample(&s_dbg, busy, n64rt_rsp_running(), !mrdp_status_idle_read(), s_frames);
     }
-    if (type < 2u || !org || !width) return;
-    volatile u32 *fb = (volatile u32 *)(uintptr_t)(0xA0000000u | org);
-    if (opt & 2u) n64rt_dbg_draw(&s_dbg, fb, width, type == 3u, 4u, 12u);
-    if (opt & 1u) n64rt_dbg_draw_number(fb, width, type == 3u, 4u, (opt & 2u) ? 46u : 12u, s_fps);
+    if (type < 2u || !width) return;
+    /* into every frame buffer the game uses (the origin and the ring of the ones it handed the VI lately): the one the VI shows next is the
+     * one the game has just drawn, without our pixels; drawn into the shown one alone the picture would carry them in every other field */
+    u32 fbs[5] = { org, s_fb_ring[0], s_fb_ring[1], s_fb_ring[2], s_fb_ring[3] };
+    for (u32 k = 0; k < 5u; k++) {
+        if (!fbs[k]) continue;
+        u32 dup = 0;
+        for (u32 m = 0; m < k; m++) dup |= fbs[m] == fbs[k];
+        if (dup) continue;
+        volatile u32 *fb = (volatile u32 *)(uintptr_t)(0xA0000000u | fbs[k]);
+        if (opt & 2u) n64rt_dbg_draw(&s_dbg, fb, width, type == 3u, 4u, 12u);
+        if (opt & 1u) n64rt_dbg_draw_number(fb, width, type == 3u, 4u, (opt & 2u) ? 46u : 12u, s_fps);
+    }
 }
 #else
 static inline void dbg_tick(void) { }
