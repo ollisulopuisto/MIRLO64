@@ -11,7 +11,7 @@ packaged mirlo.rev). Several seeds run side by side (--jobs, default 4: a fit ta
 (tools/area2/closure.py: the worst slack of all the corners, closed when it is >= 0)."""
 import argparse, concurrent.futures, ctypes, os, re, shutil, subprocess, sys, time
 
-R = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+R = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # (the tree to fit: --tree)
 PY = sys.executable
 
 
@@ -140,10 +140,14 @@ def main():
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--out", default=os.path.join(R, "winfit_out"))
     ap.add_argument("--boot")
+    ap.add_argument("--tree", help="fit this tree (a checkout of another branch) instead of the one this script is in")
     ap.add_argument("--locks", default=os.environ.get("QUARTUS_LOCKS", ""), help="the registry directory shared with the other sessions (E:\\locks)")
     a = ap.parse_args()
     if not a.quartus:
         sys.exit("--quartus DIR (the quartus_sh's directory) or QUARTUS_BIN")
+    global R
+    if a.tree:
+        R = os.path.abspath(a.tree)
     os.makedirs(a.out, exist_ok=True)
     prep(a.boot)
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.jobs) as ex:
