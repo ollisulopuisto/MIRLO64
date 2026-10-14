@@ -586,7 +586,8 @@ module core_top (
 
     interact_q_rd <= 0;
 
-    if (interact_addr != prev_interact_addr) begin
+    // FORK: also on every read request: a read of the address the bus is already at (e.g. right after a write to it) got no answer
+    if (interact_addr != prev_interact_addr || interact_rd) begin
       // A cycle after we receive a new address, send the read data
       interact_q_rd <= 1;
     end
