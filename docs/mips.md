@@ -301,7 +301,9 @@ The loader then:
    (a byte-swapped ROM is named as such on the UART). A file under 1 MiB that is not a ROM is called as a program.
 2. Finds the CIC from the CRC-32 of the boot code (ROM `0x40` - `0xFFF`) and the entry point from the header.
 3. Refuses a ROM of more than 48 MiB with a notice on the screen ("ROM exceeds maximum file size of 48 MiB."): the
-   SDRAM has no room for it.
+   SDRAM has no room for it. (A core built with `ROM_TAIL` -- `target/pocket/core_top.sv`, off in the released core,
+   `MONITOR.ID` bit 7 -- keeps a 64 MiB ROM's last 16 MiB in PSRAM die 1 and the loader takes it, as a ROM file of its
+   own at 1 MiB. See "The ROM's tail in PSRAM" below.)
 4. Takes the TV system from the header's destination code.
 5. Clears the RDRAM, sets the RDP's hidden coverage plane to all ones, and copies 1 MiB from ROM `0x1000` to the entry
    address, as IPL3 does.
@@ -874,3 +876,19 @@ SoC's levels) and `gen_rand_fpu_rom.py` random FPU programs.
 
 `pak_test` and `si_test` compile libultra's own sources, which are not in this repository: `ULTRALIB=<dir>` names a
 checkout. The commands to run each test are in the header of its makefile.
+
+## The ROM's tail in PSRAM
+
+Prototype, off in the released core (`localparam bit ROM_TAIL = 0` in `core_top.sv`); simulated (`sim/psram_rom_tail/run.sh`),
+not fitted, never run on a Pocket. With it, the ROM's offsets 48 MiB to 64 MiB (16 MiB) are in PSRAM die 1:
+
+* The bridge's writes of SDRAM-space megabytes `0x31` - `0x40` go to the PSRAM (those of `0x38` - `0x3F` to the SDRAM first).
+* The two dies share every pin but CE#, so one controller, `target/pocket/pocket_video_psram.sv`, does both: its X port
+  (`X_EN`) does die 1's single asynchronous words (70 ns parts: the address, 7 cycles to a read's data, 64 ns of WE# for a write),
+  taking turns with the display's bursts on die 0. The display waits at most one X access (about 12 cycles) for a burst to
+  start; the X port waits at most one burst. `rtl/soc/psram_rom_tail.sv` is the SoC's client of the port.
+* The PI engine's address has a ROM flag (`rcp_mi.sv`: `d_adr[24]`, `PISRC` bit 25, and the game CPU's cartridge reads): the
+  address is then the ROM's offset (word), from 48 MiB up the PSRAM's word, below it the SDRAM's, 1 MiB up.
+* `MONITOR.ID` bit 7 says the core has it. The runtime (`n64rt_boot.c`) then takes a ROM file of up to 64 MiB at 1 MiB
+  (`rom_tail` = 48 MiB), reads the tail through the cartridge's bus (`0xB000_0000` + the offset) and starts the engine's DMAs
+  from it with `PISRC` bit 25. A game file (ROM and program in one) is still 48 MiB at most.

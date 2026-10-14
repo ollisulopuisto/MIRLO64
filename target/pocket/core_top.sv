@@ -921,8 +921,16 @@ module core_top (
     end
   end
 
+  // ROM_TAIL: the ROM's last 16 MiB (offsets 48 MiB to 64 MiB) in PSRAM die 1 (rtl/soc/psram_rom_tail.sv). The SoC's words reach
+  // die 1 through the X port of the display's PSRAM controller (one controller: the dies share the pins). 0: the shipped
+  // build (a ROM over 48 MiB is refused by the runtime). 1 needs lang/n64rt's ROM_TAIL (n64rt.h) and the 64 MiB file limit.
+  localparam bit ROM_TAIL = 1'b0;
+  wire ts_valid, ts_we, ts_ack, ts_ready;
+  wire [21:0] ts_addr;
+  wire [31:0] ts_wdata, ts_rdata;
+  wire [3:0] ts_be;
   // the SoC (rtl/soc/mirlo_mips.sv)
-  mirlo_mips soc (
+  mirlo_mips #(.ROM_TAIL(ROM_TAIL)) soc (
       .clk_sys(clk_sys),
       .clk_cpu(clk_cpu),
       .clk_sys2x(clk_mem),
@@ -1043,7 +1051,10 @@ module core_top (
       .sdram_dm(dram_dqm),
       .sdram_dq(dram_dq),
       .sdram_ras_n(dram_ras_n),
-      .sdram_we_n(dram_we_n)
+      .sdram_we_n(dram_we_n),
+
+      .ts_valid(ts_valid), .ts_we(ts_we), .ts_addr(ts_addr), .ts_wdata(ts_wdata), .ts_be(ts_be),
+      .ts_ack(ts_ack), .ts_rdata(ts_rdata), .ts_ready(ts_ready)
   );
 
   // wishbone wishbone (
@@ -1128,11 +1139,12 @@ module core_top (
   wire ps_dq_oe, ps_adv_n, ps_oe_n, ps_we_n, ps_cre, ps_clk_en;
   wire [1:0] ps_ce_n, ps_wait;
   wire [3:0] ps_bm_n;
-  pocket_video_psram display_ram (
+  pocket_video_psram #(.X_EN(ROM_TAIL)) display_ram (
       .clk(clk_sys), .rst(reset),
       .z_valid(display_valid), .z_ready(display_ready), .z_we(display_we),
       .z_addr(display_addr), .z_wdata(display_wdata), .z_wmask(4'hf), .z_last(display_last),
       .z_rvalid(display_rvalid), .z_rdata(display_rdata), .z_idle(display_idle),
+      .x_valid(ts_valid), .x_we(ts_we), .x_addr(ts_addr), .x_wdata(ts_wdata), .x_be(ts_be), .x_ack(ts_ack), .x_rdata(ts_rdata),
       .cfg(4'b0101), .cfg_wr(1'b0), .ready(display_memory_ready), .wait_err(),
       .o_a(ps_a), .o_dq(ps_dq_o), .o_dq_oe(ps_dq_oe), .o_adv_n(ps_adv_n),
       .o_oe_n(ps_oe_n), .o_we_n(ps_we_n), .o_cre(ps_cre), .o_ce_n(ps_ce_n),
@@ -1148,6 +1160,7 @@ module core_top (
       .cram0_oe_n, .cram1_oe_n, .cram0_we_n, .cram1_we_n,
       .cram0_ub_n, .cram0_lb_n, .cram1_ub_n, .cram1_lb_n
   );
+  assign ts_ready = display_memory_ready;
   pocket_video video_output (
       .clk_vid(clk_vid), .rst_vid(video_reset_sync[1]), .clk_sys(clk_sys), .rst_sys(reset),
       .screen_mode(screen_mode), .docked(osnotify_docked),

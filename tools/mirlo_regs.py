@@ -119,7 +119,7 @@ BLOCKS = [
     ]),
     # the monitor (MIRLO_MON: mips_core's MON, the runtime for a game that runs its own libultra)
     ("MONITOR", 0x0D00, [
-        ("ID",    0x00, R,  1, []),                 # 0x4D4F0001 when the core has it
+        ("ID",    0x00, R,  1, []),                 # 0x4D4F0001 when the core has it (bit 7: the ROM's tail in the PSRAM)
         # [0] the game's Cause.IP2 is the line below, not the RSP's own; [1] that line
         # [2] (MIRLO_MI) the game's IP2 is the MI's line (rtl/soc/rcp_mi.sv), not RCP's
         # [3] (MIRLO_VI) the VI is the hardware's (rtl/soc/rcp_vi.sv): the scan-out's base, gamma and black are its, MI's VI

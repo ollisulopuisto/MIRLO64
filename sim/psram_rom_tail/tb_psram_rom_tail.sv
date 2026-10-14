@@ -6,7 +6,7 @@
 // The bridge / port mux below is a copy of the corresponding lines of mirlo_mips.sv (ROM_TAIL = 1): keep the two alike.
 `timescale 1ns/1ps
 module tb_psram_rom_tail;
-parameter int T_RD = 7, T_WR = 4;
+parameter int T_RD = 7;
 localparam int MIB = 262144;                    // words
 logic clk = 0, rst = 1;
 always #8 clk = ~clk;                           // 62.5 MHz
@@ -71,13 +71,24 @@ wire  [24:0] pd_adr = d_adr;
 logic        ts_rd_ack, ts_rd_sel, ts_wr_ack, ts_ready; logic [31:0] ts_rd_data, pa_dat_sdr;
 wire         ts_hit  = pa_dma && !pa_ai && !pa_si && d_req && !d_we && pd_adr[24] && pd_adr[23:22] == 2'b11;
 wire  [23:0] sdr_adr = pd_adr[24] ? {pd_adr[23:18] + 6'd1, pd_adr[17:0]} : pd_adr[23:0];
-logic [5:0] ts_a; logic [31:0] ts_dq, ts_i_dq; logic ts_dq_oe, ts_adv_n, ts_oe_n, ts_we_n, ts_cre, ts_ce1_n; logic [3:0] ts_bm_n;
-psram_rom_tail #(.T_INIT(40), .T_RD(T_RD), .T_WR(T_WR)) ts (.clk, .rst, .rd_req(ts_hit), .rd_adr(pd_adr[21:0]),
+logic [5:0] ts_a; logic [31:0] ts_dq, ts_i_dq; logic ts_dq_oe, ts_adv_n, ts_oe_n, ts_we_n, ts_cre; logic [1:0] ts_ce_n; logic [3:0] ts_bm_n;
+wire  ts_ce1_n = ts_ce_n[1];
+bit x_stress = 0;                  // the X port asks all the time (a stress of the arbitration; its answers go nowhere)
+logic x_valid, x_we, x_ack, x_ready; logic [21:0] x_addr; logic [31:0] x_wdata, x_rdata; logic [3:0] x_be;
+psram_rom_tail ts (.clk, .rst, .rd_req(ts_hit), .rd_adr(pd_adr[21:0]),
     .wr_req(br_ps_req && !pa_dma), .wr_adr({wishbone_master_adr[21:18] - 4'd1, wishbone_master_adr[17:0]}),
     .wr_data(wishbone_master_dat_w), .wr_sel(wishbone_master_sel), .sdr_rd(p_valid && !p_we),
     .rd_ack(ts_rd_ack), .rd_sel(ts_rd_sel), .rd_data(ts_rd_data), .wr_ack(ts_wr_ack), .ready(ts_ready),
+    .x_valid, .x_we, .x_addr, .x_wdata, .x_be, .x_ack(x_ack && !x_stress), .x_rdata, .x_ready);
+// the display's controller, the only one for both dies (target/pocket/pocket_video_psram.sv), and the display's traffic on die 0
+logic z_valid = 0, z_we = 0, z_last = 0, z_ready, z_rvalid, z_idle, ctl_ready, ts_clk_en; logic [21:0] z_addr = 0; logic [31:0] z_wdata = 0, z_rdata;
+pocket_video_psram #(.T_INIT(40), .X_EN(1'b1), .X_T_RD(T_RD)) ctl (.clk, .rst,
+    .z_valid, .z_ready, .z_we, .z_addr, .z_wdata, .z_wmask(4'hF), .z_last, .z_rvalid, .z_rdata, .z_idle,
+    .x_valid(x_valid || x_stress), .x_we(x_we && !x_stress), .x_addr(x_stress ? 22'h1234 : x_addr), .x_wdata, .x_be, .x_ack, .x_rdata,
+    .cfg(4'b0101), .cfg_wr(1'b0), .ready(ctl_ready), .wait_err(),
     .o_a(ts_a), .o_dq(ts_dq), .o_dq_oe(ts_dq_oe), .o_adv_n(ts_adv_n), .o_oe_n(ts_oe_n), .o_we_n(ts_we_n), .o_cre(ts_cre),
-    .o_ce1_n(ts_ce1_n), .o_bm_n(ts_bm_n), .i_dq(ts_i_dq));
+    .o_ce_n(ts_ce_n), .o_bm_n(ts_bm_n), .o_clk_en(ts_clk_en), .i_dq(ts_i_dq), .i_wait(2'b00));
+assign x_ready = ctl_ready;
 assign pa_ack   = pa_ack_sdr || ts_rd_ack;
 assign pa_dat_r = ts_rd_sel ? ts_rd_data : pa_dat_sdr;
 port_apf pa (.clk, .rst, .cyc(pa_dma ? pd_req && !ts_hit : wishbone_master_cyc && (!br_x || br_rd) && !pa_done), .stb(pa_dma || wishbone_master_stb),
@@ -97,7 +108,7 @@ assign wishbone_master_ack = br_x ? br_ps_ack : pa_ack_sdr && !pa_dma;
 // The pads: 4 ns out of the FPGA's registers, 4 ns back (the input register at the pad: the controller's i_dq).
 logic [31:0] bus_fpga, chip_dq; logic bus_oe, adv_n_c, oe_n_c, we_n_c, ce_n_c, cre_c, chip_drv; logic [5:0] a_c; logic [3:0] bm_c;
 assign #4 bus_fpga = ts_dq;   assign #4 bus_oe = ts_dq_oe;  assign #4 adv_n_c = ts_adv_n; assign #4 oe_n_c = ts_oe_n;
-assign #4 we_n_c = ts_we_n;   assign #4 ce_n_c = ts_ce1_n;  assign #4 cre_c = ts_cre;     assign #4 a_c = ts_a;   assign #4 bm_c = ts_bm_n;
+assign #4 we_n_c = ts_we_n;   assign #4 ce_n_c = ts_ce_n[1];  assign #4 cre_c = ts_cre;     assign #4 a_c = ts_a;   assign #4 bm_c = ts_bm_n;
 logic [15:0] mem0 [int], mem1 [int];            // cram0 (a word's upper half), cram1
 logic [21:0] ch_adr; realtime t_adv_r = 0, t_oe_f = 0, t_we_f = 0; int cfg_writes = 0, mem_writes = 0, bad_timing = 0;
 always @(posedge adv_n_c) if (!ce_n_c) begin
@@ -126,7 +137,69 @@ always begin
     if (!ce_n_c && !oe_n_c && bus_oe && we_n_c && adv_n_c) begin bad_timing++; $display("tb_psram_rom_tail: bus contention at %0t", $time); end
 end
 wire [31:0] pad = bus_oe ? bus_fpga : chip_drv ? chip_dq : 32'hBAD0_BAD0;
-always_ff @(posedge clk) ts_i_dq <= #4 pad;
+logic [31:0] pad_q, d0_dq; logic d0_rd;
+always_ff @(posedge clk) pad_q <= #4 pad;
+assign ts_i_dq = d0_rd ? d0_dq : pad_q;
+
+// ---------------------------------------------------------------- die 0: the display's frame store
+// A cycle model of the controller's burst protocol at its pads (write latency 5, read 4: the data of word i at cycle L + i, back at
+// L + i + 2), a sparse memory, and a master that does the display's bursts (random, within a row) and checks every word it reads.
+int cyc = 0; always @(posedge clk) cyc++;
+logic [31:0] d0mem [int];
+logic        d0_act = 0, d0_cfg = 0, d0_wr = 0; int d0_c = 0, d0_tail = 0, d0_bursts = 0, d0_collisions = 0; logic [21:0] d0_a;
+initial begin d0_rd = 0; d0_dq = 0; end
+function automatic int d0_idx(input logic [21:0] a, input int i); return int'({a[21:7], 7'((int'(a[6:0]) + i) & 127)}); endfunction
+always @(posedge clk) begin
+    logic [31:0] o; int k;
+    if (ts_ce_n == 2'b00 && ctl_ready) d0_collisions++;
+    if (!ts_ce_n[0]) begin
+        if (!d0_act) begin d0_act = 1; d0_c = 0; d0_tail = 0; d0_cfg = ts_cre; d0_wr = !ts_we_n; d0_a = {ts_a, ts_dq[15:0]}; if (!ts_cre) d0_bursts++; end
+        else d0_c++;
+    end else if (d0_act) begin d0_act = 0; d0_tail = 5; d0_c++; end
+    else if (d0_tail > 0) begin d0_tail--; d0_c++; end
+    if ((d0_act || d0_tail > 0) && !d0_cfg && d0_wr && d0_act && d0_c >= 5) begin
+        k = d0_idx(d0_a, d0_c - 5); o = d0mem.exists(k) ? d0mem[k] : 32'h0;
+        for (int b = 0; b < 4; b++) if (!ts_bm_n[b]) o[8*b +: 8] = ts_dq[8*b +: 8];
+        d0mem[k] = o;
+    end
+    d0_rd <= (d0_act || d0_tail > 0) && !d0_cfg && !d0_wr && d0_c + 1 >= 6;
+    k = d0_idx(d0_a, d0_c + 1 - 6);
+    d0_dq <= d0mem.exists(k) ? d0mem[k] : 32'hDEADD0D0;
+end
+function automatic logic [31:0] d0pat(input int unsigned a); return rom_w(a ^ 32'h2A5A5) ^ 32'h0D0D0D0D; endfunction
+logic [31:0] exq [$]; int v_max = 0, v_n = 0, v_sum = 0, v_words = 0;
+always @(posedge clk) if (z_rvalid) begin
+    logic [31:0] e;
+    if (exq.size() == 0) begin errors++; $display("tb_psram_rom_tail: FAIL die 0 read data with no read"); end
+    else begin e = exq.pop_front(); check("die 0 read", z_rdata, e); v_words++; end
+end
+// one burst of the display's: n words at word address a0 (in a row); the stall is the cycles from asking to the first word taken
+task automatic vburst(input bit we, input int unsigned a0, input int n);
+    int i = 0, t0;
+    z_we <= we; z_addr <= a0[21:0]; z_wdata <= d0pat(a0); z_last <= n == 1; z_valid <= 1; t0 = cyc;
+    forever begin
+        @(posedge clk);
+        if (z_ready) begin
+            if (i == 0) begin v_n++; v_sum += cyc - t0; if (cyc - t0 > v_max) v_max = cyc - t0; end
+            if (!we) exq.push_back(d0pat(a0 + i));
+            i++;
+            if (i == n) begin z_valid <= 0; z_last <= 0; break; end
+            z_wdata <= d0pat(a0 + i); z_last <= i == n - 1;
+        end
+    end
+    @(posedge clk);                         // (a request dropped and made again in one cycle is not seen by the sim's scheduler)
+endtask
+bit v_go = 0, v_busy = 0;
+task automatic video_random(input int bursts);
+    for (int k = 0; k < bursts || bursts < 0; k++) begin
+        int off, n; bit we;
+        if (bursts < 0 && !v_go) break;
+        off = $urandom_range(127, 0); n = $urandom_range(128 - off > 64 ? 64 : 128 - off, 1);
+        we = $urandom_range(1, 0);
+        vburst(we, $urandom_range(3, 0) * 128 + off, n);
+        tick($urandom_range(30, 0));
+    end
+endtask
 
 // ---------------------------------------------------------------- the stimuli
 task automatic tick(input int n = 1); repeat (n) @(posedge clk); endtask
@@ -142,10 +215,13 @@ endtask
 task automatic rom_write(input int unsigned w);
     bridge_write(w + MIB, rom_w(w));
 endtask
+int t_max = 0, t_n = 0, t_sum = 0;
 task automatic cart_read(input int unsigned w, output logic [31:0] q);   // the CPU's lw of ROM word w (X_CART's io_*)
+    int lat, t0 = cyc;
     io_adr <= {1'b1, w[23:0]}; io_req <= 1; tick();
     while (!io_ack) tick();
     q = pa_dat_r; io_req <= 0; tick(2);
+    lat = cyc - t0; if (lat > t_max) t_max = lat; t_n++; t_sum += lat;
 endtask
 // a PI copy of n words: a ROM source's address is the ROM's word (src_rom), else the SDRAM's
 task automatic pi_copy(input int unsigned src_w, input bit src_rom, input bit half, input int unsigned dst_w, input int unsigned n);
@@ -157,13 +233,19 @@ task automatic pi_copy(input int unsigned src_w, input bit src_rom, input bit ha
     tick(4);
 endtask
 
-int unsigned wins [8];
+int unsigned wins [8]; int base_max, base_sum, base_n;
 initial begin
     logic [31:0] q;
     tick(4); rst <= 0;
     while (!ts_ready) tick();
     tick(5);
-    check("BCR and RCR written", cfg_writes, 2);
+    check("BCR and RCR written to die 1", cfg_writes, 2);
+    // ---- die 0: the display's frame store: fill 4 rows, then 300 random bursts alone (the baseline of the stall)
+    for (int r = 0; r < 4; r++) begin vburst(1, r * 128, 128); end
+    video_random(300);
+    base_max = v_max; base_sum = v_sum; base_n = v_n; v_max = 0; v_sum = 0; v_n = 0;
+    // ---- and from here on the display's traffic runs alongside everything below
+    v_go = 1; fork video_random(-1); join_none
     // ---- the bridge: ROM windows of 64 words: below the boundary, across it, the tail's start, ROM 55 MiB (the RDRAM's alias in the
     // SDRAM: the bridge writes 56 to 64 MiB there first), 62 MiB, the end, the start, below 48 MiB
     wins[0] = 10*MIB;       wins[1] = 48*MIB - 32;  wins[2] = 48*MIB + 1000; wins[3] = 55*MIB - 32;
@@ -208,7 +290,21 @@ initial begin
     pi_copy(10*MIB + 3, 1'b1, 1'b0, 24'hFC0000, 8);
     for (int j = 0; j < 8; j++) check($sformatf("dma below 48 MiB %0d", j), sdram[24'hFC0000 + j], rom_w(10*MIB + 3 + j));
     check("no timing violations at the pads", bad_timing, 0);
-    $display("tb_psram_rom_tail: %0d checks, %0d psram writes, %0d errors, T_RD=%0d T_WR=%0d: %s", checks, mem_writes, errors, T_RD, T_WR,
+    v_go = 0; tick(400);
+    check("die 0 and die 1 never selected together", d0_collisions, 0);
+    check("every die 0 read answered", exq.size(), 0);
+    $display("tb_psram_rom_tail: display bursts' wait to the first word: alone max %0d avg %0d cycles (%0d bursts); with the tail's traffic max %0d avg %0d (%0d bursts, %0d words read back)",
+             base_max, base_sum / base_n, base_n, v_max, v_sum / v_n, v_n, v_words);
+    // ---- the worst case: the X port asks in every cycle it may, for 60 bursts of the display's
+    v_max = 0; v_sum = 0; v_n = 0; x_stress = 1;
+    video_random(60);
+    x_stress = 0; tick(100);
+    $display("tb_psram_rom_tail: with the X port asking all the time: max %0d avg %0d cycles (%0d bursts)", v_max, v_sum / v_n, v_n);
+    check("the display waits at most one X access more than alone (+ 16 cycles), the X port saturated", v_max <= base_max + 16 ? 1 : 0, 1);
+    $display("tb_psram_rom_tail: the CPU's cart read, request to ack: max %0d avg %0d cycles (%0d reads, display running)", t_max, t_sum / t_n, t_n);
+    check("the display waits at most one X access more than alone (+ 16 cycles)", v_max <= base_max + 16 ? 1 : 0, 1);
+    check("a cart read waits at most one burst (a display burst of 64 words, 5 + 2 per word, and the access) + 40", t_max <= 2*64 + 160 ? 1 : 0, 1);
+    $display("tb_psram_rom_tail: %0d checks, %0d psram writes, %0d errors, T_RD=%0d: %s", checks, mem_writes, errors, T_RD,
              errors == 0 ? "PASS" : "FAIL");
     $finish;
 end

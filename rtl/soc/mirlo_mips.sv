@@ -128,12 +128,14 @@ module mirlo_mips #(
     output wire    [3:0] wishbone_sel,
     output wire          wishbone_stb,
     output wire          wishbone_we,
-    // ROM_TAIL: the pads' registers of PSRAM die 1 (psram_rom_tail.sv; unused, tied off, with ROM_TAIL = 0)
-    output wire   [5:0]  ts_a,
-    output wire   [31:0] ts_dq,
-    output wire          ts_dq_oe, ts_adv_n, ts_oe_n, ts_we_n, ts_cre, ts_ce1_n,
-    output wire   [3:0]  ts_bm_n,
-    input  wire   [31:0] ts_i_dq
+    // ROM_TAIL: the X port of pocket_video_psram (PSRAM die 1's words: psram_rom_tail.sv; 0 / unused with ROM_TAIL = 0)
+    output wire          ts_valid, ts_we,
+    output wire   [21:0] ts_addr,
+    output wire   [31:0] ts_wdata,
+    output wire   [3:0]  ts_be,
+    input  wire          ts_ack,
+    input  wire   [31:0] ts_rdata,
+    input  wire          ts_ready
 );
 
 // ---------------------------------------------------------------- clocks, resets
@@ -371,7 +373,7 @@ logic        fb_dma_enable, fb_vtg_enable, fb_mode, vblank;
 logic        gbc_on, gbc_trust, gbc_start, gbc_we, gbc_busy;
 logic [15:0] gbc_addr;
 logic [7:0]  gbc_wdata, gbc_rdata;
-mirlo_regs regs (.clk, .rst,
+mirlo_regs #(.ROM_TAIL(ROM_TAIL)) regs (.clk, .rst,
     .r_req(bus_r_req || xr_go), .r_we(bus_r_req ? br_we : x_we), .r_addr(bus_r_req ? br_addr : x_addr[15:0]),
     .r_wdata(bus_r_req ? br_wdata : x_wdata), .r_rdata,
     .aud_out(aud_out_r), .aud_wr(aud_wr_r), .aud_playback_en(apf_audio_playback_en),
@@ -576,7 +578,7 @@ wire         pd_req = pa_si ? si_req : pa_ai ? ai_req : d_req;
 wire  [24:0] pd_adr = pa_si ? {1'b0, si_adr} : pa_ai ? {1'b0, ai_adr} : d_adr;
 // ROM_TAIL (psram_rom_tail.sv): bit 24 of the engine's address says the ROM's offset (word) -- its SDRAM place is 1 MiB up, the
 // part from 48 MiB up (the last 16 MiB) is PSRAM die 1's: the engine's reads go there, the bridge's writes of 49 to 65 MiB
-logic        ts_rd_ack, ts_rd_sel, ts_wr_ack, ts_ready;
+logic        ts_rd_ack, ts_rd_sel, ts_wr_ack, ts_ready_i;
 logic [31:0] ts_rd_data, pa_dat_sdr;
 wire         ts_hit  = ROM_TAIL && pa_dma && !pa_ai && !pa_si && d_req && !d_we && pd_adr[24] && pd_adr[23:22] == 2'b11;
 wire  [23:0] sdr_adr = ROM_TAIL && pd_adr[24] ? {pd_adr[23:18] + 6'd1, pd_adr[17:0]} : pd_adr[23:0];
@@ -584,13 +586,12 @@ if (ROM_TAIL) begin : g_ts
     psram_rom_tail ts (.clk, .rst, .rd_req(ts_hit), .rd_adr(pd_adr[21:0]),
         .wr_req(br_ps_req && !pa_dma), .wr_adr({wishbone_master_adr[21:18] - 4'd1, wishbone_master_adr[17:0]}),
         .wr_data(wishbone_master_dat_w), .wr_sel(wishbone_master_sel), .sdr_rd(p_valid[4] && !p_we[4]),
-        .rd_ack(ts_rd_ack), .rd_sel(ts_rd_sel), .rd_data(ts_rd_data), .wr_ack(ts_wr_ack), .ready(ts_ready),
-        .o_a(ts_a), .o_dq(ts_dq), .o_dq_oe(ts_dq_oe), .o_adv_n(ts_adv_n), .o_oe_n(ts_oe_n), .o_we_n(ts_we_n), .o_cre(ts_cre),
-        .o_ce1_n(ts_ce1_n), .o_bm_n(ts_bm_n), .i_dq(ts_i_dq));
+        .rd_ack(ts_rd_ack), .rd_sel(ts_rd_sel), .rd_data(ts_rd_data), .wr_ack(ts_wr_ack), .ready(ts_ready_i),
+        .x_valid(ts_valid), .x_we(ts_we), .x_addr(ts_addr), .x_wdata(ts_wdata), .x_be(ts_be), .x_ack(ts_ack), .x_rdata(ts_rdata),
+        .x_ready(ts_ready));
 end else begin : g_nots
-    assign ts_rd_ack = 1'b0; assign ts_rd_sel = 1'b0; assign ts_wr_ack = 1'b0; assign ts_rd_data = '0; assign ts_ready = 1'b0;
-    assign ts_a = '0; assign ts_dq = '0; assign ts_dq_oe = 1'b0; assign ts_adv_n = 1'b1; assign ts_oe_n = 1'b1; assign ts_we_n = 1'b1;
-    assign ts_cre = 1'b0; assign ts_ce1_n = 1'b1; assign ts_bm_n = '0;
+    assign ts_rd_ack = 1'b0; assign ts_rd_sel = 1'b0; assign ts_wr_ack = 1'b0; assign ts_rd_data = '0; assign ts_ready_i = 1'b0;
+    assign ts_valid = 1'b0; assign ts_we = 1'b0; assign ts_addr = '0; assign ts_wdata = '0; assign ts_be = '0;
 end
 assign pa_ack    = pa_ack_sdr || ts_rd_ack;
 assign pa_dat_r  = ts_rd_sel ? ts_rd_data : pa_dat_sdr;

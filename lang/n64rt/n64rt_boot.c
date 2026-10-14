@@ -406,8 +406,11 @@ static void late_apply(int all)
  * n64rt_boot_rom) or as one game file (tools/make_mirlo_game.py: the port's
  * program and the ROM as block ROM0, the port's Makefile's
  * ROM0@0x100000=<rom.z64>; n64rt_boot_game_file). The ROM is read where
- * that leaves it (layout.h), in the SDRAM: a ROM of up to 48 MiB. Nothing
- * is moved. The port links its boot stack below
+ * that leaves it (layout.h): what the Pocket loaded below 49 MiB is in the
+ * SDRAM, the rest -- a 64 MiB ROM's last 16 MiB, as a ROM file of its own -- in
+ * the PSRAM, where a core with ROM_TAIL (MONITOR.ID bit 7) has the bridge write
+ * it; the game's reads of it are the core's (the cartridge's bus, 0xB000_0000).
+ * Nothing is moved. The port links its boot stack below
  * N64RT_ROM_FILE_OFF (--defsym=_fstack=0x400FFFF0). */
 #define FILE_SDRAM 0x40000000u
 static void no_rom(const char *msg) __attribute__((noreturn));
@@ -424,7 +427,20 @@ static u32 file_word(u32 off)
 }
 u32 n64rt_rom_word(u32 off)
 {
-    return *(const volatile u32 *)(uintptr_t)(n64rt_game->rom_sdram + off);
+    const n64rt_game_t *g = n64rt_game;
+    /* (the ROM's tail is the cartridge's bus to the core: the PI engine reads it from the PSRAM -- the same read as the game's lw) */
+    if (g->rom_tail && off >= g->rom_tail) return *(const volatile u32 *)(uintptr_t)(0xB0000000u + off);
+    return *(const volatile u32 *)(uintptr_t)(g->rom_sdram + off);
+}
+void n64rt_rom_copy(void *dst, u32 off, u32 size)
+{
+    u8 *d = dst;
+    u32 w = 0, have = ~0u;
+    for (u32 i = 0; i < size; i++) {
+        u32 a = off + i;
+        if ((a & ~3u) != have) { have = a & ~3u; w = n64rt_rom_word(have); }
+        d[i] = (u8)(w >> (24u - 8u * (a & 3u)));
+    }
 }
 /* what both ways in begin with */
 static void boot_checks(void)
@@ -438,12 +454,34 @@ static void boot_checks(void)
 /* the ROM is `size` bytes at `off` of what the Pocket loaded */
 static void rom_at(n64rt_game_t *g, u32 off, u32 size)
 {
-    if (off < N64RT_ROM_FILE_OFF || off >= LAYOUT_FILE_SDRAM || (off & 3u) || size < 0x1000u)
-        no_rom("no ROM at 1 MiB of what the Pocket loaded");
-    if (size > LAYOUT_FILE_SDRAM - off) no_rom("ROM exceeds maximum file size of 48 MiB.");
+    if (off < N64RT_ROM_FILE_OFF || off >= LAYOUT_FILE_SDRAM || (off & 3u) || size < 0x1000u || size > N64RT_ROM_MAX)
+        no_rom("no ROM at 1 MiB of what the Pocket loaded, or one of more than 64 MiB");
+    if (size > LAYOUT_FILE_SDRAM - off) {
+        /* more than 48 MiB: the last of it is in the PSRAM, in a core that has it, and only at 1 MiB, where the core's cartridge
+         * reads and the PI engine's DMA expect the ROM (a ROM file of its own: n64rt_boot_rom) */
+        if (!(monitor_id_read() & N64RT_ID_ROM_TAIL) || off != N64RT_ROM_FILE_OFF) no_rom("ROM exceeds maximum file size of 48 MiB.");
+        g->rom_tail = LAYOUT_FILE_SDRAM - off;
+    } else g->rom_tail = 0;
     if (file_word(off) != 0x80371240u) no_rom("the ROM is not a .z64 ROM");
     g->rom_sdram = FILE_SDRAM + off;
     g->rom_size = size;
+#ifdef N64RT_DEBUG
+    if (g->rom_tail) {
+        /* (what a simulation compares with the file: words either side of where the PSRAM's part starts and the last one, and a
+         * copy that starts in the SDRAM and ends in the PSRAM) */
+        const n64rt_game_t *was = n64rt_game;
+        n64rt_game = g;
+        u8 b[16];
+        const u32 t = g->rom_tail, at[4] = { t - 4u, t, t + 0x00800000u, size - 4u };
+        n64rt_rom_copy(b, t - 6u, 16);
+        printf("n64rt: a ROM of %lu bytes, from %08lx on in the PSRAM: words", (unsigned long)size, (unsigned long)t);
+        for (int i = 0; i < 4; i++) if (at[i] < size) printf(" %08lx=%08lx", (unsigned long)at[i], (unsigned long)n64rt_rom_word(at[i]));
+        printf("; bytes at %08lx:", (unsigned long)(t - 6u));
+        for (int i = 0; i < 16; i++) printf(" %02x", b[i]);
+        printf("\n");
+        n64rt_game = was;
+    }
+#endif
 }
 
 void n64rt_boot_game_file(n64rt_game_t *g)
@@ -451,7 +489,7 @@ void n64rt_boot_game_file(n64rt_game_t *g)
     boot_checks();
     u32 fsz = apf_bridge_file_size_read();
     if (fsz < 64u) no_rom("no game file");
-    if (fsz > LAYOUT_FILE_SDRAM) no_rom("ROM exceeds maximum file size of 48 MiB.");
+    if (fsz > LAYOUT_FILE_SDRAM) no_rom("ROM exceeds maximum file size of 48 MiB. (A bigger ROM is a file of its own, not a game file.)");
     u32 ft[8];
     for (u32 i = 0; i < 8u; i++) ft[i] = file_word(fsz - 32u + 4u * i);
     if (memcmp(&ft[4], "MIRLODATA", 10) != 0 || ft[3] != 1u) no_rom("no game file footer");

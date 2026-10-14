@@ -9,8 +9,10 @@
  *
  * The Pocket's bridge (rtl/soc/mirlo_mips.sv) writes what it is given below
  * 49 MiB to the SDRAM at its address and drops what it is given from 49 MiB
- * to 65 MiB (what a ROM has past its first 48 MiB: the runtime refuses such
- * a ROM). The program is loaded at 0 and the ROM at 1 MiB --
+ * to 65 MiB (what a ROM has past its first 48 MiB) to the PSRAM's die 1 in a core
+ * with ROM_TAIL (MONITOR.ID bit 7, rtl/soc/psram_rom_tail.sv; the ROM's offsets
+ * 48 MiB to 64 MiB there, 16 MiB), and drops it in one without (the runtime
+ * refuses such a ROM there). The program is loaded at 0 and the ROM at 1 MiB --
  * as two files, or as a game file with both in it -- so a ROM never reaches
  * the accessories' area: a slot there has, as its address in data.json, its
  * SDRAM address with bit 26 set (LAYOUT_SLOT_BRIDGE), where no ROM is.
@@ -29,7 +31,7 @@
 #define LAYOUT_MARK_OFS     8
 
 #define LAYOUT_FILE_SDRAM   0x03100000      /* what the Pocket loads below this is in the SDRAM where it loads it; */
-#define LAYOUT_FILE_MAX     0x04100000      /* from it up to this the bridge drops what it is given */
+#define LAYOUT_FILE_MAX     0x04100000      /* from it up to this: the PSRAM's (ROM_TAIL), else dropped */
 #define LAYOUT_SLOT_BRIDGE  0x04000000      /* a slot's address in data.json: its SDRAM offset | this */
 
 /* the accessories, the saves and the save-type database, SDRAM 0x4310_0000 - 0x437F_FFFF. 0x4310_0000 -

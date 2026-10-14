@@ -216,6 +216,7 @@ typedef struct {
     u32          cic;               /* 6101..6106: the CIC (osCicId, 0x80000310, is not this number: n64rt_boot.c) */
     const n64rt_patch_t *patches;
     u32          npatches;
+    u32          rom_tail;          /* (set by n64rt_boot_rom) a ROM's offset from which it is in the PSRAM (ROM_TAIL core), or 0 */
     /* the game's own lists of functions in code loaded later and of the boot
      * segment's ways into it (as n64rt_late, n64rt_hooks above; null: those) */
     const n64rt_late_t *late;
@@ -235,12 +236,20 @@ void n64rt_run(const n64rt_game_t *g) __attribute__((noreturn));
  * ROM at N64RT_ROM_FILE_OFF from there, as the block ROM0 of a game file
  * that holds both (n64rt_boot_game_file) or as a file of its own, a .z64 as
  * it is, of rom_size bytes (n64rt_boot_rom). Each sets g->rom_sdram and
- * rom_size, then n64rt_run(g); the port fills in the rest of g.
- * The ROM is read where the Pocket's load leaves it, in the SDRAM, and never
- * moved (lang/mips/include/layout.h): a ROM of up to 48 MiB.
- * n64rt_rom_word() reads a word of it. */
+ * rom_size and rom_tail, then n64rt_run(g); the port fills in the rest of g.
+ * The ROM is read where the Pocket's load leaves it and never moved
+ * (lang/mips/include/layout.h): what lies below 49 MiB from the program's
+ * start is in the SDRAM at its offset, the rest -- the last 16 MiB of a
+ * 64 MiB ROM, a ROM file of its own -- in the PSRAM's die 1, in a core with
+ * ROM_TAIL (MONITOR.ID bit 7), which has the PI engine and the CPU's reads
+ * of the cartridge's bus (0xB000_0000 + the ROM's offset) reach it.
+ * n64rt_game->rom_tail is the ROM offset the PSRAM's part starts at (0:
+ * none); n64rt_rom_word() and n64rt_rom_copy() read the ROM wherever it is. */
 #define N64RT_ROM_FILE_OFF 0x00100000u
+#define N64RT_ROM_MAX      0x04000000u
+#define N64RT_ID_ROM_TAIL  0x80u            /* MONITOR.ID: the core has the ROM's tail in the PSRAM */
 u32  n64rt_rom_word(u32 off);
+void n64rt_rom_copy(void *dst, u32 off, u32 size);
 void n64rt_boot_game_file(n64rt_game_t *g) __attribute__((noreturn));
 
 /* the RDRAM window, as the runtime's native code reaches it */

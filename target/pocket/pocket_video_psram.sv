@@ -28,10 +28,24 @@
 //
 // At reset, wait for power-up, then write die 0's burst-control and
 // refresh registers with CRE high. No asynchronous data accesses are exposed.
+//
+// X_EN (the ROM's tail in die 1: rtl/soc/psram_rom_tail.sv): an X port for single asynchronous word accesses to die 1 (CE1#), which
+// shares every pin but CE# with die 0, so the one state machine does both and they never collide. In S_IDLE the two take turns when
+// both wait: after a burst starts the X port goes first, after an X access the display does. The display waits at most one X
+// access (T_INIT aside: 4 register writes, die 0's and die 1's, at reset); X waits at most one burst (128 words) and its gap.
+// An X access, in cycles of clk from the one that takes it (t = 0: the first cycle the pads show it):
+//   t = 0    CE1# low, ADV# low, A[21:16], the address's low 16 bits on the multiplexed bus
+//   t = 1    ADV# high; a read: the bus released, OE# low;  a write: data and lane enables, WE# low
+//   a write  WE# high at t = 5 (64 ns low, tWP 46 ns), then CE1# high
+//   a read   the pads taken X_T_RD cycles after the address (tAA 70 ns from ADV# rising); x_rdata, x_ack, CE1# high
+//   then two idle cycles (the client drops its request in them). With X_EN = 0 this is all constant 0: the display's own
+//   behavior is the same text as without it.
 `default_nettype none
 
 module pocket_video_psram #(
-    parameter int T_INIT = 12000            // clk cycles before the first access (150 us)
+    parameter int T_INIT = 12000,           // clk cycles before the first access (150 us)
+    parameter bit X_EN   = 1'b0,            // the X port (die 1, asynchronous words)
+    parameter int X_T_RD = 7                // an X read's pads are taken this many cycles after the address
 ) (
     input  wire         clk,
     input  wire         rst,
@@ -46,6 +60,14 @@ module pocket_video_psram #(
     output logic        z_rvalid,
     output wire  [31:0] z_rdata,
     output wire         z_idle,
+    // ---- die 1: single asynchronous words (X_EN; held until x_ack, which comes with a read's data)
+    input  wire         x_valid,
+    input  wire         x_we,
+    input  wire  [21:0] x_addr,             // word
+    input  wire  [31:0] x_wdata,
+    input  wire  [3:0]  x_be,
+    output logic        x_ack,
+    output logic [31:0] x_rdata,
     // ---- settings, state
     input  wire  [3:0]  cfg,                // [1:0] a write's latency adjustment + 1, [3:2] a read's
     input  wire         cfg_wr,             // (written: wait_err is cleared)
@@ -62,6 +84,7 @@ module pocket_video_psram #(
     input  wire  [31:0] i_dq,               // the pads at the last rising edge
     input  wire  [1:0]  i_wait
 );
+localparam logic [15:0] BCR_ASYNC = 16'h9D1F;   // the power-up value: asynchronous
 localparam logic [15:0] BCR_BURST = 16'h641F;   // synchronous, fixed latency code 4, WAIT high during the delay, no wrap, continuous
 localparam logic [15:0] RCR_ALL   = 16'h0010;   // the whole array refreshed, no deep power-down (the power-up value)
 localparam logic [5:0]  A_BCR     = 6'b001000;  // A[19:18] = 10 (the RCR: 00)
@@ -72,8 +95,12 @@ logic [14:0] t;                             // the cycle within an access; the w
 logic [2:0]  ph;                            // a burst's cycle, up to 7
 logic        dir, stop;                     // a burst: a write; nothing more is taken
 logic [6:0]  nxt;                           // a burst: the next word, in its row
-logic        cfg_n;                         // die 0's BCR, then RCR
-wire  [15:0] cfg_val = cfg_n ? RCR_ALL : BCR_BURST;
+logic [1:0]  cfg_n;                         // the registers written so far: die 0's BCR, then RCR (X_EN: BCR die 0, BCR die 1, RCR die 0, RCR die 1)
+wire         cfg_rcr  = X_EN ? cfg_n[1] : cfg_n[0];
+wire         cfg_die1 = X_EN && cfg_n[0];
+wire  [15:0] cfg_val = cfg_rcr ? RCR_ALL : cfg_die1 ? BCR_ASYNC : BCR_BURST;
+logic        a_x, a_wr, x_turn;             // an asynchronous access is the X port's; a write; the X port goes first when both wait
+wire         pick_x = X_EN && x_valid && (!z_valid || x_turn);
 logic [2:0]  rsr;                           // a read word's data is back 3 cycles after its command
 wire  [2:0]  LW = 3'd4 + {1'b0, cfg[1:0]};  // 5 with cfg[1:0] = 1
 wire  [2:0]  LR = 3'd3 + {1'b0, cfg[3:2]};  // 4 with cfg[3:2] = 1
@@ -92,16 +119,17 @@ always_ff @(posedge clk) o_clk_en <= n_ce;
 always_comb begin
     // the chips' clock through the cycle that follows: a burst's latency, and while its words go
     n_ce = 1'b0;
-    if (st == S_IDLE && ready && z_valid) n_ce = 1'b1;
+    if (st == S_IDLE && ready && z_valid && !pick_x) n_ce = 1'b1;
     if (st == S_BURST) n_ce = !run || take;
 end
 
 always_ff @(posedge clk) begin
+    x_ack <= 1'b0;
     rsr <= {rsr[1:0], take && !dir};
     if (cfg_wr) wait_err <= 1'b0;
     else if (rsr[2] && i_wait != 2'b00) wait_err <= 1'b1;
     if (rst) begin
-        st <= S_INIT; t <= '0; ready <= 1'b0; wait_err <= 1'b0; rsr <= '0; cfg_n <= 1'b0;
+        st <= S_INIT; t <= '0; ready <= 1'b0; wait_err <= 1'b0; rsr <= '0; cfg_n <= 2'd0; x_turn <= 1'b0; a_x <= 1'b0; a_wr <= 1'b1;
         o_ce_n <= 2'b11; o_adv_n <= 1'b1; o_oe_n <= 1'b1; o_we_n <= 1'b1; o_cre <= 1'b0; o_dq_oe <= 1'b0;
         o_bm_n <= 4'h0; o_a <= '0; o_dq <= '0;
     end else case (st)
@@ -109,8 +137,9 @@ always_ff @(posedge clk) begin
     S_INIT: begin
         t <= t + 15'd1;
         if (t == 15'(T_INIT)) begin
-            o_ce_n <= 2'b10; o_adv_n <= 1'b0; o_cre <= 1'b1;
-            o_a <= cfg_n ? 6'd0 : A_BCR; o_dq <= {2{cfg_val}}; o_dq_oe <= 1'b1;
+            a_x <= 1'b0; a_wr <= 1'b1;
+            o_ce_n <= cfg_die1 ? 2'b01 : 2'b10; o_adv_n <= 1'b0; o_cre <= 1'b1;
+            o_a <= cfg_rcr ? 6'd0 : A_BCR; o_dq <= {2{cfg_val}}; o_dq_oe <= 1'b1;
             t <= 15'd0; st <= S_ASYNC;
         end
     end
@@ -118,7 +147,13 @@ always_ff @(posedge clk) begin
         t <= 15'd0; ph <= 3'd0;
         o_bm_n <= 4'h0;
         if (!ready) begin st <= S_INIT; t <= 15'(T_INIT); end
-        else if (z_valid) begin
+        else if (pick_x) begin
+            a_x <= 1'b1; a_wr <= x_we; x_turn <= 1'b0;
+            o_ce_n <= 2'b01; o_adv_n <= 1'b0;
+            o_a <= x_addr[21:16]; o_dq <= {2{x_addr[15:0]}}; o_dq_oe <= 1'b1;
+            st <= S_ASYNC;
+        end else if (z_valid) begin
+            x_turn <= 1'b1;
             dir <= z_we; nxt <= z_addr[6:0]; stop <= 1'b0;
             o_ce_n <= 2'b10; o_adv_n <= 1'b0; o_we_n <= !z_we;
             o_a <= z_addr[21:16]; o_dq <= {2{z_addr[15:0]}}; o_dq_oe <= 1'b1;
@@ -148,14 +183,21 @@ always_ff @(posedge clk) begin
     S_ASYNC: begin
         t <= t + 15'd1;
         o_adv_n <= 1'b1;
-        if (t == 15'd1) o_we_n <= 1'b0;
-        if (t == 15'd5) begin o_we_n <= 1'b1; st <= S_AEND; end
+        if (t == 15'd1) begin
+            if (a_wr) begin if (a_x) begin o_dq <= x_wdata; o_bm_n <= ~x_be; end o_we_n <= 1'b0; end
+            else begin o_dq_oe <= 1'b0; o_oe_n <= 1'b0; end
+        end
+        if (a_wr && t == 15'd5) begin o_we_n <= 1'b1; st <= S_AEND; end
+        if (!a_wr && t == 15'(X_T_RD)) begin x_rdata <= i_dq; o_oe_n <= 1'b1; o_ce_n <= 2'b11; st <= S_AEND; end
     end
     S_AEND: begin
         o_ce_n <= 2'b11; o_dq_oe <= 1'b0; o_cre <= 1'b0; o_bm_n <= 4'h0;
-        cfg_n <= 1'b1;
-        if (cfg_n) ready <= 1'b1;
-        st <= S_IDLE;
+        if (a_x) begin x_ack <= 1'b1; t <= 15'd0; st <= S_GAP; end
+        else begin
+            cfg_n <= cfg_n + 2'd1;
+            if (cfg_n == (X_EN ? 2'd3 : 2'd1)) ready <= 1'b1;
+            st <= S_IDLE;
+        end
     end
     default: st <= S_IDLE;
     endcase

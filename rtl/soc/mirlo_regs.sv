@@ -27,7 +27,9 @@
 // its unknown-opcode count, the scan-out's unused LENGTH -- and reads as 0.
 `default_nettype none
 
-module mirlo_regs (
+module mirlo_regs #(
+    parameter bit ROM_TAIL = 1'b0           // MONITOR.ID bit 7: the core has the ROM's last 16 MiB in PSRAM die 1 (psram_rom_tail.sv)
+) (
     input  wire         clk,
     input  wire         rst,
     input  wire         r_req,
@@ -432,7 +434,7 @@ always_ff @(posedge clk) begin
     R_VIDEO_FRAMEBUFFER_ROWWORDS:       r_rdata <= {21'd0, fb_nw};
     R_VIDEO_FRAMEBUFFER_VTG_ENABLE:     r_rdata <= {31'd0, fb_vtg_enable};
     R_VIDEO_FRAMEBUFFER_VTG_MODE:       r_rdata <= {31'd0, fb_mode};
-    R_MONITOR_ID:                       r_rdata <= 32'h4D4F_0000 | 32'(MON_PRESENT) | 32'(MI_PRESENT) << 1 | 32'(PI_PRESENT) << 2 | 32'(VI_PRESENT) << 3 | 32'(AI_PRESENT) << 4 | 32'(SI_PRESENT) << 5 | 32'(PI2_PRESENT) << 6;
+    R_MONITOR_ID:                       r_rdata <= 32'h4D4F_0000 | 32'(MON_PRESENT) | 32'(MI_PRESENT) << 1 | 32'(PI_PRESENT) << 2 | 32'(VI_PRESENT) << 3 | 32'(AI_PRESENT) << 4 | 32'(SI_PRESENT) << 5 | 32'(PI2_PRESENT) << 6 | 32'(ROM_TAIL) << 7;
     R_MONITOR_CTL:                      r_rdata <= {27'd0, mon_ai, mon_vi, mon_mi, mon_rcp, mon_own};
     R_MONITOR_AIRATE:                   r_rdata <= {18'd0, ai_dac};
     R_MONITOR_PI2:                      r_rdata <= {31'd0, d2_flash};

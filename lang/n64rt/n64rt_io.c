@@ -451,7 +451,8 @@ static s32 pi_copy(u32 dev, void *dram, u32 size, s32 dir)
                   (unsigned long)dev, (unsigned long)size);
         return -1;
     }
-    copy_words(d, (const u8 *)(uintptr_t)(n64rt_game->rom_sdram + off), size);
+    if (n64rt_game->rom_tail && off + size > n64rt_game->rom_tail) n64rt_rom_copy(d, off, size);   /* (some of it in the PSRAM) */
+    else copy_words(d, (const u8 *)(uintptr_t)(n64rt_game->rom_sdram + off), size);
     n64rt_late_poll();
     return 0;
 }
@@ -1700,6 +1701,7 @@ static int pi_hw_dma(int rd, u32 dev, u32 pa, u32 size)
 {
     const u32 cpa = dev & 0x1FFFFFFFu, rdram = N64RT_RDRAM_SDRAM + pa;
     u32 src = 0, dst = 0;
+    int rom_src = 0;
     if (size == 0u || (pa & 3u) || pa + size > 0x800000u || (size >> 2) >= (1u << 21) - 1u) goto soft;
     if (cpa >= 0x08000000u && cpa < 0x10000000u) {                   /* domain 2: the save */
         if (!s_pi2_hw) goto soft;
@@ -1711,6 +1713,10 @@ static int pi_hw_dma(int rd, u32 dev, u32 pa, u32 size)
         u32 off = cpa - 0x10000000u;
         if (size > n64rt_game->rom_size || off > n64rt_game->rom_size - size) goto soft;
         src = n64rt_game->rom_sdram + off;
+        if (n64rt_game->rom_tail) {                                  /* a ROM with a tail in the PSRAM: the engine takes the ROM's offset (PISRC bit 25) */
+            if (!s_pi2_hw || n64rt_game->rom_sdram != 0x40100000u) goto soft;
+            rom_src = 1;
+        }
     } else goto soft;
     if (rd) src = rdram; else dst = rdram;
     if ((src & 1u) || (!s_pi2_hw && ((src | size) & 3u))) goto soft;
@@ -1721,7 +1727,8 @@ static int pi_hw_dma(int rd, u32 dev, u32 pa, u32 size)
     }
     monitor_pidst_write((dst - 0x40000000u) >> 2);                    /* (an RDRAM word: 0xE0_0000 + its word, which a core without
                                                                        * PI2 takes as its 21 bits) */
-    monitor_pisrc_write((src - 0x40000000u) >> 2 | ((src >> 1) & 1u) << 24);
+    /* (a ROM source with a tail: the ROM's offset, the 1 MiB below it not counted, and bit 25 says so) */
+    monitor_pisrc_write((src - (rom_src ? 0x40100000u : 0x40000000u)) >> 2 | ((src >> 1) & 1u) << 24 | (rom_src ? 1u << 25 : 0u));
     monitor_pilen_write(s_pi2_hw ? ((size + 3u) >> 2) | (size & 3u) << 22 : size >> 2);
     s_pi_hw_n++;
     if (src & 2u) s_pi_half_n++;
