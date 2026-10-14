@@ -924,7 +924,7 @@ module core_top (
   // ROM_TAIL: the ROM's last 16 MiB (offsets 48 MiB to 64 MiB) in PSRAM die 1 (rtl/soc/psram_rom_tail.sv). The SoC's words reach
   // die 1 through the X port of the display's PSRAM controller (one controller: the dies share the pins). 0: the shipped
   // build (a ROM over 48 MiB is refused by the runtime). 1 needs lang/n64rt's ROM_TAIL (n64rt.h) and the 64 MiB file limit.
-  localparam bit ROM_TAIL = 1'b0;
+  localparam bit ROM_TAIL = 1'b1;
   wire ts_valid, ts_we, ts_ack, ts_ready;
   wire [21:0] ts_addr;
   wire [31:0] ts_wdata, ts_rdata;
