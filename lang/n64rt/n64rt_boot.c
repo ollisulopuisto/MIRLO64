@@ -459,7 +459,11 @@ static void rom_at(n64rt_game_t *g, u32 off, u32 size)
     if (size > LAYOUT_FILE_SDRAM - off) {
         /* more than 48 MiB: the last of it is in the PSRAM, in a core that has it, and only at 1 MiB, where the core's cartridge
          * reads and the PI engine's DMA expect the ROM (a ROM file of its own: n64rt_boot_rom) */
-        if (!(monitor_id_read() & N64RT_ID_ROM_TAIL) || off != N64RT_ROM_FILE_OFF) no_rom("ROM exceeds maximum file size of 48 MiB.");
+        if (!(monitor_id_read() & N64RT_ID_ROM_TAIL) || off != N64RT_ROM_FILE_OFF) {
+            static char m[96];
+            snprintf(m, sizeof m, "ROM exceeds maximum file size of 48 MiB. id %08lx off %08lx", (unsigned long)monitor_id_read(), (unsigned long)off);
+            no_rom(m);
+        }
         g->rom_tail = LAYOUT_FILE_SDRAM - off;
     } else g->rom_tail = 0;
     if (file_word(off) != 0x80371240u) no_rom("the ROM is not a .z64 ROM");
