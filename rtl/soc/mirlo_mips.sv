@@ -582,7 +582,7 @@ logic        ts_rd_ack, ts_rd_sel, ts_wr_ack, ts_ready_i;
 logic [31:0] ts_rd_data, pa_dat_sdr;
 wire         ts_hit  = ROM_TAIL && pa_dma && !pa_ai && !pa_si && d_req && !d_we && pd_adr[24] && pd_adr[23:22] == 2'b11;
 wire  [23:0] sdr_adr = ROM_TAIL && pd_adr[24] ? {pd_adr[23:18] + 6'd1, pd_adr[17:0]} : pd_adr[23:0];
-if (ROM_TAIL) begin : g_ts
+generate if (ROM_TAIL) begin : g_ts
     psram_rom_tail ts (.clk, .rst, .rd_req(ts_hit), .rd_adr(pd_adr[21:0]),
         .wr_req(br_ps_req && !pa_dma), .wr_adr({wishbone_master_adr[21:18] - 4'd1, wishbone_master_adr[17:0]}),
         .wr_data(wishbone_master_dat_w), .wr_sel(wishbone_master_sel), .sdr_rd(p_valid[4] && !p_we[4]),
@@ -592,7 +592,7 @@ if (ROM_TAIL) begin : g_ts
 end else begin : g_nots
     assign ts_rd_ack = 1'b0; assign ts_rd_sel = 1'b0; assign ts_wr_ack = 1'b0; assign ts_rd_data = '0; assign ts_ready_i = 1'b0;
     assign ts_valid = 1'b0; assign ts_we = 1'b0; assign ts_addr = '0; assign ts_wdata = '0; assign ts_be = '0;
-end
+end endgenerate
 assign pa_ack    = pa_ack_sdr || ts_rd_ack;
 assign pa_dat_r  = ts_rd_sel ? ts_rd_data : pa_dat_sdr;
 port_apf pa (.clk, .rst, .cyc(pa_dma ? pd_req && !ts_hit : wishbone_master_cyc && (!br_x || br_rd) && !pa_done), .stb(pa_dma || wishbone_master_stb), .we(pa_dma ? (pa_si ? si_we : d_we && !pa_ai) : wishbone_master_we),
