@@ -112,7 +112,7 @@ module mirlo_regs (
     input  wire  [31:0] mi_w_wd,
     output wire  [31:0] mi_w_rd,
     output wire         d_req, d_we,                 // the PI engine's access to the SDRAM
-    output wire  [23:0] d_adr,
+    output wire  [24:0] d_adr,
     output wire  [3:0]  d_sel,
     output wire  [31:0] d_wdata,
     input  wire  [31:0] d_rdata,
@@ -120,7 +120,7 @@ module mirlo_regs (
     // MIRLO_PI2: the game CPU's word access to the cartridge's bus, done by the PI's engine (rcp_mi.sv); MONITOR.PI2's bit 0:
     // the cartridge's domain 2 is a FlashRAM (its CPU reads are the status word, its writes go nowhere)
     input  wire         io_req, io_we,
-    input  wire  [23:0] io_adr,
+    input  wire  [24:0] io_adr,
     input  wire  [31:0] io_wd,
     output wire         io_ack,
     output logic        d2_flash,
@@ -340,7 +340,7 @@ assign mon_irq = mon_own && ((mon_pend & mon_mask) != 0);
 // the MI, and the PI's engine
 rcp_mi #(.PI(PI_PRESENT), .PI2(PI2_PRESENT)) mi (.clk, .rst, .sp_lvl(mon_sp), .vi_pulse(mon_vi ? vi_irq : mon_field), .vi_clr(vi_clr), .ai_pulse(ai_irq), .ai_clr(ai_clr), .si_pulse(si_irq), .si_clr(si_clr), .dp_pulse(mon_dp),
     .raise_we(wr && a == R_MONITOR_MIRAISE), .clr_we(wr && a == R_MONITOR_MICLR), .csr_bits(r_wdata[5:0]),
-    .dst_we(wr && a == R_MONITOR_PIDST), .src_we(wr && a == R_MONITOR_PISRC), .len_we(wr && a == R_MONITOR_PILEN), .csr_wd(r_wdata[24:0]),
+    .dst_we(wr && a == R_MONITOR_PIDST), .src_we(wr && a == R_MONITOR_PISRC), .len_we(wr && a == R_MONITOR_PILEN), .csr_wd(r_wdata[25:0]),
     .intr(mi_intr), .mask_o(mi_mask), .pi_busy, .pi_cnt,
     .w_mi(mi_w_mi), .w_pi(mi_w_pi), .w_we(mi_w_we), .w_a(mi_w_a), .w_wd(mi_w_wd), .w_rd(mi_w_rd), .line(mi_line),
     .d_req, .d_we, .d_adr, .d_sel, .d_wdata, .d_rdata, .d_ack, .io_req, .io_we, .io_adr, .io_wd, .io_ack);

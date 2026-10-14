@@ -74,7 +74,7 @@ module interact_bridge_test;
         .mrdp_sync_count(32'd0), .mrdp_load_count(32'd0), .mrdp_unknown_ops(16'd0), .mrdp_idle(1'b1),
         .uart_txfull(1'b0), .uart_rx_byte(8'd0), .uart_rxempty(1'b1), .mon_sp(1'b0), .mon_field(1'b0), .mon_dp(1'b0),
         .mi_w_mi(1'b0), .mi_w_pi(1'b0), .mi_w_we(1'b0), .mi_w_a(2'd0), .mi_w_wd(32'd0), .d_rdata(32'd0), .d_ack(1'b0),
-        .io_req(1'b0), .io_we(1'b0), .io_adr(24'd0), .io_wd(32'd0), .vi_irq(1'b0), .vi_chg(1'b0), .vi_clr(1'b0),
+        .io_req(1'b0), .io_we(1'b0), .io_adr(25'd0), .io_wd(32'd0), .vi_irq(1'b0), .vi_chg(1'b0), .vi_clr(1'b0),
         .ai_irq(1'b0), .ai_clr(1'b0), .ai_chg(1'b0), .ai_dac(14'd0), .si_irq(1'b0), .si_clr(1'b0), .si_ev(1'b0),
         .gbc_busy(1'b0), .gbc_rdata(8'd0));
 

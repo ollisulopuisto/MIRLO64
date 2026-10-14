@@ -25,7 +25,8 @@
 
 module mirlo_mips #(
     parameter BOOTROM = `MIPS_INIT_BOOTROM,
-    parameter int SDR_T_INIT = 12600
+    parameter int SDR_T_INIT = 12600,
+    parameter bit ROM_TAIL = 1'b0     // the ROM's last 16 MiB (offsets 48 to 64 MiB) in the PSRAM's die 1: psram_rom_tail.sv (a prototype)
 ) (
     input  wire          altera_reserved_tck,
     input  wire          altera_reserved_tdi,
@@ -126,7 +127,13 @@ module mirlo_mips #(
     input  wire          wishbone_master_we,
     output wire    [3:0] wishbone_sel,
     output wire          wishbone_stb,
-    output wire          wishbone_we
+    output wire          wishbone_we,
+    // ROM_TAIL: the pads' registers of PSRAM die 1 (psram_rom_tail.sv; unused, tied off, with ROM_TAIL = 0)
+    output wire   [5:0]  ts_a,
+    output wire   [31:0] ts_dq,
+    output wire          ts_dq_oe, ts_adv_n, ts_oe_n, ts_we_n, ts_cre, ts_ce1_n,
+    output wire   [3:0]  ts_bm_n,
+    input  wire   [31:0] ts_i_dq
 );
 
 // ---------------------------------------------------------------- clocks, resets
@@ -256,7 +263,8 @@ wire x_d2  = !x_addr[30] && x_addr[28:27] == 2'b01;
 wire x_rom = !x_addr[30] && x_addr[28:26] == 3'b100;
 logic        d2_flash, io_ack;
 logic [31:0] pa_dat_r /*verilator public_flat_rd*/;      // (the bridge's port's read data: below)
-wire  [23:0] io_adr = x_rom ? {x_addr[25:20] + 6'd1, x_addr[19:2]} : d2_flash ? 24'hCD_0040 : {9'h199, x_addr[16:2]};
+// ROM_TAIL: a ROM address is the ROM's own offset (word), bit 24 set: below 48 MiB the SDRAM's (+ 1 MiB, below), above it the PSRAM's
+wire  [24:0] io_adr = x_rom ? (ROM_TAIL ? {1'b1, x_addr[25:2]} : {1'b0, x_addr[25:20] + 6'd1, x_addr[19:2]}) : d2_flash ? 25'h0CD_0040 : {10'h199, x_addr[16:2]};
 logic [31:0] mi_w_rd;
 logic        mi_line, mon_mi;
 logic        vi_line, vi_latch, vi_irq, vi_chg, vi_clr, vi_blk, vi_gm, mon_vi;
@@ -282,7 +290,7 @@ logic [31:0] si_rd, si_q, si_wdata;
 logic        si_irq, si_clr, si_ev, si_done, si_busy, si_req, si_we, si_ack;
 logic [23:0] si_adr;
 logic        d_req, d_we, d_ack;
-logic [23:0] d_adr;
+logic [24:0] d_adr;
 logic [3:0]  d_sel;
 logic [31:0] d_wdata;
 mon_ram monram (.clk, .we(xs == X_MON && x_we), .a(x_addr[10:2]), .wd(x_wdata), .be(x_strb), .rd(mon_rd));
@@ -534,7 +542,7 @@ assign p_urgent[2] = 0;
 // starts, and the save slots of a data.json older than this map (they were
 // at the RDRAM's top) are read back as they were loaded -- with any game that
 // leaves that memory alone.
-logic        pa_ack, pa_done, br_ps_ack, br_ps_ackd;
+logic        pa_ack, pa_ack_sdr, pa_done, br_ps_ack, br_ps_ackd;
 wire  [6:0]  br_mib    = wishbone_master_adr[24:18];
 wire         br_ps     = br_mib[6:4] == 3'd3 ? br_mib[3:0] != 4'd0 : br_mib == 7'h40;      // 0x31 to 0x40
 wire         br_rd     = br_mib[6:3] == 4'b0111;                                           // 0x38 to 0x3F
@@ -565,19 +573,39 @@ assign d_ack  = pa_dma && pa_ack && !pa_ai && !pa_si;
 assign ai_ack = pa_dma && pa_ack && pa_ai;
 assign si_ack = pa_dma && pa_ack && pa_si;
 wire         pd_req = pa_si ? si_req : pa_ai ? ai_req : d_req;
-wire  [23:0] pd_adr = pa_si ? si_adr : pa_ai ? ai_adr : d_adr;
-port_apf pa (.clk, .rst, .cyc(pa_dma ? pd_req : wishbone_master_cyc && (!br_x || br_rd) && !pa_done), .stb(pa_dma || wishbone_master_stb), .we(pa_dma ? (pa_si ? si_we : d_we && !pa_ai) : wishbone_master_we),
-    .adr(pa_dma ? {6'd0, pd_adr} : wishbone_master_adr), .dat_w(pa_dma ? (pa_si ? si_wdata : d_wdata) : wishbone_master_dat_w), .sel(pa_dma ? d_sel : wishbone_master_sel),
-    .ack(pa_ack), .dat_r(pa_dat_r),
+wire  [24:0] pd_adr = pa_si ? {1'b0, si_adr} : pa_ai ? {1'b0, ai_adr} : d_adr;
+// ROM_TAIL (psram_rom_tail.sv): bit 24 of the engine's address says the ROM's offset (word) -- its SDRAM place is 1 MiB up, the
+// part from 48 MiB up (the last 16 MiB) is PSRAM die 1's: the engine's reads go there, the bridge's writes of 49 to 65 MiB
+logic        ts_rd_ack, ts_rd_sel, ts_wr_ack, ts_ready;
+logic [31:0] ts_rd_data, pa_dat_sdr;
+wire         ts_hit  = ROM_TAIL && pa_dma && !pa_ai && !pa_si && d_req && !d_we && pd_adr[24] && pd_adr[23:22] == 2'b11;
+wire  [23:0] sdr_adr = ROM_TAIL && pd_adr[24] ? {pd_adr[23:18] + 6'd1, pd_adr[17:0]} : pd_adr[23:0];
+if (ROM_TAIL) begin : g_ts
+    psram_rom_tail ts (.clk, .rst, .rd_req(ts_hit), .rd_adr(pd_adr[21:0]),
+        .wr_req(br_ps_req && !pa_dma), .wr_adr({wishbone_master_adr[21:18] - 4'd1, wishbone_master_adr[17:0]}),
+        .wr_data(wishbone_master_dat_w), .wr_sel(wishbone_master_sel), .sdr_rd(p_valid[4] && !p_we[4]),
+        .rd_ack(ts_rd_ack), .rd_sel(ts_rd_sel), .rd_data(ts_rd_data), .wr_ack(ts_wr_ack), .ready(ts_ready),
+        .o_a(ts_a), .o_dq(ts_dq), .o_dq_oe(ts_dq_oe), .o_adv_n(ts_adv_n), .o_oe_n(ts_oe_n), .o_we_n(ts_we_n), .o_cre(ts_cre),
+        .o_ce1_n(ts_ce1_n), .o_bm_n(ts_bm_n), .i_dq(ts_i_dq));
+end else begin : g_nots
+    assign ts_rd_ack = 1'b0; assign ts_rd_sel = 1'b0; assign ts_wr_ack = 1'b0; assign ts_rd_data = '0; assign ts_ready = 1'b0;
+    assign ts_a = '0; assign ts_dq = '0; assign ts_dq_oe = 1'b0; assign ts_adv_n = 1'b1; assign ts_oe_n = 1'b1; assign ts_we_n = 1'b1;
+    assign ts_cre = 1'b0; assign ts_ce1_n = 1'b1; assign ts_bm_n = '0;
+end
+assign pa_ack    = pa_ack_sdr || ts_rd_ack;
+assign pa_dat_r  = ts_rd_sel ? ts_rd_data : pa_dat_sdr;
+port_apf pa (.clk, .rst, .cyc(pa_dma ? pd_req && !ts_hit : wishbone_master_cyc && (!br_x || br_rd) && !pa_done), .stb(pa_dma || wishbone_master_stb), .we(pa_dma ? (pa_si ? si_we : d_we && !pa_ai) : wishbone_master_we),
+    .adr(pa_dma ? {6'd0, sdr_adr} : wishbone_master_adr), .dat_w(pa_dma ? (pa_si ? si_wdata : d_wdata) : wishbone_master_dat_w), .sel(pa_dma ? d_sel : wishbone_master_sel),
+    .ack(pa_ack_sdr), .dat_r(pa_dat_sdr),
     .p_valid(p_valid[4]), .p_we(p_we[4]), .p_addr(p_addr[4]), .p_wdata(p_wdata[4]), .p_be(p_be[4]),
     .p_ready(p_ready[4]), .p_rvalid(p_rvalid[4]), .p_rdata);
 always_ff @(posedge clk) begin
-    br_ps_ack  <= br_ps_req;
+    br_ps_ack  <= ROM_TAIL ? ts_wr_ack : br_ps_req;
     br_ps_ackd <= br_ps_ack;
     if (!wishbone_master_cyc) pa_done <= 1'b0;          // (a write to both: the SDRAM has it)
-    else if (pa_ack && !pa_dma && br_x) pa_done <= 1'b1;
+    else if (pa_ack_sdr && !pa_dma && br_x) pa_done <= 1'b1;
 end
-assign wishbone_master_ack   = br_x ? br_ps_ack : pa_ack && !pa_dma;
+assign wishbone_master_ack   = br_x ? br_ps_ack : pa_ack_sdr && !pa_dma;
 assign wishbone_master_dat_r = pa_dat_r;
 assign wishbone_master_err = 1'b0;
 assign p_urgent[4] = 0;
