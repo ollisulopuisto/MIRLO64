@@ -451,29 +451,6 @@ static void boot_checks(void)
     if (*(const volatile u32 *)(uintptr_t)(0xBFC00000u + LAYOUT_MARK_OFS) != LAYOUT_MARK)
         no_rom("This program needs a newer Mirlo core, with its data.json: nothing was started. The saves are as they were.");
 }
-/* ROM_TAIL self-test (fork): the tail is read twice, word by word the way the game's reads are, and the two sums compared; a read
- * that goes wrong now and then (the PSRAM's timing) makes them differ. The result is on the screen for a moment (stops on a mismatch). */
-static u32 tail_sum(const n64rt_game_t *g)
-{
-    u32 s = 0;
-    for (u32 a = g->rom_tail; a < g->rom_size; a += 4u) {
-        u32 w = *(const volatile u32 *)(uintptr_t)(0xB0000000u + a);
-        s = ((s << 5) | (s >> 27)) ^ w;
-        s += a;
-    }
-    return s;
-}
-static void tail_selftest(n64rt_game_t *g)
-{
-    static char m[96];
-    u32 a = tail_sum(g), b = tail_sum(g), c = tail_sum(g);
-    int ok = a == b && b == c;
-    snprintf(m, sizeof m, "ROM TAIL TEST %s sums %08lx %08lx %08lx", ok ? "OK" : "MISMATCH", (unsigned long)a, (unsigned long)b, (unsigned long)c);
-    printf("n64rt: %s\n", m);
-    if (!ok) no_rom(m);
-    notice(N64RT_RDRAM_SDRAM, m);
-    for (volatile u32 i = 0; i < 40000000u; i++) ;
-}
 /* the ROM is `size` bytes at `off` of what the Pocket loaded */
 static void rom_at(n64rt_game_t *g, u32 off, u32 size)
 {
@@ -482,17 +459,12 @@ static void rom_at(n64rt_game_t *g, u32 off, u32 size)
     if (size > LAYOUT_FILE_SDRAM - off) {
         /* more than 48 MiB: the last of it is in the PSRAM, in a core that has it, and only at 1 MiB, where the core's cartridge
          * reads and the PI engine's DMA expect the ROM (a ROM file of its own: n64rt_boot_rom) */
-        if (!(monitor_id_read() & N64RT_ID_ROM_TAIL) || off != N64RT_ROM_FILE_OFF) {
-            static char m[96];
-            snprintf(m, sizeof m, "ROM exceeds maximum file size of 48 MiB. id %08lx off %08lx", (unsigned long)monitor_id_read(), (unsigned long)off);
-            no_rom(m);
-        }
+        if (!(monitor_id_read() & N64RT_ID_ROM_TAIL) || off != N64RT_ROM_FILE_OFF) no_rom("ROM exceeds maximum file size of 48 MiB.");
         g->rom_tail = LAYOUT_FILE_SDRAM - off;
     } else g->rom_tail = 0;
     if (file_word(off) != 0x80371240u) no_rom("the ROM is not a .z64 ROM");
     g->rom_sdram = FILE_SDRAM + off;
     g->rom_size = size;
-    if (g->rom_tail) tail_selftest(g);
 #ifdef N64RT_DEBUG
     if (g->rom_tail) {
         /* (what a simulation compares with the file: words either side of where the PSRAM's part starts and the last one, and a
