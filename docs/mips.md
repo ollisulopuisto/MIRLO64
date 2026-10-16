@@ -311,7 +311,7 @@ The loader then:
 8. Replaces the dividing 64-bit helpers in the boot segment (below).
 9. Reads the save slot's file size, looks the cartridge up in the save-type database, initialises the accessory and
    the audio FIFO, and loads DMEM with the ROM's boot code (ROM `0x40` - `0xFFF`, at the same offsets), as the
-   console's boot leaves it.
+   console's boot leaves it -- or, for a boot code that wipes the RSP's memories, DMEM and IMEM as it leaves them (below).
 10. Turns the pass-through on, sets up the monitor's wake-ups, the VI's window and the AI's default rate, and enters
     the game at its entry point with Status `0x3400_0000` (CU0, CU1, FR, interrupts off), the stack at the top of the
     RDRAM and MCTL.GAME set.
@@ -321,9 +321,9 @@ The loader then:
 | Boot code | Entry point | What is left in memory | `osCicId` |
 |---|---|---|---|
 | 6101, 6102 | the header's | | 0 |
-| 6103 | the header's less `0x10_0000` | ROM `0x4C0` - `0x8BF` at RDRAM 0; DMEM's first word `0xFFFF_FFFF`, IMEM's `0x17D7` | `0x17D7` |
+| 6103 | the header's less `0x10_0000` | ROM `0x4C0` - `0x8BF` at RDRAM 0; DMEM and IMEM all `0xFFFF_FFFF` but IMEM's first word, `0x17D7` | `0x17D7` |
 | 6105 | the header's | the ROM's word at `0x750` at RDRAM `0x2F_E1C0`; DPC_CLOCK reads 0 | `0x17D9` |
-| 6106 | the header's less `0x20_0000` | | 0 |
+| 6106 | the header's less `0x20_0000` | IPL3's second stage at RDRAM 0: ROM `0x4F0` - `0x7AB`, deciphered as IPL3 does it; DMEM and IMEM all `0xFFFF_FFFF` but IMEM's first word, `0x17D8` | `0x17D8` |
 
 One PAL boot code has an entry of its own in the table and is handled as a 6102, as is a boot code the table does not
 know. Software checks these leftovers, so they are part of a valid console.
@@ -543,9 +543,10 @@ The registers at `0x00` - `0x34` are a block RAM of 16 words and read back what 
   field bit alternates and reads only when VI_STATUS has SERRATE set. A write clears the VI interrupt.
 - **VI_V_INTR**: the interrupt rises once a field when the line counter reaches V_INTR / 2. libultra's value 2 is about
   a millisecond ahead of the latch, which is the time the game's retrace handler has to write VI_ORIGIN.
-- **VI_ORIGIN** is the scan-out's base, taken at the frame boundary. For a hi-res interlaced picture whose two fields'
-  origins are one buffer row apart, a write of the base plus one row leaves the base as it is: the frame is both fields,
-  from the lower origin, and the scan-out shows each pair of its rows as one line.
+- **VI_ORIGIN** is the scan-out's base, taken at the frame boundary. A serrated picture (SERRATE with a hi-res WIDTH) is
+  sent a field at a time, each from the origin the game wrote last: libultra's retrace handler writes the origin of the
+  field VI_CURRENT's bit says, as on the console ([resolution.md](resolution.md)). For a hi-res picture that is not
+  serrated, a write of the base plus one buffer row leaves the base as it is.
 - **VI_STATUS**: GAMMA, AA_MODE, DIVOT and the dither filter bit go to the scan-out at the latch.
 - **VI_H_START** written 0 (`osViBlack`) blanks the picture, and so does an origin beyond `MONITOR.VITHR`, the last
   origin at which a picture of the mode's size fits in the RDRAM.
@@ -569,6 +570,15 @@ than 256 words (5.3 ms), so AI_LEN and the interrupts lead the heard audio by th
 phase accumulator in Q16 source frames and one multiplier shared by the two channels:
 `out = prev + ((next - prev) * (phase >> 1) >> 15)`. With nothing to play it writes silence for an eighth of a second to
 hold the FIFO's lead and then stops; the FIFO is primed with silence when the next sound starts.
+
+libultra's audio manager hands a buffer over once a retrace, when the audio task of the retrace before has ended -- after
+the graphics task under way has yielded to it -- and sizes the next by what AI_LEN says is left. A hand-over that comes
+some 4 ms late and is followed by one in time leaves the AI full two retraces on: `osAiSetNextBuffer` returns -1 and a
+manager that does not look at that loses the buffer, and the music jumps ahead. How late a hand-over can be depends on
+how soon the graphics task yields: it yields between two display list commands, not while its microcode waits for the RDP
+to make room in its command buffer, so a slow RDP is a late hand-over ([rdp.md](rdp.md): a row's spans are read and
+written as runs). `tools/ai_pace.py <AILOG>` gives a log's hand-overs a second a line: how late, the retraces without one,
+the buffers of the game's rotation never handed over, and the silence inside the sound.
 
 A write of AI_DACRATE wakes the runtime, which reads it through `MONITOR.AIRATE` and writes back the step,
 `rate * 65536 / 48000` with `rate = osViClock / (DACRATE + 1)` rounded as `osAiSetFrequency` does.
