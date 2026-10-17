@@ -15,8 +15,8 @@
         "height": 240,
         "aspect_w": 10,
         "aspect_h": 9,
-        "dock_aspect_w": 4,
-        "dock_aspect_h": 3,
+        "dock_aspect_w": 16,
+        "dock_aspect_h": 9,
         "rotation": 0,
         "mirror": 0
       },
@@ -25,8 +25,8 @@
         "height": 224,
         "aspect_w": 10,
         "aspect_h": 9,
-        "dock_aspect_w": 4,
-        "dock_aspect_h": 3,
+        "dock_aspect_w": 16,
+        "dock_aspect_h": 9,
         "rotation": 0,
         "mirror": 0
       },
@@ -35,8 +35,8 @@
         "height": 216,
         "aspect_w": 10,
         "aspect_h": 9,
-        "dock_aspect_w": 4,
-        "dock_aspect_h": 3,
+        "dock_aspect_w": 16,
+        "dock_aspect_h": 9,
         "rotation": 0,
         "mirror": 0
       },

@@ -48,6 +48,8 @@ specify 4:3 on Dock; slot 7 compensates for its resulting 6:5 pixel aspect.
 Use the ordinary openFPGA display mode when comparing framing: optional
 CRT/LCD filters can impose further scaling restrictions.
 
+**Fork: 16:9 on the Dock.** Slots 1-3 (the native Fill (stretch)) specify 16:9 on Dock (`dock_aspect` in `video.json`; upstream has 4:3 there), so on a 16:9 display Fill (stretch) fills the screen -- the way for games that render a 4:3 picture squeezed for a 16:9 display (Perfect Dark's widescreen option), and a stretched picture for the others. Original, Fit and Overscale stay 4:3 on the Dock; Pocket's own screen is unchanged. No RTL change, so no fit.
+
 Native Fit centres the selected rows inside 640 × 240. Crop Right removes
 two VI samples (one pixel of a 320-wide picture): Fit pads those columns;
 native Stretch extends the retained edge colour without duplicating interior
