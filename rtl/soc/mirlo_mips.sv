@@ -222,7 +222,8 @@ cpu_port #(.PORT(1)) pc (.clk_c(clk_cpu), .rst_c(rst_cpu),
     .p_ready(p_ready[1]), .p_rdata, .rd_next, .rd_next_tag,
     .x_req, .x_we, .x_addr, .x_wdata, .x_strb, .x_ack, .x_rdata, .irq(irq_s), .irq_mon(irq_mon_s));
 assign s_busy = 1'b0;
-assign p_urgent[1] = 0;
+// (the CPU's reads go first, with the RSP's DMA: it waits for each line it misses)
+assign p_urgent[1] = 1;
 
 // the CPU's device port: one access at a time, acknowledged for a cycle (a
 // request still up in the cycle after its ack is the same one: ignored)
@@ -444,11 +445,11 @@ logic [31:0] rsp_r_wdata, rsp_h_rdata;
 logic        dpc_start_we, dpc_end_we, dpc_status_we;      // the writes that reach rdp_dpc: the microcode's (rsp_*) and the CPU's (dpc_h*)
 logic        rsp_dpc_start_we, rsp_dpc_end_we, rsp_dpc_status_we;
 logic [31:0] dpc_wdata, rsp_dpc_wdata, dpc_status, dpc_st_raw;
-logic [23:0] dpc_start, dpc_end, dpc_current;
+logic [23:0] dpc_start, dpc_end, dpc_end_rd, dpc_current;
 logic        dpc_start_ok;
-// (MIRLO_RSP_LANES: 4 or 8 -- rsp.md)
+// (MIRLO_RSP_LANES: 8, or 4 -- rsp.md)
 `ifndef MIRLO_RSP_LANES
-`define MIRLO_RSP_LANES 4
+`define MIRLO_RSP_LANES 8
 `endif
 // (MIRLO_RSP_MULW, with 4 lanes: the multiplies on eight)
 localparam bit RSP_MULW = 1'b1;
@@ -458,10 +459,10 @@ rsp_top #(.LANES(`MIRLO_RSP_LANES), .MULW(RSP_MULW), .DIV_ROM(`MIPS_INIT_RSP_DIV
     .r_valid(rsp_r_valid), .r_we(rsp_r_we), .r_addr(rsp_r_addr), .r_wdata(rsp_r_wdata),
     .r_ready(p_ready[3]), .r_rvalid(p_rvalid[3]), .r_rdata(p_rdata),
     .dpc_start_we(rsp_dpc_start_we), .dpc_end_we(rsp_dpc_end_we), .dpc_status_we(rsp_dpc_status_we), .dpc_wdata(rsp_dpc_wdata),
-    .dpc_start({8'd0, dpc_start}), .dpc_end({8'd0, dpc_end}), .dpc_current({8'd0, dpc_current}), .dpc_status,
+    .dpc_start({8'd0, dpc_start}), .dpc_end({8'd0, dpc_end_rd}), .dpc_current({8'd0, dpc_current}), .dpc_status,
     .dx_addr(dpc_dx_addr), .dx_data(dpc_dx_data),
     .halted(rsp_halted), .unimpl(rsp_unimpl),
-    .tr_e(), .tr_e_pc(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_v(), .tr_vp());
+    .tr_e(), .tr_e_pc(), .tr_e2(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_v(), .tr_vp());
 assign cpu_irq     = mon_own ? (mon_mi ? mi_line : mon_rcp) : (game_irq | rsp_irq);       // (the monitor's: the game's own IP2 is the monitor's line)
 assign mon_sp      = rsp_irq;
 assign p_valid[3]  = rsp_r_valid;
@@ -469,7 +470,9 @@ assign p_we[3]     = rsp_r_we;
 assign p_addr[3]   = 24'hE0_0000 + {3'd0, rsp_r_addr[22:2]};  // 8 MiB of RDRAM at 0x4380_0000
 assign p_wdata[3]  = rsp_r_wdata;
 assign p_be[3]     = 4'hF;
-assign p_urgent[3] = 0;
+// (the RSP's DMA goes first, with the CPU: the microcode waits for each transfer it starts -- a display list's next
+// commands, the vertices, the RDP's commands out -- while the RDP and the scan-out ride out a wait in their buffers)
+assign p_urgent[3] = 1;
 // the RDP's registers and its command fetch: the commands the microcode
 // leaves in RDRAM, into the RDP's command FIFO (the port the geom core pushed its own through)
 logic [20:0] dpc_m_addr;
@@ -486,7 +489,7 @@ assign dpc_wdata     = dpc_h_w ? rx_wdata : rsp_dpc_wdata;
 rcp_dpc_view dpc_view (.clk, .rst, .end_we(dpc_end_we), .status_we(dpc_status_we), .wdata(dpc_wdata), .sync_full(mon_dp),
     .st_raw(dpc_st_raw), .cur(dpc_current), .end_(dpc_end), .start_ok(dpc_start_ok), .st(dpc_status));
 rdp_dpc dpc (.clk, .rst, .start_we(dpc_start_we), .end_we(dpc_end_we), .status_we(dpc_status_we), .wdata(dpc_wdata),
-    .start(dpc_start), .end_(dpc_end), .current(dpc_current), .status(dpc_st_raw),
+    .start(dpc_start), .end_(dpc_end), .end_rd(dpc_end_rd), .current(dpc_current), .status(dpc_st_raw),
     .rdp_busy(cmd_valid || !mrdp_idle),
     .m_valid(p_valid[5]), .m_addr(dpc_m_addr), .m_ready(p_ready[5]), .m_rvalid(p_rvalid[5]), .m_rdata(p_rdata),
     .dx_addr(dpc_dx_addr), .dx_data(dpc_dx_data),
@@ -500,7 +503,7 @@ always_comb
     if (!rx_addr[4]) rsp_x_rdata = rsp_h_rdata;
     else unique case (rx_addr[1:0])
         2'd0: rsp_x_rdata = {8'd0, dpc_start};
-        2'd1: rsp_x_rdata = {8'd0, dpc_end};
+        2'd1: rsp_x_rdata = {8'd0, dpc_end_rd};
         2'd2: rsp_x_rdata = {8'd0, dpc_current};
         default: rsp_x_rdata = dpc_status;
     endcase
@@ -640,7 +643,7 @@ rcp_ai ai (.clk, .rst, .a(x_addr[4:2]), .wd(x_wdata), .wr_s(ai_op && x_we), .rd(
 // ---------------------------------------------------------------- the SI (MIRLO_SI: rcp_si.sv)
 rcp_si si (.clk, .rst, .a(x_addr[4:2]), .wd(x_wdata), .wr_s(si_op && x_we), .rd(si_rd), .clr(si_clr), .irq(si_irq),
     .ca(x_addr[5:2]), .c_wr_s(xs == X_PIF && x_we), .c_wd(x_wdata), .c_q(si_q), .c_busy(si_busy),
-    .done_we(si_done), .ev(si_ev),
+    .done_we(si_done), .done_wd(ai_step_wd[17:0]), .ev(si_ev),          // (the registers' write data, as the AI's step: SIDONE's)
     .req(si_req), .we(si_we), .adr(si_adr), .wdata(si_wdata), .ack(si_ack), .rdata(pa_dat_r));
 assign apf_audio_bus_wr  = aud_wr_r || ai_fw;
 assign apf_audio_bus_out = ai_fw ? ai_fd : aud_out_r;

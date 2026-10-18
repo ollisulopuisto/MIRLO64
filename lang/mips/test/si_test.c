@@ -10,7 +10,7 @@
  *   1  PIF RAM is where the boot ROM's last 64 bytes of its first 2 KiB are: with the pass-through off (MCTL bit 8) the boot
  *      ROM is there, with it on the PIF RAM; the rest of the boot ROM is untouched
  *   2  the registers: reset values, DRAM_ADDR's 8-byte alignment and read-back, the others read 0, the registers repeat
- *      every 0x20 bytes; PIF RAM's 16 words by KSEG1 and KSEG0, word 15's low byte (the PIF's status byte) written 0
+ *      every 0x20 bytes; PIF RAM's 16 words by KSEG1 and KSEG0, word 15's low byte (the PIF's status byte) written 0 but for bit 1
  *   3  WR64B (RDRAM -> PIF RAM), no run flag: STATUS busy while it runs, the PIF RAM right, the interrupt (STATUS bit 12,
  *      MI_INTR's SI bit) at its end, cleared by a write to STATUS; no wake-up of the monitor (PEND bit 4)
  *   4  RD64B (PIF RAM -> RDRAM) at an address that is 8 bytes aligned only: the 64 bytes and not a byte more
@@ -18,11 +18,14 @@
  *   6  the PIF: a WR64B with the run flag sets IO busy and PEND bit 4 at its end (the flag is taken: byte 63 reads 0);
  *      an RD64B then is deferred (DMA busy, nothing moved) until SIDONE; the next RD64B runs the commands again (the
  *      run flag stays: PEND bit 4 at the request), except the first after the run a WR64B made (its replies are there);
- *      a WR64B waits for the PIF too
- *   7  the CPU's access to the PIF RAM while the DMA runs stalls until it is done and reads the data
+ *      a WR64B waits for the PIF too; the challenge's bit (bit 1 of byte 63) is kept and has the PIF answer at once, at the
+ *      end of a WR64B or at a CPU write of the status byte
+ *   7  the CPU's access to the PIF RAM while the DMA runs stalls until it is done and reads the data (the old word before)
  *   8  the game's own loads and stores to the registers and PIF RAM (no entry into the monitor), and the interrupt
  *      reaching its handler (Cause.IP2, MI_INTR, SI_STATUS, cleared by a write to SI_STATUS at once)
  *   9  the PI's engine copying 4096 words (and the AI reading, when there is one) while the SI moves blocks: every word right
+ *  10  the console's time: a WR64B ends some 4,065 cycles after its start; SIDONE's value is how long the read of the PIF's
+ *      commands takes, counted from SIDONE -- for the read after the run a WR64B made, and for a read that runs them again
  * The blocks hold a pseudo-random pattern (lcg). */
 #include <stdint.h>
 #include <generated/csr.h>
@@ -395,17 +398,45 @@ int main(void)
     check("... after SIDONE it went through", cmp_blk(A2, 1u), 0u);
     check("... IO busy clear, the interrupt", SI[6], ST_IRQ);
     SI[6] = 0;
+    /* the challenge's bit (bit 1 of byte 63): the status byte keeps it, and the PIF answers at the end of the WR64B (IO busy,
+     * PEND bit 4); the read after the answer does not run the commands; a CPU write of the status byte with it does the same */
+    monitor_pend_write(0x1F);
+    fill_blk(A1, 2u);
+    SI[0] = A1; SI[4] = 0;
+    si_idle(1000000u);
+    check("WR64B with the challenge's bit: DMA idle, IO busy, the interrupt", SI[6], ST_IO | ST_IRQ);
+    check("... PEND bit 4", monitor_pend_read() & 0x10u, 0x10u);
+    check("... byte 63 keeps the bit", PIF[15] & 0xFFu, 2u);
+    SI[6] = 0;
+    monitor_pend_write(0x10u);
+    PIF[12] = 0x136AF74Cu; PIF[15] = RD(A1)[15] & ~0xFFu;          /* the answer, the bit cleared */
+    monitor_sidone_write(1);
+    sentinel(A4, 16, 0x22000000u);
+    SI[0] = A4; SI[1] = 0;
+    si_idle(1000000u);
+    check("the read after the answer: done at once (the interrupt), IO busy clear", SI[6], ST_IRQ);
+    check("... no run: PEND bit 4 stays down", monitor_pend_read() & 0x10u, 0u);
+    check("... the block has the answer and a status byte of 0", RD(A4)[12] == 0x136AF74Cu && (RD(A4)[15] & 0xFFu) == 0u, 1u);
+    SI[6] = 0;
+    PIF[15] = 0x12345602u;
+    check("a CPU write of the status byte with the challenge's bit: IO busy", SI[6] & ST_IO, ST_IO);
+    check("... PEND bit 4", monitor_pend_read() & 0x10u, 0x10u);
+    check("... the bit kept", PIF[15], 0x12345602u);
+    monitor_pend_write(0x10u);
+    PIF[15] = 0x12345600u;
+    monitor_sidone_write(1);
+    check("... SIDONE: IO busy clear", SI[6] & ST_IO, 0u);
+    check("... no interrupt (no DMA)", SI[6] & ST_IRQ, 0u);
 
     /* 7: the CPU's read of the PIF RAM while the DMA runs */
     fill_blk(A1, 0u);
     for (int i = 0; i < 16; i++) PIF[i] = 0x55555555u;
     SI[0] = A1; SI[4] = 0;
     {
-        uint32_t newv = RD(A1)[7], r[24], bad = 0;
-        for (int k = 0; k < 24; k++) r[k] = PIF[7];
-        for (int k = 0; k < 24; k++) if (r[k] != 0x55555555u && r[k] != newv) bad++;
+        uint32_t newv = RD(A1)[7], r = 0, bad = 0, k;  /* (the words move some 3,800 cycles in: phase 10) */
+        for (k = 0; k < 20000u && (r = PIF[7]) != newv; k++) if (r != 0x55555555u) bad++;
         check("a CPU read of the PIF RAM during the DMA: the old word or the new one", bad, 0u);
-        check("... and the DMA's end is waited for: the last read is the new word", r[23], newv);
+        check("... and the DMA's end is waited for: a read gets the new word", r, newv);
         check("... the DMA is done by then", SI[6] & ST_BUSY, 0u);
     }
     SI[6] = 0;
@@ -472,6 +503,48 @@ int main(void)
         check("... the SI ran at least 10 rounds in it", rounds >= 10u, 1u);
         check("the PI's copy while the SI moves blocks: every word", badpi, 0u);
         if (ai) { volatile uint32_t *aiw = (volatile uint32_t *)0xA4500000u; aiw[2] = 0; check("... and the AI was reading", aiw[1] < 0x4000u, 1u); }
+    }
+
+    /* 10: the console's time */
+    {
+        monitor_pend_write(0x1F);
+        fill_blk(A1, 0u);
+        SI[0] = A1;
+        uint32_t t0 = now();
+        SI[4] = 0;
+        si_idle(1000000u);
+        uint32_t dt = now() - t0;
+        puts_("WR64B: "); puthex(dt); puts_(" cycles\n");
+        check("WR64B: the console's 4,065 cycles to its end", dt >= 3900u && dt <= 4600u, 1u);
+        SI[6] = 0;
+        fill_blk(A1, 1u);
+        SI[0] = A1; SI[4] = 0;
+        si_idle(1000000u);
+        SI[6] = 0;
+        monitor_pend_write(0x10u);
+        t0 = now();
+        monitor_sidone_write(30000u);                    /* the commands' time */
+        SI[0] = A4; SI[1] = 0;
+        wait_cycles(20000);
+        check("the read after the run a WR64B made: held while the time runs (DMA busy, no interrupt)", SI[6], ST_BUSY);
+        si_idle(1000000u);
+        dt = now() - t0;
+        puts_("... done "); puthex(dt); puts_(" cycles after SIDONE\n");
+        check("... done at the time SIDONE said", dt >= 30000u && dt <= 31500u, 1u);
+        check("... the block is the PIF RAM", cmp_blk(A4, 0u), 0u);
+        SI[6] = 0;
+        SI[0] = A2; SI[1] = 0;                           /* the commands run again */
+        for (uint32_t k = 0; k < 100000u && !(monitor_pend_read() & 0x10u); k++) { }
+        monitor_pend_write(0x10u);
+        t0 = now();
+        monitor_sidone_write(20000u);
+        wait_cycles(10000);
+        check("a read that runs the commands again: held after SIDONE while its time runs", SI[6], ST_BUSY);
+        si_idle(1000000u);
+        dt = now() - t0;
+        puts_("... done "); puthex(dt); puts_(" cycles after SIDONE\n");
+        check("... done at the time SIDONE said", dt >= 20000u && dt <= 21500u, 1u);
+        SI[6] = 0;
     }
 
     puts_("entries "); puthex(mr[2]); puts_(" (the monitor was not to be entered by the SI), last cause "); puthex(mr[4]); puts_("\n");

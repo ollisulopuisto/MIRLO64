@@ -6,11 +6,21 @@
 // As the N64's: a write of START is held (start_valid) until the next write
 // of END, which makes CURRENT = START and sets END; while commands are still
 // being fetched that pair waits (end_valid) for them. A write of END alone
-// extends the run. CURRENT moves as commands are fetched.
+// extends the run. CURRENT moves as commands are fetched. An END written in
+// the cycle a waiting pair would start (the list before it just fetched)
+// starts the pair with that END, and clears end_valid: left set, the pair
+// started a second time when that list ended, CURRENT back at START and the
+// ring's first commands, which a microcode writing a ring in DMEM may have
+// overwritten by then, fetched again. Reads still under way (an END moved
+// back behind them) keep a pair waiting until they are in.
 //
 // With XBUS set (DPC_STATUS) the commands are in the RSP's DMEM instead, and
 // START, END and CURRENT are addresses in it: they are read from the RSP's
 // copy of DMEM for the RDP (rsp_top's dx port), a word a cycle.
+//
+// A read of START or END is the last value written, a pair waiting included (end_rd; START is that already); CURRENT is the
+// transfer under way. A microcode that begins its output where the RDP's list ends (a task or a microcode that starts while the
+// RDP still has a list) takes DPC_END, and with the END of the list under way it would write over what the waiting pair is to run.
 `default_nettype none
 
 module rdp_dpc (
@@ -19,6 +29,7 @@ module rdp_dpc (
     input  wire         start_we, end_we, status_we,
     input  wire  [31:0] wdata,
     output logic [23:0] start, end_, current,
+    output wire  [23:0] end_rd,             // what a read of DPC_END gives: the last value written (a pair waiting has its END here)
     output logic [31:0] status,
     input  wire         rdp_busy,           // the RDP has commands to do
     // the N64's memory: 32-bit words, in order
@@ -54,6 +65,7 @@ logic        x_rv;
 wire         rv = xbus ? x_rv : m_rvalid;
 wire  [31:0] rd = xbus ? dx_data : m_rdata;
 
+assign end_rd  = end_valid ? end_pend : end_;
 assign c_valid = qn != 0;
 assign c_data  = q[qr[1:0]];
 assign m_valid = want && !xbus;
@@ -81,8 +93,8 @@ always_ff @(posedge clk) begin
         if (start_we) begin start <= {wdata[23:3], 3'd0}; start_valid <= 1; end
         if (end_we) begin
             if (!start_valid) end_ <= {wdata[23:3], 3'd0};
-            else if (busy) begin end_pend <= {wdata[23:3], 3'd0}; end_valid <= 1; end
-            else begin current <= start; fp <= start[23:2]; end_ <= {wdata[23:3], 3'd0}; start_valid <= 0; end
+            else if (busy || out != 0) begin end_pend <= {wdata[23:3], 3'd0}; end_valid <= 1; end
+            else begin current <= start; fp <= start[23:2]; end_ <= {wdata[23:3], 3'd0}; start_valid <= 0; end_valid <= 0; end
         end else if (end_valid && !busy && out == 0) begin
             current <= start; fp <= start[23:2]; end_ <= end_pend; start_valid <= 0; end_valid <= 0;
         end
