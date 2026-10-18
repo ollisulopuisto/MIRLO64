@@ -1498,6 +1498,52 @@ void n64rt_ri_hist_log(void)
     for (u32 i = 0; i < RI_HIST; i++) { s_ri_n[i] = 0; s_ri_pc[i] = 0; }
 }
 #endif
+/* what emulate_fpu64 does (by the encoding alone) */
+static int fpu64_insn(u32 i)
+{
+    u32 fmt = (i >> 21) & 31u, fn = i & 63u;
+    if ((i >> 26) != 0x11u) return 0;
+    return fmt == 0x01u || fmt == 0x05u || (fmt == 0x15u && (fn == 0x20u || fn == 0x21u)) ||
+           ((fmt == 0x10u || fmt == 0x11u) && ((fn >= 0x08u && fn <= 0x0Bu) || fn == 0x25u));
+}
+/* After one of the FPU's 64-bit instructions done for the game, the instructions from `next`: while the next 64-bit one
+ * is at most four simple ones on -- a nop, mtc1, mfc1, lwc1 / swc1 of the game's RDRAM in KSEG0 -- they are done here
+ * too, on the context as the CPU would do them, and the 64-bit one after them. Returns where the game goes on: the
+ * first instruction not done. */
+static u32 fpu64_chain(n64rt_ctx_t *x, u32 next)
+{
+    for (int k = 0; k < 6; k++) {
+        u32 w[5], n = 0, p = next;
+        for (; n < 5u; n++, p += 4u) {                  /* the simple ones, up to the 64-bit one */
+            if (!insn_at(p, &w[n])) return next;
+            u32 i = w[n], op = i >> 26, fmt = (i >> 21) & 31u;
+            if (i == 0u) continue;
+            if (op == 0x11u && (fmt == 0u || fmt == 4u) && (i & 0x7FFu) == 0u) continue;          /* mfc1, mtc1 */
+            if (op == 0x31u || op == 0x39u) continue;                                               /* lwc1, swc1 */
+            break;
+        }
+        if (n == 5u || !fpu64_insn(w[n])) return next;
+        for (u32 j = 0; j < n; j++) {                   /* (the addresses: before anything is done, an lwc1's base may be */
+            u32 i = w[j], op = i >> 26;                 /*  an mfc1's register -- then it is not done) */
+            if (op != 0x31u && op != 0x39u) continue;
+            u32 b = (i >> 21) & 31u, ea = g32(x, b) + (u32)(s32)(s16)i;
+            for (u32 m = 0; m < j; m++) if ((w[m] >> 26) == 0x11u && !((w[m] >> 23) & 1u) && ((w[m] >> 16) & 31u) == b) return next;
+            if ((ea >> 29) != 4u || (ea & 0x1FFFFFFFu) >= n64rt_game->mem_size || (ea & 3u)) return next;
+        }
+        for (u32 j = 0; j < n; j++) {
+            u32 i = w[j], op = i >> 26, rt = (i >> 16) & 31u, fs = (i >> 11) & 31u;
+            if (i == 0u) continue;
+            if (op == 0x11u) { if ((i >> 23) & 1u) x->fpr[fs] = g32(x, rt); else w64(x, rt, (u64)(s64)(s32)x->fpr[fs]); }
+            else {
+                volatile u32 *a = (volatile u32 *)(uintptr_t)(g32(x, (i >> 21) & 31u) + (u32)(s32)(s16)i);
+                if (op == 0x31u) x->fpr[rt] = *a; else *a = x->fpr[rt];
+            }
+        }
+        emulate_fpu64(x, w[n]);
+        next = p + 4u;
+    }
+    return next;
+}
 static int emulate_64(n64rt_ctx_t *x, u32 cause)
 {
     u32 bd = cause >> 31, pc = x->epc + (bd ? 4u : 0u), next = pc + 4u;
@@ -1527,19 +1573,15 @@ static int emulate_64(n64rt_ctx_t *x, u32 cause)
         if (!emulate_fpu64(x, insn)) return 0;
         /* The compiler's conversions between a 64-bit integer and a float (libultra's __ll_to_d, __f_to_ll ...) are two of
          * these in a row -- dmtc1 / jr ra / cvt.d.l in its delay slot, or trunc.l.s / dmfc1 -- and some games call them
-         * a hundred times a field: the ones behind this one -- a nop or two between them, as hand-written code has them
-         * (dmtc1 / nop / cvt.s.l) -- or the one in the delay slot of the `jr ra` behind it, are done on the same entry. */
+         * a hundred times a field: the one in the delay slot of the `jr ra` behind this one is done on the same entry, and
+         * so are the ones a few instructions on, when what is between them is a nop, an mtc1 / mfc1 or an lwc1 / swc1 of
+         * the RDRAM (fpu64_chain): a game's own loop has its dmtc1 and cvt.s.l a load or a move apart, two entries an
+         * iteration otherwise. */
         if (!bd) {
             u32 n1, n2;
             const u32 ra = g32(x, 31);
-            for (int k = 0; k < 4; k++) {
-                u32 p = next;
-                if (!insn_at(p, &n1)) break;
-                for (int z = 0; z < 2 && n1 == 0u; z++) { p += 4u; if (!insn_at(p, &n1)) { n1 = 0u; break; } }
-                if ((n1 >> 26) == 0x11u && emulate_fpu64(x, n1)) { next = p + 4u; continue; }
-                if (p == next && n1 == 0x03E00008u && insn_at(next + 4u, &n2) && (n2 >> 26) == 0x11u && emulate_fpu64(x, n2)) next = ra;
-                break;
-            }
+            if (insn_at(next, &n1) && n1 == 0x03E00008u && insn_at(next + 4u, &n2) && (n2 >> 26) == 0x11u && emulate_fpu64(x, n2)) next = ra;
+            else next = fpu64_chain(x, next);
         }
         break;
     case 0x18: case 0x19: w64(x, rt, r64(x, rs) + (u64)(s64)imm); break;                             /* daddi(u) */

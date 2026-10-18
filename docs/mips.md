@@ -408,7 +408,10 @@ functions return so), and whose address is one of these registers, each a copy o
 The base register is read, and a load's result written, through two jump tables indexed by the register number.
 Anything else falls through to the full path at the point it is found to be different, with nothing of the game's
 changed. A second fast path does the game's `tlbr`, `tlbp` and the `tlbwi` that changes no translation, with seven of
-the game's registers saved in the context for the work.
+the game's registers saved in the context for the work. A third does the FPU's `dmtc1` and `cvt.s.l` (Reserved
+Instructions on this CPU, below), with five registers saved: a game's own loop can run the pair hundreds of times a
+field (a 64-bit sum of squares taken to a float for its square root), and the full path costs some 600 cycles an
+entry where this one costs about 120.
 
 **The full path** saves the game's registers at 64 bits, HI and LO, FCSR and the 32 FPU registers, and calls
 `n64rt_mon_exception` on a stack of the runtime's:
@@ -493,7 +496,9 @@ loads and stores, and the FPU's `dmfc1`, `dmtc1`, conversions from `.l` and the 
 `.l` (a 64-bit integer is an FPU register pair; the arithmetic is the FPU's single precision). An entry costs far
 more than the instruction it stands for, which matters for code that divides in a loop. A compiler's conversions
 between a 64-bit integer and a float are two of the FPU's in a row (`dmtc1` and `cvt.d.l`, or `trunc.l.s` and
-`dmfc1`): the second, behind the first or in the delay slot of the `jr ra` behind it, is done on the same entry.
+`dmfc1`): the second, in the delay slot of the `jr ra` behind the first, is done on the same entry, and so is the next
+one of them when only a nop, `mtc1`, `mfc1`, or an `lwc1` / `swc1` of the game's RDRAM is between (those are done on
+the context too).
 
 A compiler's 64-bit support routines are such code: `__ull_div`, `__ll_mod` and the others are each a pair of `ld`, one
 64-bit instruction and a return. `lang/n64rt/n64rt_llsigs.h` has their instruction words as the IDO 5.3 compiler makes
