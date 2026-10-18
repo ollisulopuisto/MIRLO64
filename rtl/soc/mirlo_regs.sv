@@ -68,7 +68,8 @@ module mirlo_regs (
     output logic [7:0]  fb_y0,          // the picture's window and steps in the VI's frame (rtl/soc/n64_video.sv)
     output logic [8:0]  fb_rows,
     output logic [9:0]  fb_px0, fb_pw,
-    output logic [10:0] fb_xs, fb_ys, fb_nw,
+    output logic [10:0] fb_xs, fb_nw,
+    output logic [11:0] fb_ys,
     output logic        fb_tall,        // (WIDTH's bit 17, unused)
     output logic        fb_gamma,       // (WIDTH's bit 16) the scan-out's gamma correction
     output logic        fb_pal,         // (WIDTH's bit 18) the TV system before the game programs the VI's V_SYNC: 1 PAL (the ROM's region)
@@ -113,6 +114,7 @@ module mirlo_regs (
     output wire  [31:0] mi_w_rd,
     output wire         d_req, d_we,                 // the PI engine's access to the SDRAM
     output wire  [23:0] d_adr,
+    output wire         d_ps,                        // the engine's read is the PSRAM's (a 64 MiB ROM's last 16 MiB: rcp_mi.sv)
     output wire  [3:0]  d_sel,
     output wire  [31:0] d_wdata,
     input  wire  [31:0] d_rdata,
@@ -121,9 +123,12 @@ module mirlo_regs (
     // the cartridge's domain 2 is a FlashRAM (its CPU reads are the status word, its writes go nowhere)
     input  wire         io_req, io_we,
     input  wire  [23:0] io_adr,
+    input  wire         io_ps,
     input  wire  [31:0] io_wd,
     output wire         io_ack,
     output logic        d2_flash,
+    // the PSRAMs (psram.sv) are set up -- MONITOR.ID bit 8
+    input  wire         ps_ready,
     // MIRLO_VI: the VI in hardware (rcp_vi.sv; MONITOR.CTL bit 3 takes the scan-out and the MI's VI from it)
     output logic        mon_vi,
     output logic [16:0] vi_thr,
@@ -274,7 +279,7 @@ assign fb_length = 32'd0;
 always_ff @(posedge clk)
     if (rst) begin fb_base <= 32'h40C0_0000;
         fb_dma_enable <= 0; fb_vtg_enable <= 0; fb_mode <= 0; fb_width <= 0; fb_gamma <= 0; fb_tall <= 0; fb_pal <= 0;
-        fb_y0 <= 0; fb_rows <= 0; fb_px0 <= 0; fb_pw <= 10'd640; fb_xs <= 11'h200; fb_ys <= 11'h400; fb_nw <= 11'd170; end
+        fb_y0 <= 0; fb_rows <= 0; fb_px0 <= 0; fb_pw <= 10'd640; fb_xs <= 11'h200; fb_ys <= 12'h400; fb_nw <= 11'd170; end
     else if (wr) case (a)
         R_VIDEO_FRAMEBUFFER_DMA_BASE:   fb_base <= r_wdata;
         R_VIDEO_FRAMEBUFFER_DMA_ENABLE: fb_dma_enable <= r_wdata[0];
@@ -283,7 +288,7 @@ always_ff @(posedge clk)
         R_VIDEO_FRAMEBUFFER_WIDTH:      begin fb_width <= r_wdata[11:0]; fb_gamma <= r_wdata[16]; fb_tall <= r_wdata[17]; fb_pal <= r_wdata[18]; end
         R_VIDEO_FRAMEBUFFER_WINDOW:     begin fb_y0 <= r_wdata[15:8]; fb_rows <= r_wdata[24:16]; end
         R_VIDEO_FRAMEBUFFER_HWINDOW:    begin fb_px0 <= r_wdata[9:0]; fb_pw <= r_wdata[25:16]; end
-        R_VIDEO_FRAMEBUFFER_SCALE:      begin fb_xs <= r_wdata[10:0]; fb_ys <= r_wdata[26:16]; end
+        R_VIDEO_FRAMEBUFFER_SCALE:      begin fb_xs <= r_wdata[10:0]; fb_ys <= r_wdata[27:16]; end
         R_VIDEO_FRAMEBUFFER_ROWWORDS:   fb_nw <= r_wdata[10:0];
         default: ;
     endcase
@@ -315,6 +320,9 @@ localparam int VI_PRESENT = MI_PRESENT;
 localparam int AI_PRESENT = MI_PRESENT;
 localparam int SI_PRESENT = MI_PRESENT;
 localparam int PI2_PRESENT = PI_PRESENT;
+// (MONITOR.ID bit 7) a ROM's first 32 MiB in the PSRAM, at the bridge's address mod 32 MiB, the rest in the SDRAM: the engine
+// (PISRC bit 25: the PSRAM's) and the game CPU's reads of the cartridge reach them (rcp_mi.sv, mirlo_mips.sv)
+localparam int ROM64_PRESENT = PI2_PRESENT;
 localparam int MON_PRESENT = 1;
 logic sp_d, tick_d;
 always_ff @(posedge clk) begin
@@ -338,12 +346,12 @@ end
 assign mon_irq = mon_own && ((mon_pend & mon_mask) != 0);
 
 // the MI, and the PI's engine
-rcp_mi #(.PI(PI_PRESENT), .PI2(PI2_PRESENT)) mi (.clk, .rst, .sp_lvl(mon_sp), .vi_pulse(mon_vi ? vi_irq : mon_field), .vi_clr(vi_clr), .ai_pulse(ai_irq), .ai_clr(ai_clr), .si_pulse(si_irq), .si_clr(si_clr), .dp_pulse(mon_dp),
+rcp_mi #(.PI(PI_PRESENT), .PI2(PI2_PRESENT), .ROM64(ROM64_PRESENT)) mi (.clk, .rst, .sp_lvl(mon_sp), .vi_pulse(mon_vi ? vi_irq : mon_field), .vi_clr(vi_clr), .ai_pulse(ai_irq), .ai_clr(ai_clr), .si_pulse(si_irq), .si_clr(si_clr), .dp_pulse(mon_dp),
     .raise_we(wr && a == R_MONITOR_MIRAISE), .clr_we(wr && a == R_MONITOR_MICLR), .csr_bits(r_wdata[5:0]),
-    .dst_we(wr && a == R_MONITOR_PIDST), .src_we(wr && a == R_MONITOR_PISRC), .len_we(wr && a == R_MONITOR_PILEN), .csr_wd(r_wdata[24:0]),
+    .dst_we(wr && a == R_MONITOR_PIDST), .src_we(wr && a == R_MONITOR_PISRC), .len_we(wr && a == R_MONITOR_PILEN), .csr_wd(r_wdata[25:0]),
     .intr(mi_intr), .mask_o(mi_mask), .pi_busy, .pi_cnt,
     .w_mi(mi_w_mi), .w_pi(mi_w_pi), .w_we(mi_w_we), .w_a(mi_w_a), .w_wd(mi_w_wd), .w_rd(mi_w_rd), .line(mi_line),
-    .d_req, .d_we, .d_adr, .d_sel, .d_wdata, .d_rdata, .d_ack, .io_req, .io_we, .io_adr, .io_wd, .io_ack);
+    .d_req, .d_we, .d_adr, .d_ps, .d_sel, .d_wdata, .d_rdata, .d_ack, .io_req, .io_we, .io_adr, .io_ps, .io_wd, .io_ack);
 
 assign ai_step_we = wr && a == R_MONITOR_AIRATE;     // (MIRLO_AI: the runtime's resampler step, rcp_ai.sv)
 assign ai_step_wd = r_wdata[19:0];
@@ -428,11 +436,11 @@ always_ff @(posedge clk) begin
     R_VIDEO_FRAMEBUFFER_WIDTH:          r_rdata <= {12'd0, tv_pal, fb_pal, fb_tall, fb_gamma, 4'd0, fb_width};
     R_VIDEO_FRAMEBUFFER_WINDOW:         r_rdata <= {7'd0, fb_rows, fb_y0, 8'd0};
     R_VIDEO_FRAMEBUFFER_HWINDOW:        r_rdata <= {6'd0, fb_pw, 6'd0, fb_px0};
-    R_VIDEO_FRAMEBUFFER_SCALE:          r_rdata <= {5'd0, fb_ys, 5'd0, fb_xs};
+    R_VIDEO_FRAMEBUFFER_SCALE:          r_rdata <= {4'd0, fb_ys, 5'd0, fb_xs};
     R_VIDEO_FRAMEBUFFER_ROWWORDS:       r_rdata <= {21'd0, fb_nw};
     R_VIDEO_FRAMEBUFFER_VTG_ENABLE:     r_rdata <= {31'd0, fb_vtg_enable};
     R_VIDEO_FRAMEBUFFER_VTG_MODE:       r_rdata <= {31'd0, fb_mode};
-    R_MONITOR_ID:                       r_rdata <= 32'h4D4F_0000 | 32'(MON_PRESENT) | 32'(MI_PRESENT) << 1 | 32'(PI_PRESENT) << 2 | 32'(VI_PRESENT) << 3 | 32'(AI_PRESENT) << 4 | 32'(SI_PRESENT) << 5 | 32'(PI2_PRESENT) << 6;
+    R_MONITOR_ID:                       r_rdata <= 32'h4D4F_0000 | 32'(MON_PRESENT) | 32'(MI_PRESENT) << 1 | 32'(PI_PRESENT) << 2 | 32'(VI_PRESENT) << 3 | 32'(AI_PRESENT) << 4 | 32'(SI_PRESENT) << 5 | 32'(PI2_PRESENT) << 6 | 32'(ROM64_PRESENT) << 7 | 32'(ps_ready) << 8;
     R_MONITOR_CTL:                      r_rdata <= {27'd0, mon_ai, mon_vi, mon_mi, mon_rcp, mon_own};
     R_MONITOR_AIRATE:                   r_rdata <= {18'd0, ai_dac};
     R_MONITOR_PI2:                      r_rdata <= {31'd0, d2_flash};

@@ -243,26 +243,59 @@ int n64rt_sp_mem(u32 off, u32 *v, int write)
     __asm__ volatile("mtc0 %0, $12\n\tnop\n\tnop" :: "r"(m));
     return 1;
 }
+/* What a CIC-6105 boot leaves in the RSP's registers. The PIF's code runs a program on the RSP (IPL3 starts it and goes on) that
+ * ends with a few registers holding words of IPL3 and a checksum in a vector register; the same boot microcode every 6105 game
+ * has, run at the start of its first graphics task, compares them (r4, r5, r6, r11 and the sum of v13's eight lanes) and DMEM's
+ * first halfword with what a console has, and by the outcome sets or clears signal 7 and writes two of its own words over its
+ * first two in the game's copy: a jump past the check for every task after, or -- the outcome of an RSP that was not so left,
+ * as this one is after reset -- a jump to code that, at every task's start, writes the RDP's DPC_END with what it read of
+ * DPC_CLOCK (0 for the RSP here) and so spoils a list the RDP is still taking. The same state is left here by a program of
+ * its own, run once: r4 = IPL3's first word (ROM 0x40), r6 an `addiu t1, t1, 4` of it (ROM 0x520), r5 an address in
+ * 0x4C000..0x4FFFF, r11 0x3D8, v13's lanes adding up to -7510. */
+static void rsp_ipl_state(volatile u32 *t)
+{
+    static const u32 prog[] = {
+        0x3C0403A0u, 0x34844820u,          /* lui r4, 0x03A0; ori r4, r4, 0x4820 */
+        0x3C050004u, 0x34A5C000u,          /* lui r5, 0x0004; ori r5, r5, 0xC000 */
+        0x3C062529u, 0x34C60004u,          /* lui r6, 0x2529; ori r6, r6, 0x0004 */
+        0x340B03D8u,                       /* ori r11, zero, 0x03D8 */
+        0x3401E2AAu,                       /* ori r1, zero, 0xE2AA */
+        0x48816800u,                       /* mtc2 r1, v13[0] */
+        0x34010000u,                       /* ori r1, zero, 0 */
+        0x0000000Du, 0u };                 /* break */
+    const u32 n = sizeof prog / sizeof prog[0];
+    for (u32 k = 0; k < n; k++) t[k] = prog[k];
+    dma_in(0x1000u, N64RT_PHYS(t), n * 4u);
+    SP_PC = 0u;
+    SP_STATUS = SP_CLR_BROKE | SP_CLR_SSTEP | SP_CLR_HALT;
+    for (u32 i = 0; !(SP_STATUS & SP_ST_HALT) && i < 1000000u; i++) ;
+    SP_STATUS = SP_CLR_BROKE;
+    for (u32 k = 0; k < n; k++) t[k] = 0u;          /* (IMEM as it was: nothing in it) */
+    dma_in(0x1000u, N64RT_PHYS(t), n * 4u);
+    SP_PC = 0u;
+}
 void n64rt_gfx_init(void)
 {
 #ifndef N64RT_OWN
     s_spw = (volatile u32 *)(uintptr_t)N64RT_K1(n64rt_rdram_alloc(8));
 #endif
     /* DMEM as IPL3 leaves it: itself, from the cartridge's 0x40 on (the PIF's
-     * ROM put it there to run it) */
+     * ROM put it there to run it), unless it wipes it (below) */
     if (n64rt_game && n64rt_game->rom_size >= 0x1000u) {
         volatile u32 *t = (volatile u32 *)(uintptr_t)N64RT_K1(n64rt_game->mem_size > 0x2000u ? n64rt_game->mem_size - 0x1000u : 0x1000u);
-        const u32 *rom = (const u32 *)(uintptr_t)n64rt_game->rom_sdram;
         u32 keep[0x400];
-        for (u32 k = 0; k < 0x400u; k++) { keep[k] = t[k]; t[k] = k >= 0x10u ? rom[k] : 0u; }
-        /* (a CIC-6103 console's first words of DMEM and IMEM as its boot
-         * leaves them: Banjo-Kazooie looks at both before it copies its RSP
-         * boot code out of the cartridge, and without that code its first
-         * task never ends) */
-        if (n64rt_game->cic == 6103u) t[0] = 0xFFFFFFFFu;
+        /* (the 6103's and the 6106's IPL3 end by filling both memories with
+         * 0xFFFFFFFF and writing their osCicId into IMEM's first word: games
+         * look at the first words of DMEM and IMEM -- one copies its RSP boot
+         * code out of the cartridge only if they are so, and without that
+         * code its first task never ends; another, finding anything else,
+         * never starts its game) */
+        const u32 fill = n64rt_game->cic == 6103u || n64rt_game->cic == 6106u;
+        for (u32 k = 0; k < 0x400u; k++) { keep[k] = t[k]; t[k] = fill ? 0xFFFFFFFFu : k >= 0x10u || n64rt_game->cic == 6105u ? n64rt_rom_word(4u * k) : 0u; }
         dma_in(0u, N64RT_PHYS(t), 0x1000u);
+        if (fill) { t[0] = n64rt_cic_id(n64rt_game->cic); dma_in(0x1000u, N64RT_PHYS(t), 0x1000u); }
+        if (n64rt_game->cic == 6105u) rsp_ipl_state(t);
         for (u32 k = 0; k < 0x400u; k++) t[k] = keep[k];
-        if (n64rt_game->cic == 6103u) { u32 v = 0x000017D7u; n64rt_sp_mem(0x1000u, &v, 1); }
     }
 #ifndef N64RT_OWN
     s_hdr = n64rt_rdram_alloc(sizeof(OSTask));

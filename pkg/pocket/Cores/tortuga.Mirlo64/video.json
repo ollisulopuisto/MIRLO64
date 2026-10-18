@@ -12,6 +12,14 @@
       },
       {
         "width": 640,
+        "height": 480,
+        "aspect_w": 4,
+        "aspect_h": 3,
+        "rotation": 0,
+        "mirror": 0
+      },
+      {
+        "width": 640,
         "height": 240,
         "aspect_w": 10,
         "aspect_h": 9,
@@ -61,28 +69,15 @@
         "mirror": 0
       },
       {
-        "width": 460,
-        "height": 207,
+        "width": 588,
+        "height": 240,
         "aspect_w": 10,
         "aspect_h": 9,
-        "dock_aspect_w": 4,
-        "dock_aspect_h": 3,
-        "rotation": 0,
-        "mirror": 0
-      },
-      {
-        "width": 400,
-        "height": 360,
-        "aspect_w": 10,
-        "aspect_h": 9,
-        "dock_aspect_w": 4,
-        "dock_aspect_h": 3,
+        "dock_aspect_w": 11,
+        "dock_aspect_h": 9,
         "rotation": 0,
         "mirror": 0
       }
-    ],
-    "display_modes": [
-      { "id": "0x10" }
     ]
   }
 }

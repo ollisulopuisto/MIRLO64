@@ -274,7 +274,9 @@ module core_top (
   assign port_tran_sd            = 1'bz;
   assign port_tran_sd_dir        = 1'b0;  // SD is input and not used
 
-  // Unused memory interfaces (the PSRAM pads are connected below).
+  // tie off the rest of the pins we are not using
+  // (the PSRAMs: rtl/soc/psram.sv, the SoC's -- a ROM's first 32 MiB)
+
   // assign dram_a                  = 'h0;
   // assign dram_ba                 = 'h0;
   // assign dram_dq                 = {16{1'bZ}};
@@ -828,10 +830,10 @@ module core_top (
   // The RAM address the core programmed, as a bridge address (apf_wishbone_master
   // maps bridge 0 to SDRAM 0x4000_0000). A CSR the CPU writes before the
   // request, so it is stable when core_bridge_cmd samples it (clk_74a and
-  // clk_sys are asynchronous groups in core_constraints.sdc). From 49 MiB up
-  // with bit 26 set: there the bridge's plain addresses are a game file's end,
-  // which is not the SDRAM's (rtl/soc/mirlo_mips.sv, the bridge's map).
-  wire ram_data_high = ram_data_address[25:24] == 2'b11 && ram_data_address[23:20] != 4'd0;
+  // clk_sys are asynchronous groups in core_constraints.sdc). From 1 MiB up
+  // with bit 26 set: there the bridge's plain addresses are a ROM's, which is
+  // not at that address in the SDRAM (rtl/soc/mirlo_mips.sv, the bridge's map).
+  wire ram_data_high = ram_data_address[25:20] != 6'd0;
   assign target_dataslot_bridgeaddr = {5'h0, ram_data_high, ram_data_address[25:0]};
 
   // Only the request and its type are synchronised. The slot, offset and length are
@@ -981,7 +983,7 @@ module core_top (
       // The SoC has interact words 0-21 (the layout lists are 16-20, the actions 21). Pocket-only
       // settings (word 22 onwards) are not passed to it.
       .apf_interact_wr(interact_wr && interact_addr < 6'd22),
-      .video_x(video_x), .video_y(video_y), .video_w(video_w), .video_h(video_h),
+      .video_x(video_x), .video_y(video_y), .video_w(video_w), .video_h(video_h), .video_woven(video_woven), .video_ann(video_ann),
 
       .apf_rtc_date_bcd(rtc_date_bcd_s),
       .apf_rtc_time_bcd(rtc_time_bcd_s),
@@ -1043,6 +1045,10 @@ module core_top (
       .sdram_dm(dram_dqm),
       .sdram_dq(dram_dq),
       .sdram_ras_n(dram_ras_n),
+      .cram0_a, .cram0_dq, .cram0_clk, .cram0_adv_n, .cram0_cre, .cram0_ce0_n, .cram0_ce1_n,
+      .cram0_oe_n, .cram0_we_n, .cram0_ub_n, .cram0_lb_n,
+      .cram1_a, .cram1_dq, .cram1_clk, .cram1_adv_n, .cram1_cre, .cram1_ce0_n, .cram1_ce1_n,
+      .cram1_oe_n, .cram1_we_n, .cram1_ub_n, .cram1_lb_n,
       .sdram_we_n(dram_we_n)
   );
 
@@ -1104,6 +1110,7 @@ module core_top (
   wire skip;
   wire [23:0] rgb888;                   // the scan-out's 8:8:8 (rtl/soc/n64_video.sv)
   wire [9:0] video_x, video_y, video_w, video_h;
+  wire video_woven, video_ann;
 
   // Pocket-only setting at bridge 0x10000158 (interact word 22).
   reg [2:0] screen_mode = 0;
@@ -1119,43 +1126,12 @@ module core_top (
 
   assign video_rgb_clock = clk_vid;
   assign video_rgb_clock_90 = clk_vid_90deg;
-  wire display_valid, display_we, display_last, display_ready, display_rvalid;
-  wire display_idle, display_memory_ready;
-  wire [21:0] display_addr;
-  wire [31:0] display_wdata, display_rdata;
-  wire [5:0] ps_a;
-  wire [31:0] ps_dq_o, ps_dq_i;
-  wire ps_dq_oe, ps_adv_n, ps_oe_n, ps_we_n, ps_cre, ps_clk_en;
-  wire [1:0] ps_ce_n, ps_wait;
-  wire [3:0] ps_bm_n;
-  pocket_video_psram display_ram (
-      .clk(clk_sys), .rst(reset),
-      .z_valid(display_valid), .z_ready(display_ready), .z_we(display_we),
-      .z_addr(display_addr), .z_wdata(display_wdata), .z_wmask(4'hf), .z_last(display_last),
-      .z_rvalid(display_rvalid), .z_rdata(display_rdata), .z_idle(display_idle),
-      .cfg(4'b0101), .cfg_wr(1'b0), .ready(display_memory_ready), .wait_err(),
-      .o_a(ps_a), .o_dq(ps_dq_o), .o_dq_oe(ps_dq_oe), .o_adv_n(ps_adv_n),
-      .o_oe_n(ps_oe_n), .o_we_n(ps_we_n), .o_cre(ps_cre), .o_ce_n(ps_ce_n),
-      .o_bm_n(ps_bm_n), .o_clk_en(ps_clk_en), .i_dq(ps_dq_i), .i_wait(ps_wait)
-  );
-  pocket_video_psram_phy display_ram_phy (
-      .clk(clk_sys), .clk2x(clk_mem), .o_a(ps_a), .o_dq(ps_dq_o), .o_dq_oe(ps_dq_oe),
-      .o_adv_n(ps_adv_n), .o_oe_n(ps_oe_n), .o_we_n(ps_we_n), .o_cre(ps_cre),
-      .o_ce_n(ps_ce_n), .o_bm_n(ps_bm_n), .clk_en(ps_clk_en), .i_dq(ps_dq_i), .i_wait(ps_wait),
-      .cram0_a, .cram1_a, .cram0_dq, .cram1_dq, .cram0_wait, .cram1_wait,
-      .cram0_clk, .cram1_clk, .cram0_adv_n, .cram1_adv_n, .cram0_cre, .cram1_cre,
-      .cram0_ce0_n, .cram0_ce1_n, .cram1_ce0_n, .cram1_ce1_n,
-      .cram0_oe_n, .cram1_oe_n, .cram0_we_n, .cram1_we_n,
-      .cram0_ub_n, .cram0_lb_n, .cram1_ub_n, .cram1_lb_n
-  );
-  pocket_video video_output (
-      .clk_vid(clk_vid), .rst_vid(video_reset_sync[1]), .clk_sys(clk_sys), .rst_sys(reset),
+  // Screen Size (fork): the scan-out's stream cut to the preset the setting asks for, and the preset announced -- pocket_frame.sv
+  pocket_frame video_output (
+      .clk_vid(clk_vid), .rst_vid(video_reset_sync[1]),
       .screen_mode(screen_mode), .docked(osnotify_docked),
-      .source_x(video_x), .source_y(video_y), .source_w(video_w), .source_h(video_h),
-      .m_valid(display_valid), .m_we(display_we), .m_last(display_last),
-      .m_addr(display_addr), .m_wdata(display_wdata), .m_ready(display_ready),
-      .m_rvalid(display_rvalid), .m_rdata(display_rdata), .m_idle(display_idle),
-      .memory_ready(display_memory_ready),
+      .pic_x(video_x), .pic_y(video_y), .pic_w(video_w), .pic_h(video_h),
+      .woven(video_woven), .ann(video_ann),
       .rgb(rgb888), .de(de), .hs(hsync), .vs(vsync), .skip(skip),
       .video_rgb(video_rgb), .video_de(video_de), .video_hs(video_hs),
       .video_vs(video_vs), .video_skip(video_skip)

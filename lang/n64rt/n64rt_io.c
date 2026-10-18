@@ -89,7 +89,8 @@ static u32 s_vi_width_cur = 320, s_vi_gamma_cur;
  * (i X_SCALE) >> 10 at the window's clock i and its row (j Y_SCALE) >> 10 at its line j, the rows WIDTH pixels apart. The VI's
  * registers as the game wrote them (the software VI) or the hardware's (n64rt_vi_hw_event) are kept here, and given
  * to the scan-out with the field, in `vi_width_gamma`. A hi-res picture (WIDTH 512 or more) has X_SCALE 1.0 and 640 of its
- * pixels a line; an interlaced one (Y_SCALE 2.0, or WIDTH 1280 with 1.0: two rows' pitch) its first field's rows. */
+ * pixels a line; an interlaced one (Y_SCALE 2.0, or WIDTH 1280 with 1.0: two rows' pitch) a field's rows, from the origin the
+ * game wrote for the field (rtl/soc/n64_video.sv: 480i). */
 #include "n64rt_vifit.h"
 static u32 s_vi_l = 240;                /* the mode's window: the lines it shows (V_END - V_START) / 2 */
 static u32 s_vi_ys = 0x400;             /* VI_Y_SCALE's step, 2.10 */
@@ -130,7 +131,7 @@ static u32 vi_pic_bytes(void)
     if (w < 2u) w = 320u;
     vi_window(&px0, &pw, &y0, &rows);
     if (!rows) rows = 240u;
-    u32 ys = s_vi_ys > 0x7FFu ? 0x7FFu : s_vi_ys ? s_vi_ys : 0x400u;
+    u32 ys = s_vi_ys > 0x800u ? 0x800u : s_vi_ys ? s_vi_ys : 0x400u;
     n64rt_vi_fit(y0, rows, ys, &rows, &ys);
     return w * 2u * (((rows * ys) >> 10) + 2u);
 }
@@ -140,7 +141,7 @@ static void vi_width_gamma(void)
     if (w < 2u || w > 4094u) w = 320u;
     vi_window(&px0, &pw, &y0, &rows);
     const u32 xs = s_vi_xs & 0xFFFu ? (s_vi_xs > 0x400u ? 0x400u : s_vi_xs & 0xFFFu) : 0x200u;
-    u32 ys = s_vi_ys > 0x7FFu ? 0x7FFu : s_vi_ys ? s_vi_ys : 0x400u;
+    u32 ys = s_vi_ys > 0x800u ? 0x800u : s_vi_ys ? s_vi_ys : 0x400u;     /* (2.0 at most: a serrated picture's field, every other row) */
     n64rt_vi_fit(y0, rows, ys, &rows, &ys);
     /* the window's last pixel's source pixel, the priming's seven before it (rtl/soc/n64_video.sv NPE - NF), two to a word, and one more */
     const u32 nw = ((((pw - 1u) * xs) >> 10) + 8u) / 2u + 1u;
@@ -451,7 +452,7 @@ static s32 pi_copy(u32 dev, void *dram, u32 size, s32 dir)
                   (unsigned long)dev, (unsigned long)size);
         return -1;
     }
-    copy_words(d, (const u8 *)(uintptr_t)(n64rt_game->rom_sdram + off), size);
+    n64rt_rom_copy(d, off, size);                    /* (through the window: the PSRAM's part and the SDRAM's) */
     n64rt_late_poll();
     return 0;
 }
@@ -761,14 +762,24 @@ static void eep_use(u32 bytes)
 static u32 s_pif_w[16];                 /* (as words: the SI moves it so, and a store is a write to the SDRAM) */
 static u8 *const s_pif = (u8 *)s_pif_w;
 static u8 s_pif_joy;                    /* the block holds commands */
-static void pif_run(void)
+/* How long the console's PIF takes over the block, from the SI's read of it to its interrupt, in RCP cycles (62.5 MHz;
+ * pif_run's value, which the SI in hardware waits out): measured on the console, 15,030 for a block that is only its end
+ * mark, 37,987 for one controller read, 97,890 for four with one controller there -- 13,600, then 1,420 for each byte that
+ * is no command (0x00, 0xFD, 0xFF, the end), 22,000 for a command a device answers, 18,000 for one nothing answers (the
+ * timeout), 20,000 for the cartridge's; a command longer than a controller read's 5 bytes (a pak's block, 36) adds the
+ * joybus's 32 us (2,000) for each byte more. */
+#define PIF_T0    13600u
+#define PIF_TSKIP 1420u
+#define PIF_TCMD(ok, ch, n) (((ch) == 4 ? 20000u : (ok) ? 22000u : 18000u) + ((n) > 5u ? ((n) - 5u) * 2000u : 0u))
+static u32 pif_run(void)
 {
     int ch = 0;
+    u32 t = PIF_T0;
     for (int i = 0; i < 63 && ch < 6; ) {
         u8 tx = s_pif[i];
-        if (tx == 0xFEu) break;
-        if (tx == 0xFFu) { i++; continue; }
-        if (tx == 0x00u || tx == 0xFDu) { ch++; i++; continue; }
+        if (tx == 0xFEu) { t += PIF_TSKIP; break; }
+        if (tx == 0xFFu) { t += PIF_TSKIP; i++; continue; }
+        if (tx == 0x00u || tx == 0xFDu) { t += PIF_TSKIP; ch++; i++; continue; }
         tx &= 0x3Fu;
         s_pif[i + 1] &= 0x3Fu;                       /* (the run before: nothing had answered) */
         u8 rx = s_pif[i + 1];
@@ -820,20 +831,50 @@ static void pif_run(void)
 #endif
         }
         if (!ok) s_pif[i + 1] |= 0x80u;              /* nothing answered */
+        t += PIF_TCMD(ok, ch, (u32)tx + rx);
         i += 2 + tx + rx;
         ch++;
     }
+    return t;
+}
+/* The challenge of a CIC-6105 game (bit 1 of the status byte): the PIF sends the 30 nibbles of bytes 48-62 to the cartridge's
+ * CIC and puts the CIC's answer in their place, a nibble for each, the first nibble the high one; bytes 46 and 47 and the
+ * status byte are left 0. The CIC answers each nibble c with r = key + 5 c (mod 16); the next key is r's entry in one of two
+ * tables, and which table follows depends on r. The game sends the challenge when it chooses and checks the answer itself
+ * (one that gets its own challenge back, unanswered, goes on to fail later). Another CIC answers nothing: the block is left
+ * as it is. */
+static void pif_challenge(void)
+{
+    static const u8 lut[2][16] = {
+        { 0x4, 0x7, 0xA, 0x7, 0xE, 0x5, 0xE, 0x1, 0xC, 0xF, 0x8, 0xF, 0x6, 0x3, 0x6, 0x9 },
+        { 0x4, 0x1, 0xA, 0x7, 0xE, 0x5, 0xE, 0x1, 0xC, 0x9, 0x8, 0x5, 0x6, 0x3, 0xC, 0x9 } };
+    s_pif[63] = 0;
+    if (!n64rt_game || n64rt_game->cic != 6105u) return;
+    u32 key = 0xBu, t = 0;
+    for (u32 i = 0; i < 30u; i++) {
+        u8 *b = &s_pif[48u + i / 2u];
+        const u32 sh = i & 1u ? 0u : 4u, r = (key + 5u * ((*b >> sh) & 0xFu)) & 0xFu;
+        *b = (u8)((*b & ~(0xFu << sh)) | r << sh);
+        key = lut[t][r];
+        const u32 neg = r >> 3, mag = (neg ? ~r : r) & 7u;
+        u32 nt = mag % 3u == 1u ? neg : 1u - neg;
+        if (t && (r == 0x1u || r == 0x9u)) nt = 1;
+        if (t && (r == 0xBu || r == 0xEu)) nt = 0;
+        t = nt;
+    }
+    s_pif[46] = s_pif[47] = 0;
 }
 /* the SI's two transfers of the block: into the PIF, and out of it */
 static void pif_put(const void *b)
 {
     copy_words(s_pif_w, b, 64);
     if (s_pif[63] & 1u) s_pif_joy = 1;
+    if (s_pif[63] & 2u) pif_challenge();
     s_pif[63] = 0;                                   /* (taken: a game that looks finds nothing pending) */
 }
 static void pif_get(void *b)
 {
-    if (s_pif_joy) pif_run();
+    if (s_pif_joy) (void)pif_run();
     copy_words(b, s_pif_w, 64);
 }
 
@@ -912,7 +953,7 @@ static int si_write(u32 pa, u32 v)
     if (s_si_hw && SI_HW_PA(pa)) { hw_wr(pa, v); return 1; }
     if (pa >= PIF_RAM && pa < PIF_RAM + 64u) {
         s_pif_w[(pa - PIF_RAM) >> 2] = v;
-        if (pa == PIF_RAM + 60u) { if (v & 1u) s_pif_joy = 1; s_pif[63] = 0; }
+        if (pa == PIF_RAM + 60u) { if (v & 1u) s_pif_joy = 1; if (v & 2u) pif_challenge(); s_pif[63] = 0; }
         return 1;
     }
     switch (pa) {
@@ -1267,7 +1308,7 @@ static u64 s_field_t0;
  * trap, VI and DP are set by the hardware's own pulses, and the line is the hardware's. What the runtime raises or
  * clears itself it says through MIRAISE / MICLR; a copy of the cartridge's it does not do itself, the engine does.
  * Without them (a core before this, or this one's MI unset) every access is emulated as it was. */
-static u32 s_mi_hw, s_pi_hw, s_pi_hw_n, s_pi_sw_n, s_pi_half_n;
+static u32 s_mi_hw, s_pi_hw, s_pi_hw_n, s_pi_sw_n, s_pi_half_n, s_pi_ps_n, s_rom64_hw;
 /* The AI in hardware (MIRLO_AI, MONITOR.ID bit 4; rtl/soc/rcp_ai.sv; n64rt_ai_hw_event below): the game's accesses to the AI are
  * real bus accesses -- the queue, the reader and the resampler to the Pocket's FIFO are the hardware's, and AI_STATUS clears the
  * MI's AI bit itself -- and the runtime is woken (MONITOR.PEND bit 3) only when AI_DACRATE is written, to give the resampler
@@ -1298,6 +1339,7 @@ void n64rt_mi_init(void)
     s_ai_hw = (id & 16u) != 0u;
     s_si_hw = (id & 32u) != 0u;
     s_pi2_hw = s_pi_hw && (id & 64u) != 0u;
+    s_rom64_hw = s_pi2_hw && (id & 128u) != 0u;
     if (s_pi2_hw && n64rt_game && n64rt_game->rom_sdram != 0x40100000u)
         n64rt_log("n64rt: the ROM is not at 1 MiB: the game's own reads of it (the PI's in hardware) would be wrong\n");
 }
@@ -1306,15 +1348,19 @@ u32 n64rt_vi_hw(void) { return s_vi_hw; }
 u32 n64rt_ai_hw(void) { return s_ai_hw; }
 u32 n64rt_si_hw(void) { return s_si_hw; }
 /* The PIF has commands to run (MONITOR.PEND bit 4: an RD64B of a block that holds them, or the end of a WR64B that carried the run
- * flag): the block is in the PIF RAM -- read it, run the joybus commands on the copy (pif_run, as the software SI's), write back the
- * words they changed, and say the PIF is done: IO busy clears and an RD64B that waited goes on. */
+ * flag or the challenge's bit, or a word write of the status byte with that bit): the block is in the PIF RAM -- read it, run the
+ * joybus commands on the copy (pif_run, as the software SI's) or answer the challenge, write back the words that changed, and say
+ * the PIF is done: IO busy clears, and an RD64B that waited goes on once the console's time for those commands is over (SIDONE's
+ * value: a game whose controller thread polls in a loop must leave its other threads that time; a challenge, 0). */
 void n64rt_si_hw_event(void)
 {
     u32 orig[16];
     for (int i = 0; i < 16; i++) orig[i] = s_pif_w[i] = hw_rd(PIF_RAM + 4u * (u32)i);
-    pif_run();
+    u32 t = 0;
+    if (s_pif[63] & 2u) pif_challenge();             /* (the status byte keeps that bit: a challenge, not commands) */
+    else t = pif_run();
     for (int i = 0; i < 16; i++) if (s_pif_w[i] != orig[i]) hw_wr(PIF_RAM + 4u * (u32)i, s_pif_w[i]);
-    monitor_sidone_write(1);
+    monitor_sidone_write(t < 0x3FFFFu ? t : 0x3FFFFu);
 }
 static void vi_hw_note_origin(void) { if (s_vi_hw) fb_note(hw_rd(0x04400004u)); }
 /* The VI's registers the window and the size come from changed (MONITOR.PEND bit 1, which is no longer a field): read
@@ -1405,8 +1451,8 @@ static void mon_field_log(void)
 {
     if (s_fields % 60u != 0u) return;
     extern u32 n64rt_mon_codes[32], n64rt_mon_epc, n64rt_mon_fast_count(void);
-    n64rt_log("n64rt: MI %s%s, PI DMAs: engine %lu (%lu from a half word), copied %lu; monitor entries on the fast path %lu\n", s_mi_hw ? (s_pi_hw ? "and PI in hardware" : "in hardware") : "emulated",
-              s_vi_hw ? ", VI in hardware" : "", (unsigned long)s_pi_hw_n, (unsigned long)s_pi_half_n, (unsigned long)s_pi_sw_n, (unsigned long)n64rt_mon_fast_count());
+    n64rt_log("n64rt: MI %s%s, PI DMAs: engine %lu (%lu from a half word, %lu from the PSRAM), copied %lu; monitor entries on the fast path %lu\n", s_mi_hw ? (s_pi_hw ? "and PI in hardware" : "in hardware") : "emulated",
+              s_vi_hw ? ", VI in hardware" : "", (unsigned long)s_pi_hw_n, (unsigned long)s_pi_half_n, (unsigned long)s_pi_ps_n, (unsigned long)s_pi_sw_n, (unsigned long)n64rt_mon_fast_count());
     n64rt_log("n64rt: monitor, field %lu: swaps %lu | int %lu sys %lu fpu-ish %lu adel %lu ades %lu tlb %lu ri %lu | MI intr %02lx mask %02lx line %lu sp %lu | game at %08lx\n",
               (unsigned long)s_fields, (unsigned long)n64rt_swaps, (unsigned long)n64rt_mon_codes[31], (unsigned long)n64rt_mon_codes[8], (unsigned long)n64rt_mon_codes[11],
               (unsigned long)n64rt_mon_codes[4], (unsigned long)n64rt_mon_codes[5], (unsigned long)(n64rt_mon_codes[2] + n64rt_mon_codes[3]),
@@ -1691,7 +1737,7 @@ static u32 pi_wr_bytes(u32 pa, u32 len)
     return n <= 126u && n <= 0x800u - (pa & 0x7FFu) ? n : (n + 1u) & ~1u;
 }
 /* A cartridge DMA by the engine, if it can do it (1): words of the SDRAM to words of the SDRAM. Into the RDRAM from the ROM
- * and, with PI2 (MONITOR.ID bit 6), from a cartridge address 2 mod 4,
+ * (MONITOR.ID bit 7: its first 32 MiB from the PSRAM, PISRC bit 25) and, with PI2 (MONITOR.ID bit 6), from a cartridge address 2 mod 4,
  * of any length, and from domain 2 (the save's memory; a FlashRAM's array, or its status words); from the RDRAM into
  * domain 2 (an SRAM, a FlashRAM's page buffer). Without PI2 only whole words, word-aligned at both ends, from the ROM. It
  * ends in the PI interrupt, the engine's. The game's D-cache lines over an RDRAM destination go first: the engine writes
@@ -1699,7 +1745,7 @@ static u32 pi_wr_bytes(u32 pa, u32 len)
 static int pi_hw_dma(int rd, u32 dev, u32 pa, u32 size)
 {
     const u32 cpa = dev & 0x1FFFFFFFu, rdram = N64RT_RDRAM_SDRAM + pa;
-    u32 src = 0, dst = 0;
+    u32 src = 0, dst = 0, ps = 0;
     if (size == 0u || (pa & 3u) || pa + size > 0x800000u || (size >> 2) >= (1u << 21) - 1u) goto soft;
     if (cpa >= 0x08000000u && cpa < 0x10000000u) {                   /* domain 2: the save */
         if (!s_pi2_hw) goto soft;
@@ -1710,7 +1756,12 @@ static int pi_hw_dma(int rd, u32 dev, u32 pa, u32 size)
     } else if (!rd && cpa >= 0x10000000u && cpa < 0x1FC00000u) {    /* the ROM */
         u32 off = cpa - 0x10000000u;
         if (size > n64rt_game->rom_size || off > n64rt_game->rom_size - size) goto soft;
-        src = n64rt_game->rom_sdram + off;
+        /* (the core's own placement, the ROM at 1 MiB: its first 32 MiB in the PSRAM -- the word the SDRAM's would be, its 23
+         * low bits --, the rest in the SDRAM from 1 MiB; a copy across 32 MiB stays the runtime's) */
+        if (!s_rom64_hw || n64rt_game->rom_sdram != 0x40100000u) goto soft;
+        if (off + size <= N64RT_ROM_PSRAM_MAX) { ps = 1u; src = 0x40100000u + off; }
+        else if (off >= N64RT_ROM_PSRAM_MAX) src = 0x40100000u + (off - N64RT_ROM_PSRAM_MAX);
+        else goto soft;
     } else goto soft;
     if (rd) src = rdram; else dst = rdram;
     if ((src & 1u) || (!s_pi2_hw && ((src | size) & 3u))) goto soft;
@@ -1721,10 +1772,11 @@ static int pi_hw_dma(int rd, u32 dev, u32 pa, u32 size)
     }
     monitor_pidst_write((dst - 0x40000000u) >> 2);                    /* (an RDRAM word: 0xE0_0000 + its word, which a core without
                                                                        * PI2 takes as its 21 bits) */
-    monitor_pisrc_write((src - 0x40000000u) >> 2 | ((src >> 1) & 1u) << 24);
+    monitor_pisrc_write((((src - 0x40000000u) >> 2) & 0x00FFFFFFu) | ((src >> 1) & 1u) << 24 | ps << 25);
     monitor_pilen_write(s_pi2_hw ? ((size + 3u) >> 2) | (size & 3u) << 22 : size >> 2);
     s_pi_hw_n++;
     if (src & 2u) s_pi_half_n++;
+    s_pi_ps_n += ps;
     return 1;
 soft:
     s_pi_sw_n++;

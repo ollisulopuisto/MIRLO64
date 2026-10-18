@@ -1,0 +1,131 @@
+// pocket_frame against a model. The input is the scan-out's shape: a field of 240 lines of 640 pixels (two clocks each, the
+// second skipped), VS after the last line, the picture's bounds given, a pixel's colour a function of its place inside them
+// and black outside. Each configuration runs for several frames (the first announces, the next send it).
+#include "Vpocket_frame.h"
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
+#include <algorithm>
+
+struct Cfg { int mode, dock, L, T, W, H, woven; };
+static Vpocket_frame *t;
+static int errs = 0;
+static void tick() { t->clk_vid = 0; t->eval(); t->clk_vid = 1; t->eval(); }
+
+static unsigned colour(int x, int y) { return 0x010101u * (1 + (x * 7 + y * 13) % 250) ^ (unsigned)(x << 12 | y << 4); }
+static bool in_pic(const Cfg &c, int x, int y) { return x >= c.L && x < c.L + c.W && y >= c.T && y < c.T + c.H; }
+static unsigned src(const Cfg &c, int x, int y) { return in_pic(c, x, y) ? (colour(x, y) & 0xffffff) | 0x010101 : 0; }
+
+static int choose(const Cfg &c) {
+    if (c.woven) return 1;
+    switch (c.mode) {
+    case 1: if (c.W >= 638 && c.W <= 640) { if (c.H == 240) return 2; if (c.H == 224) return 3; if (c.H == 216) return 4; } return 0;
+    case 3: if (!c.dock) { if (c.H == 240 && c.W >= 520) return 5; if ((c.H == 224 || c.H == 216) && c.W >= 480) return 6; } return 0;
+    case 4: return c.H == 240 && c.W >= 588 ? 7 : 0;
+    default: return 0;
+    }
+}
+struct Rect { int x0, w, y0, h; };
+static Rect rect(const Cfg &c, int s) {
+    switch (s) {
+    case 3: return { 0, 640, c.T, 224 };
+    case 4: return { 0, 640, c.T, 216 };
+    case 5: return { c.L + (c.W - 520) / 2, 520, c.T + 3, 234 };
+    case 6: return { c.L + (c.W - 480) / 2, 480, c.T + (c.H == 224 ? 4 : 0), 216 };
+    case 7: return { c.L + (c.W - 588) / 2, 588, c.T, 240 };
+    default: return { 0, 640, 0, 240 };
+    }
+}
+
+struct Got { std::vector<std::vector<unsigned>> lines; std::vector<int> words; };
+
+// One frame in; what comes out, with each line's slot word (the word on the first clock after its DE).
+static Got frame(const Cfg &c, int lines = 240, int pxw = 640, bool vblank = true) {
+    Got g; std::vector<unsigned> cur; bool prev_de = false; int word_after = -1;
+    t->screen_mode = c.mode; t->docked = c.dock;
+    t->pic_x = c.L; t->pic_y = c.T; t->pic_w = c.W; t->pic_h = c.H;
+    t->woven = c.woven; t->ann = 0;
+    const int LINE = 1500;
+    for (int y = 0; y < (vblank ? 263 : lines); y++) {
+        for (int k = 0; k < LINE; k++) {
+            const bool act = y < lines && k >= 100 && k < 100 + 2 * pxw;
+            const int px = (k - 100) >> 1;
+            t->de = act; t->skip = act && ((k - 100) & 1) && !c.woven;
+            t->rgb = act ? src(c, px, y) : 0x00aaaa;      // (the scan-out's own word outside DE: not the Pocket's)
+            t->hs = k >= 10 && k < 50;
+            t->vs = y >= 242 && y < 247 && k >= 60 && k < 70;
+            tick();
+            // outputs (registered: one clock behind)
+            const bool de = t->video_de;
+            if (de && (!t->video_skip || c.woven)) cur.push_back(t->video_rgb);
+            if (de && !prev_de) cur.clear(), cur.push_back(t->video_rgb);
+            if (!de && prev_de) { g.lines.push_back(cur); word_after = 1; }
+            else if (word_after == 1 && !de) { g.words.push_back((t->video_rgb >> 13) & 7); word_after = 0; }
+            prev_de = de;
+        }
+    }
+    return g;
+}
+
+static void check(const char *name, const Cfg &c, const Cfg &prev_cfg, bool steady) {
+    // the announcement is for the frame after: this frame is sent as announced by prev (same bounds => right)
+    Got g = frame(c);
+    const int ps = choose(prev_cfg);
+    const Rect r = rect(prev_cfg, ps);
+    const bool same = prev_cfg.L == c.L && prev_cfg.T == c.T && prev_cfg.W == c.W && prev_cfg.H == c.H;
+    const int want_lines = c.woven ? 240 : (ps <= 2 ? 240 : r.h);       // (a woven frame in this model has 240 lines too)
+    if ((int)g.lines.size() != (c.woven ? 240 : want_lines)) { printf("%s: %zu lines, expected %d\n", name, g.lines.size(), want_lines); errs++; return; }
+    if (c.woven) return;
+    for (int j = 0; j < want_lines; j++) {
+        const int w = ps <= 2 ? 640 : r.w;
+        if ((int)g.lines[j].size() != w) { printf("%s: line %d has %zu pixels, expected %d\n", name, j, g.lines[j].size(), w); errs++; return; }
+        for (int i = 0; i < w; i++) {
+            const int sx = (ps <= 2 ? 0 : r.x0) + i, sy = (ps <= 2 ? 0 : r.y0) + j;
+            const unsigned e = same ? src(c, sx, sy) : 0;
+            if (g.lines[j][i] != e) { printf("%s: (%d,%d) got %06x expected %06x\n", name, i, j, g.lines[j][i], e); errs++; return; }
+        }
+    }
+    // the slot words of this frame announce choose(c)
+    for (int w : g.words) if (w != choose(c) && !(steady == false)) { printf("%s: slot word %d, expected %d\n", name, w, choose(c)); errs++; return; }
+    if (g.words.empty()) { printf("%s: no slot words\n", name); errs++; }
+}
+
+static void run(const char *name, const Cfg &c) {
+    frame(c); frame(c);                     // (announces; then sent as announced)
+    check(name, c, c, true);
+    check(name, c, c, true);
+}
+
+int main(int argc, char **argv) {
+    Verilated::commandArgs(argc, argv);
+    t = new Vpocket_frame;
+    t->rst_vid = 1; for (int i = 0; i < 4; i++) tick(); t->rst_vid = 0;
+    for (int i = 0; i < 8; i++) tick();
+    //               mode dock  L  T    W    H woven
+    run("original",   Cfg{0, 0,  0, 0, 640, 240, 0});
+    run("fit",        Cfg{2, 0,  0, 0, 640, 240, 0});
+    run("stretch240", Cfg{1, 0,  0, 0, 640, 240, 0});
+    run("stretch224", Cfg{1, 0,  0, 8, 640, 224, 0});
+    run("stretch216", Cfg{1, 0,  0, 12, 640, 216, 0});
+    run("stretch638", Cfg{1, 0,  2, 0, 638, 240, 0});
+    run("stretch320", Cfg{1, 0,  0, 0, 320, 240, 0});      // (no preset: Original)
+    run("overscale",  Cfg{3, 0,  0, 0, 640, 240, 0});
+    run("overscale-d", Cfg{3, 1,  0, 0, 640, 240, 0});
+    run("overscale224", Cfg{3, 0,  0, 8, 640, 224, 0});
+    run("overscale216", Cfg{3, 0,  0, 12, 640, 216, 0});
+    run("overscale-narrow", Cfg{3, 0,  50, 0, 540, 240, 0});
+    run("hybrid",     Cfg{4, 0,  0, 0, 640, 240, 0});
+    run("hybrid-narrow", Cfg{4, 0,  17, 0, 600, 240, 0});
+    run("hybrid-dock", Cfg{4, 1,  0, 0, 640, 240, 0});
+    run("hybrid-short", Cfg{4, 0,  0, 8, 640, 224, 0});
+    // a change: the first frame of new bounds is black in the old frame's shape, the next is right
+    {
+        Cfg a{3, 0, 0, 0, 640, 240, 0}, b{3, 0, 0, 8, 640, 224, 0};
+        frame(a); frame(a);
+        check("change-a-b", b, a, false);       // announced for a: black
+        check("change-b", b, b, true);         // (announced on b while a's shape was sent: right now)
+    }
+    t->final(); delete t;
+    printf(errs ? "FAILED: %d errors\n" : "pocket_frame: ok\n", errs);
+    return errs != 0;
+}

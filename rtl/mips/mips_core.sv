@@ -174,6 +174,8 @@ module mips_core #(
     // MI: and the cartridge's bus (rtl/soc/rcp_mi.sv's PI2: the PI's engine does the access): domain 2, 0x0800_0000..0x0FFF_FFFF
     // but its 0x0801_xxxx (a FlashRAM's command register: the runtime's), and the ROM, 0x1000_0000..0x12FF_FFFF
     parameter bit PI2W = 0,
+    // PI2W: and the ROM's last 16 MiB too, 0x1300_0000..0x13FF_FFFF (a ROM of up to 64 MiB: mirlo_mips.sv)
+    parameter bit ROM64W = 0,
     // the VR4300's 64-bit integer registers and instructions (see above)
     parameter bit W64 = 1,
     parameter bit W64_ALU = 0,
@@ -456,9 +458,15 @@ function automatic logic [31:0] sx16(input logic [15:0] v); return {{16{v[15]}},
 // at 0x7000_0000 and run from there.)
 // (and 0x5000_0000 - 0x5FFF_FFFF: nothing of this system is there, and a game can map its code
 // there and jump to it. 0x2000_0000 - 0x4FFF_FFFF stay physical: the RSP, the SDRAM.)
+// (and KSEG2, 0xC000_0000 - 0xDFFF_FFFF, and KSEG3 up to 0xEFFF_FFFF, which the VR4300 maps as it maps KUSEG: nothing of
+// this system is there either, and a game can map its memory there -- the RDRAM through 0xE000_0000, its data written and
+// read there byte by byte. 0xF000_0000 - 0xFFFF_FFFF stay physical: the registers, the monitor RAM.)
 localparam bit MAP_HI = TLB_RAM && MON;
+function automatic logic map_hi(input logic [31:0] va);
+    return MAP_HI && (va[31:29] == 3'b011 || va[31:28] == 4'b0101 || va[31:29] == 3'b110 || va[31:28] == 4'b1110);
+endfunction
 function automatic logic kseg01(input logic [31:0] va);
-    return FLAT ? !((TLB_EN || TLB_RAM) && N64WIN && (va[31:29] == 3'b000 || (MAP_HI && (va[31:29] == 3'b011 || va[31:28] == 4'b0101)))) : va[31:30] == 2'b10;
+    return FLAT ? !((TLB_EN || TLB_RAM) && N64WIN && (va[31:29] == 3'b000 || map_hi(va))) : va[31:30] == 2'b10;
 endfunction
 // N64WIN: the N64's RDRAM, through KSEG0 (cached) or KSEG1
 function automatic logic n64win(input logic [31:0] va);
@@ -475,7 +483,7 @@ endfunction
 // an instruction of the N64 game's (fetched from KSEG0's window)
 // (TLB_RAM: and from a page the game mapped)
 function automatic logic n64code(input logic [31:0] pc);
-    return N64WIN && (pc[31:23] == 9'h100 || (TLB_RAM && FLAT && (pc[31:29] == 3'b000 || (MAP_HI && (pc[31:29] == 3'b011 || pc[31:28] == 4'b0101)))));
+    return N64WIN && (pc[31:23] == 9'h100 || (TLB_RAM && FLAT && (pc[31:29] == 3'b000 || map_hi(pc))));
 endfunction
 // a physical address the D-cache may hold (FLAT: pa == va there)
 function automatic logic pa_cached(input logic [31:0] pa);
@@ -1020,7 +1028,7 @@ wire e_misalign = (e_al2 && e_ea[0]) || (e_al4 && e_ea[1:0] != 0) || (e_al8 && e
 wire e_hwx = MI && mon_mi && !e_fexc && !e_misalign && e_ea[31] && !e_ea[30] && (e_c.ld == M_LW || e_c.st == S_SW) &&
              (e_ea[28:20] == 9'h043 || (VIW && e_ea[28:20] == 9'h044) || (AIW && e_ea[28:20] == 9'h045) || (PIW && e_ea[28:20] == 9'h046 && e_ea[19:2] == 18'd4) ||
               (SIW && (e_ea[28:20] == 9'h048 || (e_ea[28:20] == 9'h1FC && e_ea[10:6] == 5'h1F))) ||
-              (PI2W && ((e_ea[28:27] == 2'b01 && !e_ea[16]) || (e_ea[28:26] == 3'b100 && !(e_ea[25] && e_ea[24])))));
+              (PI2W && ((e_ea[28:27] == 2'b01 && !e_ea[16]) || (e_ea[28:26] == 3'b100 && (ROM64W || !(e_ea[25] && e_ea[24]))))));
 // (MCTL bit 10, mon_mem4: a console without the Expansion Pak -- the upper 4 MiB of the window are nothing of the game's either,
 // and the monitor answers as the console does: a game that sizes the memory itself finds 4 MiB)
 wire e_n64dev = e_mem && e_n64c && (!n64win(e_ea) || (MON && mon_mem4 && e_ea[22])) && kseg01(e_ea);   // (a mapped address is the TLB's)
@@ -1375,7 +1383,7 @@ fs_t fs;
 wire f_kseg = kseg01(f_pc);
 wire f_cached = cacheable(f_pc);
 // The page registers (PG): two of the fetch table's pages, the last that a walk found cacheable -- the virtual page
-// (va[29], va[28:12]: a mapped address has va[31] clear and va[30] = va[29]), the entry's global bit and ASID, the
+// (va[31:12]: the mapped ranges differ in all four top bits), the entry's global bit and ASID, the
 // physical page (pa[22:12]: the N64's RDRAM). A mapped fetch is taken as the I-cache's, like KSEG0's (f_xmap: F
 // delivers the cache's word at once, FAST), and is checked a cycle later, in D, as KSEG0's tag is: d_fmiss says the
 // word is not that of the page's line -- the I-cache is indexed by the virtual address (as the VR4300's) and
@@ -1387,14 +1395,14 @@ wire f_cached = cacheable(f_pc);
 // Aliases: the index comes from the virtual address, so one physical line can sit under two indexes when a page is
 // mapped at a virtual address whose bits [IW+1:12] differ from the physical ones (the VR4300's cache has this
 // with its two colour bits too); a hit-type cache op on the I-cache then drops the line under every colour (ic_alias).
-typedef struct packed { logic [17:0] vp; logic g; logic [7:0] asid; logic [10:0] pfn; } pg_t;
+typedef struct packed { logic [19:0] vp; logic g; logic [7:0] asid; logic [10:0] pfn; } pg_t;
 pg_t         pg [2];
 logic [1:0]  pg_v;
 logic        pg_mru;                         // the register hit or loaded last
 logic        pg_inv_r;                       // a table write last cycle
 wire         f_xmap = PG && !f_kseg;
 wire         f_cx = f_cached || f_xmap;
-wire [17:0]  f_vp = {f_pc[29], f_pc[28:12]};
+wire [19:0]  f_vp = f_pc[31:12];
 wire         f_mhit0 = PG && pg_v[0] && pg[0].vp == f_vp && (pg[0].g || pg[0].asid == c0_entryhi[7:0]);
 wire         f_mhit1 = PG && pg_v[1] && pg[1].vp == f_vp && (pg[1].g || pg[1].asid == c0_entryhi[7:0]);
 // (physical address bits [28:12] -- the tag, TLO: the RDRAM's place in the SDRAM, then pa[22:12])
@@ -1564,7 +1572,7 @@ always_ff @(posedge clk) begin
         pg_inv_r <= tr_we_i || tr_we_d;
         if (f_mhit1) pg_mru <= 1'b1; else if (f_mhit0) pg_mru <= 1'b0;
         if (pg_ld) begin
-            pg[pg_vic] <= '{vp: {sc_va[29], sc_va[28:12]}, g: sc_x.g, asid: sc_x.asid, pfn: sc_x.pfn[10:0]};
+            pg[pg_vic] <= '{vp: sc_va[31:12], g: sc_x.g, asid: sc_x.asid, pfn: sc_x.pfn[10:0]};
             pg_v[pg_vic] <= 1'b1; pg_mru <= pg_vic;
             if (sc_va[IW+1:12] != sc_x.pfn[IW-11:0]) ic_alias <= 1'b1;
         end

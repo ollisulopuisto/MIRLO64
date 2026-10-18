@@ -678,6 +678,17 @@ typedef struct {
 /* attribute order in the iterators */
 enum { AR, AG, AB, AA, AS, AT, AW, AZ, NATTR };
 
+/* An 8-bit colour image (SET_COLOR_IMAGE's size 1): a pixel is a byte, at image + y * width + x -- what software that
+ * draws into a colour-indexed texture uses. Its value is the blender's red, as it is (not dithered); a fill writes the
+ * fill colour's byte for the address (bits 31:24 at a multiple of 4). Only written: the pipeline does not read it (the
+ * memory colour is 0, its coverage complete), and there is no depth and no hidden coverage with it
+ * (rtl/rdp/rdp_top.v cimg8). Its rows must start on a 4-byte boundary. */
+static inline void wr8(mrdp_t *r, uint32_t a, unsigned v)
+{
+    uint16_t w = r->rd16(r->ctx, a & ~1u);
+    r->wr16(r->ctx, a & ~1u, (a & 1u) ? (uint16_t)((w & 0xFF00u) | (v & 0xFFu)) : (uint16_t)((w & 0x00FFu) | (v & 0xFFu) << 8));
+}
+
 #ifdef MRDP_CVG
 /* ---- the N64's pixel (MRDP_CVG, mrdp.h) ----------------------------------- */
 
@@ -795,8 +806,9 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
 {
     uint32_t h = r->other_h, l = r->other_l;
     unsigned cyc = (h >> MRDP_H_CYCLE_SHIFT) & 3;
+    const int c8 = r->cimg_size == 1;
     uint32_t pix_off = ((uint32_t)y * r->cimg_width + (uint32_t)x) * 2;
-    uint32_t caddr = r->cimg + pix_off, zaddr = r->zimg + pix_off;
+    uint32_t caddr = c8 ? r->cimg + (uint32_t)y * r->cimg_width + (uint32_t)x : r->cimg + pix_off, zaddr = r->zimg + pix_off;
     const int aa = (l & MRDP_L_AA_EN) != 0;
     unsigned cvg = (unsigned)__builtin_popcount(mask & 0xFFu);                  /* 0..8 */
     /* the noise (the RTL's LFSR: a step for each pixel with coverage) */
@@ -907,7 +919,7 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
     /* memory: the colour and its coverage */
     mrdp_rgba_t mem = { 0, 0, 0, 255 };
     unsigned memcvg = 7;
-    const int rd_mem = cvg_need_mem(l, cyc);
+    const int rd_mem = !c8 && cvg_need_mem(l, cyc);
     if (rd_mem) {
         uint16_t mw = r->rd16(r->ctx, caddr);
         mem = unrgb565(mw);
@@ -918,7 +930,7 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
     /* depth compare; the blend enable */
     int zpass = 1, blend_en;
     unsigned sh_a = 0, sh_b = 0;
-    if ((l & MRDP_L_Z_CMP) && !copy) {
+    if ((l & MRDP_L_Z_CMP) && !copy && !c8) {
         /* the memory's depth, as much of it as its word keeps; the tolerance: the primitive's step (16-bit units: its
          * two low bits set here), and no less than what a word of the exponents 0, 1 and 2 has lost (the N64's 16 >>
          * exponent, in 8s) -- a surface drawn over itself is within it at any depth */
@@ -985,6 +997,11 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
                 at[AR], at[AG], at[AB], at[AA], at[AS], at[AT], at[AW], at[AZ]);
     }
 #endif
+    if (c8) {
+        wr8(r, caddr, out.r);
+        r->pixels_drawn++;
+        return;
+    }
     if (cyc != 2) out = dither_n64(r, out, x, y, rnd, 1);
     r->wr16(r->ctx, caddr, rgb5551(out, complete));
     hid_set(r, caddr, cvg_out);
@@ -1000,6 +1017,12 @@ static void draw_pixel(mrdp_t *r, const prim_t *pr, int x, int y, const int32_t 
     uint32_t pix_off = ((uint32_t)y * r->cimg_width + (uint32_t)x) * 2;
     uint32_t caddr = r->cimg + pix_off, zaddr = r->zimg + pix_off;
 
+    if (cyc == 3 && r->cimg_size == 1) {           /* fill mode, an 8-bit image (wr8) */
+        caddr = r->cimg + (uint32_t)y * r->cimg_width + (uint32_t)x;
+        wr8(r, caddr, r->fill >> (8u * (3u - (caddr & 3u))));
+        r->pixels_drawn++;
+        return;
+    }
     if (cyc == 3) {                                /* fill mode */
         r->wr16(r->ctx, caddr, (x & 1) ? (uint16_t)r->fill : (uint16_t)(r->fill >> 16));
 #ifdef MRDP_CVG
@@ -1373,6 +1396,12 @@ static void draw_triangle(mrdp_t *r, const uint32_t *w)
 
 /* ---- rectangles ----------------------------------------------------------- */
 
+#ifdef MRDP_N64
+#define RECT_QUARTERS 1               /* the corners' quarter pixels count (outside copy and fill mode) */
+#else
+#define RECT_QUARTERS 0
+#endif
+
 static void draw_texrect(mrdp_t *r, const uint32_t *w, int flip)
 {
     unsigned cyc = (r->other_h >> MRDP_H_CYCLE_SHIFT) & 3;
@@ -1381,17 +1410,27 @@ static void draw_texrect(mrdp_t *r, const uint32_t *w, int flip)
     prim_t pr = { 0, 1, 0, (int)((w[1] >> 24) & 7), 1, 0, 0, 0 };
     int32_t s = sext(w[2] >> 16, 16), t = sext(w[2], 16);
     int32_t dsdx = sext(w[3] >> 16, 16), dtdy = sext(w[3], 16);
-    int x0 = xh >> 2, x1 = (cyc == 2) ? (xl >> 2) + 1 : (xl >> 2);
-    int y0 = yh >> 2, y1 = (cyc == 2) ? (yl >> 2) + 1 : (yl >> 2);
+    /* Copy mode: the corners' whole pixels, the lower-right one included. Otherwise (MRDP_N64) a pixel is drawn where
+     * its top-left sample is inside: 4x in [XH, XL) and 4y in [YH, YL) in quarter pixels -- a fractional corner leaves
+     * out the pixel it falls in at the upper left and takes it in at the lower right. The row-stepped attribute starts
+     * at YH's whole row; the column-stepped one is the plane at XH itself: at a column x it is the value plus its
+     * delta times (4x - XH) / 4 (in copy mode, with no fraction, at XH's whole column). (MRDP's own: the corners'
+     * whole pixels, the lower-right one excluded) */
+    int q = (cyc != 2) && RECT_QUARTERS, up = q ? 3 : 0;
+    int x0 = xh >> 2, x1 = (cyc == 2) ? (xl >> 2) + 1 : (xl + up) >> 2;
+    int y0 = yh >> 2, y1 = (cyc == 2) ? (yl >> 2) + 1 : (yl + up) >> 2;
     int dshift = (cyc == 2) ? 7 : 5;              /* copy mode: DsDx is 4x */
-    int xa = x0 > sc_x0(r) ? x0 : sc_x0(r), xb = x1 < sc_x1(r) ? x1 : sc_x1(r);
-    int ya = y0 > sc_y0(r) ? y0 : sc_y0(r), yb = y1 < sc_y1(r) ? y1 : sc_y1(r);
+    int xa = (xh + up) >> 2, ya = (yh + up) >> 2;
+    if (xa < sc_x0(r)) xa = sc_x0(r);
+    if (ya < sc_y0(r)) ya = sc_y0(r);
+    int xb = x1 < sc_x1(r) ? x1 : sc_x1(r), yb = y1 < sc_y1(r) ? y1 : sc_y1(r);
     for (int y = ya; y < yb; y++)
         for (int x = xa; x < xb; x++) {
             int32_t at[NATTR] = { 0 };
-            int32_t ds = (dsdx * (x - x0)) >> dshift, dt = (dtdy * (y - y0)) >> 5;
-            at[AS] = flip ? s + ((dsdx * (y - y0)) >> dshift) : s + ds;
-            at[AT] = flip ? t + ((dtdy * (x - x0)) >> 5) : t + dt;
+            int32_t cq = q ? 4 * x - xh : x - x0;     /* columns from XH: quarters, or whole ones */
+            int cs = q ? 2 : 0;
+            at[AS] = flip ? s + ((dsdx * (y - y0)) >> dshift) : s + ((dsdx * cq) >> (dshift + cs));
+            at[AT] = flip ? t + ((dtdy * cq) >> (5 + cs)) : t + ((dtdy * (y - y0)) >> 5);
             draw_pixel(r, &pr, x, y, at, 0xFFu);
         }
 }
@@ -1401,9 +1440,11 @@ static void fill_rect(mrdp_t *r, const uint32_t *w)
     unsigned cyc = (r->other_h >> MRDP_H_CYCLE_SHIFT) & 3;
     int xl = (w[0] >> 12) & 0xFFF, yl = w[0] & 0xFFF;
     int xh = (w[1] >> 12) & 0xFFF, yh = w[1] & 0xFFF;
-    int x0 = xh >> 2, y0 = yh >> 2;
-    int x1 = (cyc == 3) ? (xl >> 2) + 1 : (xl >> 2);
-    int y1 = (cyc == 3) ? (yl >> 2) + 1 : (yl >> 2);
+    /* (fill mode: whole pixels, the lower-right one included; otherwise as a texture rectangle's, above) */
+    int up = (cyc != 3) && RECT_QUARTERS ? 3 : 0;
+    int x0 = (xh + up) >> 2, y0 = (yh + up) >> 2;
+    int x1 = (cyc == 3) ? (xl >> 2) + 1 : (xl + up) >> 2;
+    int y1 = (cyc == 3) ? (yl >> 2) + 1 : (yl + up) >> 2;
     prim_t pr = { 0, 0, 0, 0, 0, 0, 0, 1 };
     int xa = x0 > sc_x0(r) ? x0 : sc_x0(r), xb = x1 < sc_x1(r) ? x1 : sc_x1(r);
     int ya = y0 > sc_y0(r) ? y0 : sc_y0(r), yb = y1 < sc_y1(r) ? y1 : sc_y1(r);
@@ -1611,8 +1652,8 @@ static void execute(mrdp_t *r, const uint32_t *w)
     unsigned op = (w[0] >> 24) & 0x3F;
     r->grow = 0;                                  /* TRI_R sets it (draw_triangle_r) */
 #ifdef MRDP_N64
-    /* drawn to a 16-bit colour image only (an 8- or 32-bit one: nothing) */
-    if (r->cimg_size != 2 && ((op >= 0x08 && op <= 0x0F) || op == MRDP_OP_TEXRECT || op == MRDP_OP_TEXRECT_FLIP
+    /* drawn to a 16-bit colour image and an 8-bit one (wr8); a 32-bit one: nothing */
+    if (r->cimg_size != 2 && r->cimg_size != 1 && ((op >= 0x08 && op <= 0x0F) || op == MRDP_OP_TEXRECT || op == MRDP_OP_TEXRECT_FLIP
                               || op == MRDP_OP_FILL_RECT)) return;
 #endif
     if (op >= 0x08 && op <= 0x0F) { draw_triangle(r, w); return; }

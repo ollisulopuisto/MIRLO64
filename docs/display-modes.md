@@ -1,153 +1,66 @@
-# Pocket display modes
+# Pocket display modes (fork)
 
-`Screen Size` is a Pocket-only setting at bridge address `0x10000158`
-(interact word 22, ID 237). Its menu order and stored values are:
+`Screen Size` is a Pocket-only setting at bridge address `0x10000158` (interact word 22, ID 237). Its menu order and stored
+values are:
 
 | Mode | Value | Framing |
 |---|---:|---|
-| Original | 0 | Default; live 640 × 240 output with the existing crop masks |
-| Fit (keep aspect) | 2 | Keep the selected picture visible, preserving proportions |
-| Fill (stretch) | 1 | Fill the display by scaling each axis independently |
-| Hybrid | 4 | Midpoint between Stretch and ideal aspect-correct Overscale |
-| Fill (overscale) | 3 | Preserve proportions, cropping the centred overflow |
+| Original | 0 | Default; the scan-out's 640 × 240 picture, shown 4:3, with the existing crop masks |
+| Fit (keep aspect) | 2 | As Original: the whole field, the picture's bars black |
+| Fill (stretch) | 1 | The picture fills the display: each axis scaled by the Pocket independently |
+| Hybrid | 4 | Between Stretch and aspect-correct Overscale: the 8 % at the sides cropped, 10 % squeezed |
+| Fill (overscale) | 3 | Aspect kept, the overflow cropped (centred) |
 
-The additional modes use a completed RGB888 frame in PSRAM and add about one
-frame of delay (17 ms NTSC / 20 ms PAL). Original keeps its one-clock output
-path. No mode changes the game's rendering resolution or game SDRAM interface.
+None of the modes has a frame store or any delay: the scan-out's own stream is cut to the rectangle of a scaler preset
+(`pkg/pocket/Cores/tortuga.Mirlo64/video.json`), and the preset is announced to the Pocket in the scan-out's slot word.
+No mode changes the game's rendering resolution or the memory interfaces. (An earlier version of the fork held a frame in
+the PSRAM and filtered it; the PSRAMs now hold the ROM, see [mips.md](mips.md).)
 
-## Picture bounds and native presets
+## Picture bounds and the presets
 
-The scan-out exports its clipped picture bounds after Crop Vertical and Crop
-Right. Framing removes the core's padding and the selected crop bands. Black
-borders drawn inside a game's framebuffer remain: detecting black pixels
-would incorrectly zoom dark scenes. Overscale and Hybrid can crop HUD elements.
+The scan-out exports its picture's bounds (`picture_x`, `_y`, `_w`, `_h`): the VI window less the Crop Vertical and Crop
+Right bands, in the field's own pixels and lines. Black bars drawn inside a game's framebuffer remain a part of the picture:
+detecting black pixels would zoom dark scenes. Overscale and Hybrid can crop HUD elements.
 
-The APF interface provides eight fixed presets. Source pixels are passed
-through where a preset can represent the framing; other sizes and Hybrid use
-bilinear interpolation with edge-clamped taps and 8-bit fractional weights.
-This avoids uneven pixel repetitions in an intermediate nearest-neighbour
-resize, at the cost of some softening on the filtered path.
+`rtl/soc/n64_video.sv` sends the stream; `target/pocket/pocket_frame.sv` follows its DE, picks the preset from the setting and
+the bounds and drops DE outside the preset's rectangle (the Pocket's scaler counts the pixels and lines of DE). A pixel
+stays what the scan-out made it: no resampling, so every mode is bit-exact.
 
-| Slot | Output pixels | Pocket aspect | Native source coverage / use |
-|---|---|---|---|
-| 0 | 640 × 240 | 4:3 | Original; Fit at width 638–640 and height 1–240; Dock Overscale at 640 × 240 |
-| 1 | 640 × 240 | 10:9 | Stretch at width 638–640 and height 240 |
-| 2 | 640 × 224 | 10:9 | Stretch at width 638–640 and height 224 |
-| 3 | 640 × 216 | 10:9 | Stretch at width 638–640 and height 216 |
-| 4 | 520 × 234 | 10:9 | Pocket Overscale at width ≥520 and height 240 |
-| 5 | 480 × 216 | 10:9 | Pocket Overscale at width ≥480 and height 224 or 216 |
-| 6 | 460 × 207 | 10:9 | Pocket Overscale at width ≥460 and height 213 |
-| 7 | 400 × 360 | 10:9 | Filtered fallback, including all Hybrid sizes |
+| Slot | Output pixels | Pocket aspect | Dock aspect | Used for (picture bounds *w* × *h*) |
+|---|---|---|---|---|
+| 0 | 640 × 240 | 4:3 | 4:3 | Original, Fit, and every setting whose preset does not fit the picture |
+| 1 | 640 × 480 | 4:3 | 4:3 | A woven (interlaced) frame, in every mode |
+| 2 | 640 × 240 | 10:9 | 16:9 | Stretch: *w* 638 – 640, *h* 240 |
+| 3 | 640 × 224 | 10:9 | 16:9 | Stretch: *w* 638 – 640, *h* 224 |
+| 4 | 640 × 216 | 10:9 | 16:9 | Stretch: *w* 638 – 640, *h* 216 |
+| 5 | 520 × 234 | 10:9 | 4:3 | Overscale on the Pocket: *w* ≥ 520, *h* 240 (6 rows cut) |
+| 6 | 480 × 216 | 10:9 | 4:3 | Overscale on the Pocket: *w* ≥ 480, *h* 224 or 216 |
+| 7 | 588 × 240 | 10:9 | 11:9 | Hybrid: *w* ≥ 588, *h* 240 |
 
-Source dimensions in this table are measured **after cropping**, in VI
-samples. A 640 × 240 field shown at 4:3 has 1:2 pixel aspect: a sample is
-half as wide as a line is tall. The filtered coordinate steps account for
-that aspect. Native presets retain every selected VI sample; the fallback
-resamples to 400 × 360 and can soften fine horizontal detail. Slots 1–7
-specify 4:3 on Dock; slot 7 compensates for its resulting 6:5 pixel aspect.
-Use the ordinary openFPGA display mode when comparing framing: optional
-CRT/LCD filters can impose further scaling restrictions.
+A VI sample is half as wide as it is tall (640 × 240 shown 4:3 has 1:2 pixels), so slot 5 – 6 are the exact 10:9 cover of the
+Pocket's screen; slot 7 crops 26 columns a side, a 10 % vertical stretch against 1.20 of Stretch. The rectangle is centred in
+the picture's window (slots 5 – 7); slots 3 – 4 start at the picture's first line; slots 2 – 4 are the whole 640 columns
+(a pad of up to two black columns where Crop Right took them).
 
-**Fork: 16:9 on the Dock.** Slots 1-3 (the native Fill (stretch)) specify 16:9 on Dock (`dock_aspect` in `video.json`; upstream has 4:3 there), so on a 16:9 display Fill (stretch) fills the screen -- the way for games that render a 4:3 picture squeezed for a 16:9 display (Perfect Dark's widescreen option), and a stretched picture for the others. Original, Fit and Overscale stay 4:3 on the Dock; Pocket's own screen is unchanged. No RTL change, so no fit.
+A setting whose preset does not fit the picture (a 320-wide window, an odd height, Overscale at 213 rows, Hybrid at 224
+rows) is shown as slot 0, as Original. Overscale on the Dock is slot 0 too: 640 × 240 already fills a 4:3 display.
 
-Native Fit centres the selected rows inside 640 × 240. Crop Right removes
-two VI samples (one pixel of a 320-wide picture): Fit pads those columns;
-native Stretch extends the retained edge colour without duplicating interior
-pixels. Odd widths are also accepted, with whole-sample centred padding.
-Native Overscale uses centred whole-sample rectangles with a displayed 10:9
-aspect. It clips 6 extra rows from 240- or 213-row pictures, 8 from 224-row pictures, and none from
-216-row pictures, compared with ideal fractional cover geometry.
+**Fork: 16:9 on the Dock.** Slots 2 – 4 (Fill (stretch)) specify 16:9 on the Dock (`dock_aspect` in `video.json`), so on a 16:9
+display Fill (stretch) fills the screen -- the way for games that squeeze a 4:3 picture for 16:9 (Perfect Dark's widescreen
+option); the other modes stay 4:3 there. Slot 7 is 11:9 (the 4:3 picture with its 8 % cropped).
 
-Hybrid averages Stretch and ideal Overscale source-coordinate steps, then
-centres the result. It removes half the source area that ideal Overscale
-would crop, with approximately half Stretch's shape distortion. For a
-640 × 240 picture on Pocket, it keeps about 586.67 × 240: 26.67 columns are
-cropped per side and relative vertical stretch falls from 1.20 to 1.10.
-This midpoint excludes the additional whole-pixel crop in native Overscale.
-Portrait pictures receive the corresponding compromise on the other axis.
+## The announcement
 
-## Implementation
+The Pocket takes a preset from the slot word the core sends in the clocks after a line's DE (`rgb[15:13]`), for the **next**
+frame. `pocket_frame` takes the slot of the next frame from the bounds of the frame it is sending, as each line's DE ends,
+and keeps the bounds it made it on. A frame whose bounds are not those of the announcement (a game changing its window or the
+setting, or a woven frame announced as a progressive one) is sent black in the announced shape, and the next one is right.
+A change of setting takes effect after one or two frames.
 
-- `rtl/soc/n64_video.sv` exports the same window and masks used for RGB output.
-- `target/pocket/pocket_video.sv` selects presets, prepares source coordinates
-  and produces the native or bilinear-filtered output.
-- `target/pocket/pocket_video_memory.sv` captures frames and fetches row pairs
-  through the Pocket-only `pocket_video_psram.sv` controller and physical interface.
-  It derives from upstream a92f021's controller with the unused asynchronous
-  game-ROM port removed. Only die 0 is initialized and accessed; die 1 stays
-  deselected. No SoC PSRAM mapping is restored.
-- `core_top.sv` connects the adapter, reserves interact word 22 (the SoC
-  takes words 0-21), and supplies the Dock notification
-  handled by `core_bridge_cmd.v` (command `0x00B2`).
+## Tests
 
-Two frame buffers occupy 2 MiB of otherwise unused PSRAM die 0, using a
-1024-word pitch and 256 rows per buffer. Capture uses 64-word bursts and a
-512-word asynchronous FIFO; each word carries a chunk address and RGB,
-with the burst counter supplying the six low address bits. Alternating row
-caches contain four even/odd RAM banks, supplying the four interpolation neighbours without duplicating
-memory for more read ports. Native transfers fetch one row and fill both
-cache rows identically; filtered transfers fetch the neighbouring row too.
-Gray-coded completed-chunk counters cross both clock domains to track queue
-space; capture reserves two chunks of headroom without a word-level counter.
+`sh sim/pocket_frame/build.sh` (Verilator, a C++ compiler) feeds `pocket_frame` the scan-out's stream with chosen bounds and
+compares every pixel, the lines of each preset, the slot words and the black frame of a change with a model, for every mode,
+Pocket and Dock. `sim/vi_filter/regress.sh` checks the scan-out, including the exported bounds, against its own model.
 
-Coordinates use signed Q12 arithmetic. Ratio ROMs supply /300, /360, /400
-and /960 steps; a geometry ROM supplies the eight preset dimensions.
-A shared DSP calculation prepares window-relative X/Y coordinate tables
-during vertical blanking, using the pixel index directly rather than a wide
-running accumulator. Integer clamping comparisons stay narrow.
-Cache read, horizontal interpolation and vertical interpolation
-form a three-clock colour pipeline. Native coordinates use zero fractions,
-retaining exact RGB888 values. The odd cache address is explicitly kept to
-preserve Quartus's synchronous block-memory inference.
-
-Bounds are latched with the first captured pixel and associated with the
-completed frame at VS. The coordinate tables finish within 1,100 video
-clocks; upstream scan-out leaves over 18,000 before the next capture starts,
-so the same bounds register serves capture and table generation. Missing captures and mid-frame bounds changes
-invalidate that frame. EOL preset announcements take effect on the next
-frame, so active settings follow the previously announced preset. If new
-bounds no longer match an announced native preset, output is black until a
-matching preset is active. Missed row fetches also produce black pixels.
-
-Output uses 790 clocks per native line, or 572 for the filtered fallback,
-and starts after four blank lines. Even the
-360-row fallback completes inside the NTSC frame; frame starts follow the
-source PAL/NTSC cadence. Original bypasses the frame store; SKIP is cleared
-outside DE as required by the APF interface.
-
-## Build and validation
-
-Build `projects/mirlo.qpf` with the generated boot and RSP division ROMs.
-The QIP uses the Pocket-only PSRAM controller, and the data-table MIF path
-matches `platform/pocket/build_id_gen.tcl`. PSRAM pad registers and timing
-constraints accompany that interface; the SoC's clocks and SDRAM timing
-are unchanged. `projects/fits.json` must record a fit of the current sources:
-results from the earlier 320-wide implementation do not validate this port.
-
-Run the display simulations with Verilator, a C++ compiler and make:
-
-```sh
-sh sim/pocket_video/build.sh
-NATIVE_DROPPED_FRAME=1 sh sim/pocket_video/build.sh
-NATIVE_TRANSITION=1 sh sim/pocket_video/build.sh
-NATIVE_EARLY_CAPTURE=1 sh sim/pocket_video/build.sh
-```
-
-Both delayed-memory and actual PSRAM-controller models compare pixels with
-an independent C++ reference. Coverage includes all five modes, every directed
-mode transition on Pocket and Dock, crop settings, PAL/NTSC, small/portrait/
-empty/changing windows, memory stalls, missing captures and reset. The full
-suite exercises unique colours at all 640 horizontal samples, including odd
-windows and the last column/row. Upstream's `sim/vi_filter/regress.sh` also
-checks exported bounds while retaining its scan-out and runtime-fit tests.
-
-Use `tools/package_bitstream.py` and `tools/make_release.py` with the matching
-runtime to package the build. Install `mirlo.rev`, `video.json` and
-`interact.json` together, then fully quit and reload. The contributor tested
-this 640-wide build on a physical Pocket and reported no issues. Dock
-behaviour is covered by simulation; physical Dock testing has not been
-confirmed.
-
-API references: [presets](https://www.analogue.co/developer/docs/openfpga/core-definition-files/video-json),
-[video bus](https://www.analogue.co/developer/docs/openfpga/bus-communication),
-[Dock notification](https://www.analogue.co/developer/docs/openfpga/host-target-commands).
+`projects/fits.json` must record a fit of the current sources.

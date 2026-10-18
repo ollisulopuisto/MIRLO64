@@ -17,8 +17,8 @@
 //   ORIGIN   the scan-out's base: the RDRAM's address, taken by it at its frame boundary. A hi-res (WIDTH 512 or more)
 //            picture the game gives as two fields' origins one row of the buffer apart (libultra: the second is the first
 //            + WIDTH * 2 bytes) is one frame of both, from the lower: the 640 x 480 frame -- a write of the
-//            base + one row leaves the base as it is. (A serrated picture is shown as 640 x 240, progressive: the scan-out
-//            averages the rows 2k and 2k + 1 of that frame, rtl/soc/n64_video.sv.)
+//            base + one row leaves the base as it is. A serrated picture is sent woven, its 480 rows in order from the
+//            base (rtl/soc/n64_video.sv).
 //   STATUS   GAMMA (bit 3), taken at the latch, is the scan-out's gamma correction; AA_MODE (bits 9:8, 0 or 1:
 //            anti-alias) and DIVOT_ENABLE (bit 4) its filters (MIRLO_VI_AA).
 //   H_START  0: black (osViBlack) -- the scan-out reads nothing from the next frame on -- and so is an origin that has
@@ -55,7 +55,7 @@ module rcp_vi (
     output logic        chg,            // a pulse: WIDTH, H_START, V_START, X_SCALE or Y_SCALE changed
     // the scan-out's
     output wire  [25:0] base,           // the framebuffer's byte address in the SDRAM
-    output wire         il,             // a serrated picture: SERRATE (VI_CTRL bit 6), hi-res (the scan-out averages its row pairs)
+    output wire         il,             // a serrated picture: SERRATE (VI_CTRL bit 6), hi-res (sent woven)
     output logic        black,
     output logic        gamma,
     output logic        aa,             // AA_MODE 0 or 1: the scan-out's anti-alias filter (MIRLO_VI_AA)
