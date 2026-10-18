@@ -43,8 +43,10 @@ controllers, the clocks and the fit, and the simulations. The RSP and the RDP ha
 The SDRAM holds the runtime, the saves, the N64's RDRAM and what a ROM has past its first 32 MiB; the Pocket's two PSRAMs
 hold the ROM's first 32 MiB -- all of most games' -- so the game's reads of its ROM take nothing of the SDRAM's time (see
 [The ROM](#the-rom)). The arbiter has six ports: the scan-out, the CPU, the RDP, the RSP's DMA, the Pocket's bridge (which
-the PI's engine, the AI's reader and the SI's DMA share while the bridge is idle) and the RDP's command fetch. The
-Pocket's SRAM is not used: its pads are tied off in `core_top.sv`.
+the PI's engine, the AI's reader and the SI's DMA share while the bridge is idle) and the RDP's command fetch. The CPU
+and the RSP's DMA go first: each waits for the words it asks for (a cache line, a transfer the microcode waits on),
+where the RDP and the scan-out ride out a wait in their buffers. The Pocket's SRAM is not used: its pads are tied off in
+`core_top.sv`.
 
 A game runs from its own ROM, unmodified, with its own libultra: its exception handler, threads, timers and interrupts
 are the game's. The CPU maps KSEG0 and KSEG1 onto the RDRAM, so the game's instructions, data and pointers are the
@@ -65,7 +67,7 @@ level**, a privilege level of the CPU in which the runtime does the access on th
 | `0x2000_0000` | The RSP's host port: SP_MEM_ADDR `+00`, SP_DRAM_ADDR `+04`, SP_RD_LEN `+08`, SP_WR_LEN `+0C`, SP_STATUS `+10`, SP_DMA_FULL `+14`, SP_DMA_BUSY `+18`, SP_SEMAPHORE `+1C`, SP_PC `+20`; DPC_START `+40`, DPC_END `+44`, DPC_CURRENT `+48`, DPC_STATUS `+4C` |
 | `0xF000_0000` | The registers ([control.md](control.md)) |
 | `0xFFFF_8000`, 2 KiB | The monitor RAM: a store with `$zero` as its base reaches it |
-| `0x0000_0000` - `0x1FFF_FFFF`, `0x5000_0000` - `0x7FFF_FFFF` | Mapped addresses: translated by the tables the runtime fills from the game's TLB entries |
+| `0x0000_0000` - `0x1FFF_FFFF`, `0x5000_0000` - `0x7FFF_FFFF`, `0xC000_0000` - `0xEFFF_FFFF` | Mapped addresses: translated by the tables the runtime fills from the game's TLB entries |
 
 The caches are physically tagged, so the runtime at `0x438x_xxxx` and the game through KSEG0 see one copy of the RDRAM.
 
@@ -347,11 +349,21 @@ The loader then:
 |---|---|---|---|
 | 6101, 6102 | the header's | | 0 |
 | 6103 | the header's less `0x10_0000` | ROM `0x4C0` - `0x8BF` at RDRAM 0; DMEM and IMEM all `0xFFFF_FFFF` but IMEM's first word, `0x17D7` | `0x17D7` |
-| 6105 | the header's | ROM `0x554` - `0x887` at RDRAM 4 (IPL3's second stage, which it runs from there); the ROM's word at `0x750` at RDRAM `0x2F_E1C0`; DPC_CLOCK reads 0 | `0x17D9` |
+| 6105 | the header's | ROM `0x554` - `0x887` at RDRAM 4 (IPL3's second stage, which it runs from there); the ROM's words at `0x750` and `0x73C` at RDRAM `0x2F_E1C0` and `0x2F_B1F4`; DPC_CLOCK reads 0; DMEM's first `0x40` bytes the ROM's header, and the RSP's r4, r5, r6, r11 and v13 as the PIF's RSP program leaves them (below) | `0x17D9` |
 | 6106 | the header's less `0x20_0000` | IPL3's second stage at RDRAM 0: ROM `0x4F0` - `0x7AB`, deciphered as IPL3 does it; DMEM and IMEM all `0xFFFF_FFFF` but IMEM's first word, `0x17D8` | `0x17D8` |
 
 One PAL boot code has an entry of its own in the table and is handled as a 6102, as is a boot code the table does not
 know. Software checks these leftovers, so they are part of a valid console.
+
+The boot microcode of a CIC-6105 game's RSP tasks checks, at its first run, what the PIF's program on the RSP left: r4 (IPL3's
+first word, ROM `0x40`), r5 (an address in `0x4_C000` - `0x4_FFFF`), r6 (a word of IPL3, `addiu t1, t1, 4`), r11 (`0x3D8`), the sum
+of v13's eight lanes (`-7510`) and DMEM's first halfword (not 0 or `0xFFFF`: the ROM's header is there). On a console it sets
+signal 7 and writes two of its own words over its first two in the game's copy -- a jump past the check for every later task. On
+an RSP left otherwise it clears signal 7 and the jump it writes leads to code that at every task's start writes DPC_END with
+what it read of DPC_CLOCK (0 for the RSP here: always): a list the RDP is still taking is cut short, and a game that yields its
+graphics task to an audio task never sees the resumed one end. The runtime leaves the registers as the console does
+(`rsp_ipl_state` in `lang/n64rt/n64rt_rsp.c`: a program of its own, run once on the RSP before the game starts) and DMEM's
+first `0x40` bytes as the ROM has them; with another boot code those bytes are 0 and the registers 0.
 
 The words at `0x8000_0300`: `osTvType` (below), `osRomType` 0, `osRomBase` `0xB000_0000`, `osResetType` 0 (cold),
 `osCicId` as above, `osVersion` 0 and `osMemSize` (8 MiB, or 4 MiB without the Expansion Pak).
@@ -468,8 +480,9 @@ What is left is software that reuses a frame by copying into it with the CPU whi
 page it was. A runtime built with `NO_TLBKEEP=1` keeps nothing; `lang/n64rt/test/tlbkeep_test.c` is a game with a
 refill handler of its own that checks each rule.
 
-A game can map `0x0000_0000` - `0x1FFF_FFFF` and `0x5000_0000` - `0x7FFF_FFFF` onto the RDRAM. `0x2000_0000` -
-`0x4FFF_FFFF` holds the SoC's own devices and the SDRAM, where the runtime is, and is not mapped.
+A game can map `0x0000_0000` - `0x1FFF_FFFF`, `0x5000_0000` - `0x7FFF_FFFF` and `0xC000_0000` - `0xEFFF_FFFF` (the VR4300's
+KSSEG and most of KSEG3) onto the RDRAM, and run code from them. `0x2000_0000` - `0x4FFF_FFFF` holds the SoC's own devices and
+the SDRAM, where the runtime is, and `0xF000_0000` - `0xFFFF_FFFF` the registers and the monitor's RAM: those are not mapped.
 
 ### 64-bit instructions and the helpers
 
@@ -613,12 +626,24 @@ SI_DRAM_ADDR (`0x00`), SI_PIF_ADDR_RD64B (`0x04`: PIF RAM to RDRAM), SI_PIF_ADDR
 SI_STATUS (`0x18`: interrupt bit 12, DMA error bit 3, IO busy bit 1, DMA busy bit 0) are in hardware. The DMA moves 16
 words through the bridge's port and ends in the SI interrupt; a start while one runs sets the error bit. PIF RAM is a
 block RAM of 16 words that the CPU also reads and writes a word at a time. Its last byte is the PIF's status byte: a
-write leaves it 0, and its bit 0 written as 1 marks the block as holding joybus commands.
+write leaves it 0 but for bit 1 (the challenge, below), and its bit 0 written as 1 marks the block as holding joybus
+commands.
 
 The PIF itself is the runtime. The hardware raises PEND bit 4 and sets IO busy at the end of a WR64B that carried the
-run flag, and at an RD64B of a block that holds commands; that read is deferred until the PIF is done, as the console's
-SI waits for the PIF. The runtime (`n64rt_si_hw_event`) reads the 16 words, runs the commands (`pif_run`), writes back
-the words that changed and writes `MONITOR.SIDONE`. The commands:
+run flag or the challenge's bit, at a CPU write of the status byte with the challenge's bit, and at an RD64B of a block
+that holds commands; that read is deferred until the PIF is done, as the console's SI waits for the PIF. The runtime
+(`n64rt_si_hw_event`) reads the 16 words, runs the commands (`pif_run`) or answers the challenge (`pif_challenge`),
+writes back the words that changed and writes `MONITOR.SIDONE` with how long the console's PIF takes over those
+commands (0 for a challenge). The read moves nothing until that time is out, counted from the runtime's write (DMA busy
+meanwhile), so a read takes about what it takes on the console: 0.24 ms for a block of no commands, 0.62 ms for one
+controller read, 1.55 ms for four with one controller there (`pif_run`'s figures, fitted to the console's) -- a game
+whose controller thread polls in a loop, above the thread that loads the game, leaves that thread the time the console
+does. A run that a WR64B started is counted from there, the console's time for libultra's write and then read; a WR64B
+itself moves its words some 4,000 cycles (the console's 65 us) after the start.
+
+The challenge is the CIC-6105's: the 30 nibbles in bytes 48-62 go to the cartridge's CIC, and its answer, a nibble
+for each, takes their place; bytes 46, 47 and 63 are left 0. A game with that CIC sends one and checks the answer
+itself. With another CIC the block is left as it was. The commands:
 
 | Channel | Command | Answer |
 |---|---|---|
@@ -848,6 +873,10 @@ switches, all environment variables (the first lines of `tb_soc.cpp` list them):
 | `PAD`, `PAD2`, `PAD3`, `PAD4` `=from-to:keys[/joy],...` | a controller's keys over a span of fields |
 | `VGA=1` | every frame the pads send, as PPM |
 | `CPUSTAT=1`, `CPUTRACE=from,count` | where the CPU's cycles go; the instructions it retires |
+| `RCPSTAT=n`, `RCPSTAT_IDLE=lo,hi` | every n fields: the RSP's and the RDP's time, the CPU's outside the game's idle loop, and each SDRAM port's words and cycles waiting |
+| `RSPLOG=<file>`, `RSPPROF=<file>` | the RSP's tasks, a line each; its cycles by the microcode's pc |
+| `RSPDUMP=<dir>` (`RSPDUMP_AUDIO=1`) | the graphics (and audio) tasks with the RDRAM, for `sim/rsp` and `rsp_replay` |
+| `CKPT=<dir>,<n>` | a copy of the run left waiting every n fields, to be run on from with other options |
 | `NOLOAD=1` | nothing loaded: the boot ROM's serial boot |
 | `+gbcart=<rom.gb>` | a cartridge in the slot (a plus argument) |
 
