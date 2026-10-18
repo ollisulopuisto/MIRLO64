@@ -85,10 +85,10 @@
 //    tagged; KSEG0 RDRAM only. The D-cache writes through an 8-entry write
 //    buffer: memory is always current for the engines that read it (the RSP
 //    firmware, MRDP, the audio core). A read goes out only with the buffer
-//    empty. ld and sd to cached memory are two words in two cycles, through
-//    the cache and the write buffer as any other. Uncached, device and
-//    TLB-mapped accesses (but a fetch from a cacheable mapped page, FPG) and
-//    ldc1/sdc1 take the slow path (one single-word access; two for a 64-bit one).
+//    empty. ld, sd, ldc1 and sdc1 to cached memory are two words in two
+//    cycles, through the cache and the write buffer as any other. Uncached,
+//    device and TLB-mapped accesses (but a fetch from a cacheable mapped page,
+//    FPG) take the slow path (one single-word access; two for a 64-bit one).
 //  - Memory is word-native (sim/n64/n64.h): big-endian byte k of a word is
 //    lane 3 - k (BIG; little-endian: lane k).
 //  - COP1 instructions run at M in fpu_n64 (single precision, doubles
@@ -1115,7 +1115,7 @@ wire m_wide = FAST ? m_k_wide :
 logic        sb_valid; logic [DW-1:0] sb_waddr; logic [31:0] sb_data; logic [3:0] sb_strb;
 wire         sb_hit = sb_valid && (FAST ? m_k_sbeq : sb_waddr == m_addr[DW+1:2]);
 wire m_fwide = FAST ? m_k_fwide : (m_c.ld == M_FL && m_insn[31:26] == 6'h35) || (m_c.st == S_FS && m_insn[31:26] == 6'h3D);
-wire m_cached = FAST ? m_k_cach : cacheable(m_addr) && !m_fwide;     // (ldc1, sdc1: the slow path, as ever)
+wire m_cached = FAST ? m_k_cach : cacheable(m_addr);
 // the line dropped last cycle (an uncached store into cached memory, sdc1,
 // a cache instruction): an access right behind it read the tag in the edge
 // that cleared it
@@ -1235,12 +1235,13 @@ always_comb begin
     S_SW, S_SC: begin m_st_data = m_st_lo; m_st_strb = 4'b1111; end
     S_SWL: begin m_st_data = m_st_lo >> (8 * k); m_st_strb = 4'b1111 >> k; end
     S_SWR: begin m_st_data = m_st_lo << (8 * (3 - k)); m_st_strb = 4'b1111 << (3 - k); end
-    S_FS:  begin m_st_data = fpu_mem_out[31:0]; m_st_strb = 4'b1111; end
+    S_FS:  begin m_st_data = (m_fwide && m_second != BIG) ? fpu_mem_out[63:32] : fpu_mem_out[31:0]; m_st_strb = 4'b1111; end
     S_SD:  begin m_st_data = (m_second == BIG) ? m_b64[31:0] : m_b64[63:32]; m_st_strb = 4'b1111; end
     default: ;
     endcase
     if (FAST && !m_k_sfs && !m_k_ssd) begin m_st_data = m_st_lo; m_st_strb = m_k_sstrb; end
-    else if (FAST) begin m_st_strb = 4'b1111; m_st_data = m_k_sfs ? fpu_mem_out[31:0] : (m_second == BIG) ? m_b64[31:0] : m_b64[63:32]; end
+    else if (FAST) begin m_st_strb = 4'b1111; m_st_data = m_k_sfs ? ((m_k_fwide && m_second != BIG) ? fpu_mem_out[63:32] : fpu_mem_out[31:0]) :
+                                                      (m_second == BIG) ? m_b64[31:0] : m_b64[63:32]; end
 end
 
 wire [31:0] cause_now = {c0_cause[31:11], irq_rcp, c0_cause[9:0]};
@@ -1323,7 +1324,7 @@ wire m_sw_push = m_sw && !sw_wait && !st_full;
 assign st_valid = XWB && (m_wb_push || m_sw_push);
 assign st_dev   = m_devst;
 assign st_addr  = {m_pa[31:3], m_cw ? m_ph : m_sw ? (ms == MS_SLOW_B || (!m_wide && m_pa[2])) : m_pa[2], 2'b00};
-assign st_data  = m_fwide ? ((ms == MS_SLOW_B) == BIG ? fpu_mem_out[31:0] : fpu_mem_out[63:32]) : m_st_data;
+assign st_data  = m_st_data;
 assign st_strb  = m_st_strb;
 // an index cache op's lines when a cache has more than the VR4300's (see the cache RAMs' writes)
 // (PG: a hit-type op on the I-cache, once a mapped page may have its lines under another colour than the physical
@@ -1845,7 +1846,7 @@ always_ff @(posedge clk) begin
                 m_f_kseg <= kseg01(e_ea); m_f_devk <= pa_dev(kphys(e_ea));
                 m_k_ld <= e_c.ld != M_NONE; m_k_st <= e_c.st != S_NONE; m_k_sc <= e_c.st == S_SC;
                 m_k_fwide <= e_fwide; m_k_wide <= e_fwide || (W64 && (e_c.ld == M_LD || e_c.st == S_SD));
-                m_k_cach <= cacheable(e_ea) && !e_fwide; m_k_mapped <= e_mem && !kseg01(e_ea);
+                m_k_cach <= cacheable(e_ea); m_k_mapped <= e_mem && !kseg01(e_ea);
                 m_k_md <= e_c.md != MD_NONE; m_k_fpu <= e_c.cop1 || e_c.ld == M_FL || e_c.st == S_FS;
                 m_k_sbeq <= m_cst_idx == e_ea[DW+1:2];            // (it is behind the store that is at M now)
                 m_k_sstrb <= e_sstrb; m_k_sfs <= e_c.st == S_FS; m_k_ssd <= e_c.st == S_SD;
