@@ -6,7 +6,7 @@
 //
 //   mode  Screen Size            preset (video.json), by the picture's bounds (x y w h)
 //   0     Original               0: 640 x 240, as the scan-out sends it
-//   1     Fill (stretch)         w 600 .. 640: 4: 640 x 216 (h <= 216), 3: 640 x 224 (h <= 224), 2: 640 x 240 (h <= 240) -- the first
+//   1     Fill (stretch)         w 560 .. 640: 4: 640 x 216 (h <= 216), 3: 640 x 224 (h <= 224), 2: 640 x 240 (h <= 240) -- the first
 //                                that holds the picture's lines (from its first line y, inside the field); else 0
 //   2     Fit (keep aspect)      0
 //   3     Fill (overscale)       5: 520 x 234 (h 234 .. 240, w >= 520), 6: 480 x 216 (h 216 .. 233, w >= 480), centred in the
@@ -35,7 +35,7 @@ module pocket_frame (
         begin
             choose = 3'd0;
             case (s[2:0])
-            3'd1: if (w >= 600 && w <= 640 && h != 0) begin
+            3'd1: if (w >= 560 && w <= 640 && h != 0) begin
                       if (h <= 216 && y + 10'd216 <= 240) choose = 3'd4;
                       else if (h <= 224 && y + 10'd224 <= 240) choose = 3'd3;
                       else if (h <= 240) choose = 3'd2;

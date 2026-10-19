@@ -30,9 +30,9 @@ stays what the scan-out made it: no resampling, so every mode is bit-exact.
 |---|---|---|---|---|
 | 0 | 640 × 240 | 4:3 | 4:3 | Original, Fit, and every setting whose preset does not fit the picture |
 | 1 | 640 × 480 | 4:3 | 4:3 | A woven (interlaced) frame, in every mode |
-| 2 | 640 × 240 | 10:9 | 16:9 | Stretch: *w* 600 – 640, *h* 225 – 240 |
-| 3 | 640 × 224 | 10:9 | 16:9 | Stretch: *w* 600 – 640, *h* up to 224 (and the picture's first line at most 16) |
-| 4 | 640 × 216 | 10:9 | 16:9 | Stretch: *w* 600 – 640, *h* up to 216 (and the picture's first line at most 24) |
+| 2 | 640 × 240 | 10:9 | 16:9 | Stretch: *w* 560 – 640, *h* 225 – 240 |
+| 3 | 640 × 224 | 10:9 | 16:9 | Stretch: *w* 560 – 640, *h* up to 224 (and the picture's first line at most 16) |
+| 4 | 640 × 216 | 10:9 | 16:9 | Stretch: *w* 560 – 640, *h* up to 216 (and the picture's first line at most 24) |
 | 5 | 520 × 234 | 10:9 | 4:3 | Overscale on the Pocket: *w* ≥ 520, *h* 234 – 240 (centred) |
 | 6 | 480 × 216 | 10:9 | 4:3 | Overscale on the Pocket: *w* ≥ 480, *h* 216 – 233 (centred) |
 | 7 | 588 × 240 | 10:9 | 11:9 | Hybrid: *w* ≥ 588, *h* 200 – 240 (the field's lines, the picture's centred columns) |

@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+#include <cstring>
 #include <algorithm>
 
 struct Cfg { int mode, dock, L, T, W, H, woven; };
@@ -19,7 +20,7 @@ static unsigned src(const Cfg &c, int x, int y) { return in_pic(c, x, y) ? (colo
 static int choose(const Cfg &c) {
     if (c.woven) return 1;
     switch (c.mode) {
-    case 1: if (c.W >= 600 && c.W <= 640 && c.H != 0) { if (c.H <= 216 && c.T + 216 <= 240) return 4; if (c.H <= 224 && c.T + 224 <= 240) return 3; if (c.H <= 240) return 2; } return 0;
+    case 1: if (c.W >= 560 && c.W <= 640 && c.H != 0) { if (c.H <= 216 && c.T + 216 <= 240) return 4; if (c.H <= 224 && c.T + 224 <= 240) return 3; if (c.H <= 240) return 2; } return 0;
     case 3: if (!c.dock) { if (c.H >= 234 && c.H <= 240 && c.W >= 520) return 5; if (c.H >= 216 && c.H < 234 && c.W >= 480) return 6; } return 0;
     case 4: return c.H >= 200 && c.H <= 240 && c.W >= 588 ? 7 : 0;
     default: return 0;
@@ -96,7 +97,68 @@ static void run(const char *name, const Cfg &c) {
     check(name, c, c, true);
 }
 
+
+// replay <stream> <mode> <dock>: one frame of the real scan-out (sim/vi_filter's TB_STREAM, bounds and all) through pocket_frame, four
+// times over; the last pass is the steady one. The preset its bounds ask for (choose) must come out, pixel for pixel, and be announced.
+static int replay(const char *file, int mode, int dock) {
+    struct Rec { uint32_t px; uint16_t b[4]; uint8_t f, pad[3]; };
+    std::vector<Rec> rs; FILE *f = fopen(file, "rb"); if (!f) { printf("no %s\n", file); return 2; }
+    Rec r0; while (fread(&r0, sizeof r0, 1, f) == 1) rs.push_back(r0); fclose(f);
+    if (rs.empty()) { printf("%s: empty\n", file); return 2; }
+    const Cfg c{mode, dock, rs[0].b[0], rs[0].b[1], rs[0].b[2], rs[0].b[3], (rs[0].f >> 4) & 1};
+    std::vector<std::vector<unsigned>> in, out; std::vector<unsigned> cur; std::vector<int> words;
+    int errs = 0;
+    for (int pass = 0; pass < 4; pass++) {
+        bool pde = false, pvde = false; int word_after = -1;
+        for (int k = -8; k < (int)rs.size(); k++) {
+            Rec r = k < 0 ? Rec{0, {rs[0].b[0], rs[0].b[1], rs[0].b[2], rs[0].b[3]}, (uint8_t)(rs[0].f & 0x30), {0, 0, 0}} : rs[k];   // (the gap: nothing, no sync)
+            const bool de = r.f & 1, skip = (r.f >> 3) & 1, woven = (r.f >> 4) & 1;
+            t->screen_mode = mode; t->docked = dock; t->pic_x = r.b[0]; t->pic_y = r.b[1]; t->pic_w = r.b[2]; t->pic_h = r.b[3];
+            t->woven = woven; t->ann = (r.f >> 5) & 1; t->rgb = r.px; t->de = de; t->hs = (r.f >> 1) & 1; t->vs = (r.f >> 2) & 1; t->skip = skip;
+            tick();
+            if (pass == 0 && k >= 0) {
+                if (de && (!skip || woven)) cur.push_back(r.px);
+                if (pde && !de) { in.push_back(cur); cur.clear(); }
+                pde = de;
+            }
+            if (pass == 3 && k >= 0) {
+                const bool vde = t->video_de;
+                if (vde && (!t->video_skip || woven)) cur.push_back(t->video_rgb);
+                if (vde && !pvde) cur.clear(), cur.push_back(t->video_rgb);
+                if (!vde && pvde) { out.push_back(cur); word_after = 1; }
+                else if (word_after == 1 && !vde) { words.push_back((t->video_rgb >> 13) & 7); word_after = 0; }
+                pvde = vde;
+            }
+        }
+    }
+    const int ps = choose(c); const Rect r = rect(c, ps);
+    const bool whole = ps <= 2 || c.woven;
+    const int want_lines = whole ? (int)in.size() : r.h;
+    printf("  bounds %d,%d %dx%d%s mode %d%s: slot %d", c.L, c.T, c.W, c.H, c.woven ? " woven" : "", mode, dock ? " dock" : "", ps);
+    if ((int)out.size() != want_lines) { printf("\n    %zu lines out, expected %d\n", out.size(), want_lines); return 1; }
+    for (int j = 0; j < want_lines && !errs; j++) {
+        const int w = whole ? (int)in[j].size() : r.w;
+        if ((int)out[j].size() != w) { printf("\n    line %d: %zu pixels, expected %d\n", j, out[j].size(), w); errs++; break; }
+        for (int i = 0; i < w; i++) {
+            const unsigned e = whole ? in[j][i] : in[r.y0 + j][r.x0 + i];
+            if (out[j][i] != e) { printf("\n    (%d,%d) got %06x expected %06x\n", i, j, out[j][i], e); errs++; break; }
+        }
+    }
+    if (words.empty()) { printf("\n    no slot words\n"); errs++; }
+    for (int w : words) if (w != ps) { printf("\n    slot word %d, expected %d\n", w, ps); errs++; break; }
+    if (!errs) printf("  ok (%d x %d)\n", whole ? (int)out[0].size() : r.w, want_lines);
+    return errs != 0;
+}
+
 int main(int argc, char **argv) {
+    if (argc > 4 && !strcmp(argv[1], "replay")) {
+        Verilated::commandArgs(argc, argv);
+        t = new Vpocket_frame;
+        t->rst_vid = 1; for (int i = 0; i < 4; i++) tick(); t->rst_vid = 0;
+        for (int i = 0; i < 8; i++) tick();
+        const int rc = replay(argv[2], atoi(argv[3]), atoi(argv[4]));
+        t->final(); delete t; return rc;
+    }
     Verilated::commandArgs(argc, argv);
     t = new Vpocket_frame;
     t->rst_vid = 1; for (int i = 0; i < 4; i++) tick(); t->rst_vid = 0;

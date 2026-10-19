@@ -214,6 +214,13 @@ int main(int argc, char **argv)
     while (frames < nfr) {
         tick();
         if (vph != 1 && vph != 3) continue;         // (just after clk_vid's edge)
+        // TB_STREAM=file: the scan-out's frame number 3 as the pocket_frame bench (sim/pocket_frame) replays it: one record a clk_vid clock
+        { static FILE *sf = getenv("TB_STREAM") ? fopen(getenv("TB_STREAM"), "wb") : nullptr;
+          if (sf && frames == 3 && (vph == 1 || vph == 3)) {
+              struct { uint32_t px; uint16_t b[4]; uint8_t f, pad[3]; } rec = { (uint32_t)t->vga_r << 16 | (uint32_t)t->vga_g << 8 | t->vga_b,
+                  { (uint16_t)t->picture_x, (uint16_t)t->picture_y, (uint16_t)t->picture_w, (uint16_t)t->picture_h },
+                  (uint8_t)(t->vga_de | t->vga_hsync << 1 | t->vga_vsync << 2 | t->vga_skip << 3 | t->frame_woven << 4 | t->frame_ann << 5), {0, 0, 0} };
+              fwrite(&rec, sizeof rec, 1, sf); } }
         pad_hash = (pad_hash ^ ((uint64_t)t->vga_r | (uint64_t)t->vga_g << 8 | (uint64_t)t->vga_b << 16 | (uint64_t)t->vga_hsync << 24 | (uint64_t)t->vga_vsync << 25 | (uint64_t)t->vga_de << 26 | (uint64_t)t->vga_skip << 27)) * 1099511628211ull;
         if (!phs && t->vga_hsync) {
             if (hs_at >= 0) {
