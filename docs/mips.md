@@ -45,8 +45,10 @@ hold the ROM's first 32 MiB -- all of most games' -- so the game's reads of its 
 [The ROM](#the-rom)). The arbiter has six ports: the scan-out, the CPU, the RDP, the RSP's DMA, the Pocket's bridge (which
 the PI's engine, the AI's reader and the SI's DMA share while the bridge is idle) and the RDP's command fetch. The CPU
 and the RSP's DMA go first: each waits for the words it asks for (a cache line, a transfer the microcode waits on),
-where the RDP and the scan-out ride out a wait in their buffers. The Pocket's SRAM is not used: its pads are tied off in
-`core_top.sv`.
+where the RDP and the scan-out ride out a wait in their buffers -- the scan-out goes first too, with them, while its FIFO
+is below a quarter full (at every frame's start, and when a long run of the CPU's or the RSP's requests has left it
+behind: else a frame's first lines found it empty and the picture came a few dozen lines lower). The Pocket's SRAM is
+not used: its pads are tied off in `core_top.sv`.
 
 A game runs from its own ROM, unmodified, with its own libultra: its exception handler, threads, timers and interrupts
 are the game's. The CPU maps KSEG0 and KSEG1 onto the RDRAM, so the game's instructions, data and pointers are the
@@ -232,10 +234,10 @@ in D while a register it reads is on its way from a 64-bit result. E computes 32
 | `W64_ALU` | yes | `dadd(i)(u)`, `dsub(u)`, and `and` / `or` / `xor` / `nor` / `slt(u)` when an operand is not a 32-bit value: E does the lower word, M the upper word with E's carry |
 | `W64_SH` | yes | The d-shifts, a byte or a bit a cycle |
 | `W64_MD` | yes | `dmult(u)`: four products of the operands' halves on the 32-bit multiply's DSP block, summed a word at a time; HI and LO of 64 bits |
-| `W64_DIV` | no | `ddiv(u)` |
+| `W64_DIV` | no | `ddiv(u)` of any operand; without it, a `ddiv` of two words and a `ddivu` of two unsigned words are done on the 32-bit divider |
 
-What the CPU does not have is a Reserved Instruction, which the runtime does on the real 64-bit registers: `ddiv(u)`,
-`ldl` / `ldr` / `sdl` / `sdr`, and the FPU's 64-bit instructions. A trap instruction on a 64-bit operand, `lld` and
+What the CPU does not have is a Reserved Instruction, which the runtime does on the real 64-bit registers: `ddiv(u)`
+of a 64-bit operand and `ldl` / `ldr` / `sdl` / `sdr`. A trap instruction on a 64-bit operand, `lld` and
 `scd` are Reserved Instructions that the runtime does not do.
 
 ### The FPU
@@ -245,8 +247,10 @@ double operand is converted to a float and a double result is the float widened 
 normals are 0 (as the VR4300 with FCR31's FS bit set), a NaN result is `0x7FBFFFFF`, and the conversions to an integer
 saturate. There are no FPU exceptions and no cause or flag bits in FCR31. The moves, single and double arithmetic,
 `sqrt`, the conversions between S, D and W, and the compares are implemented, each over several cycles on one datapath
-(M waits): a 24 x 24 multiply on a DSP block, divide and square root by 28 restoring iterations. `dmfc1`, `dmtc1` and
-the `.l` formats are Reserved Instructions, done by the runtime.
+(M waits): a 24 x 24 multiply on a DSP block, divide and square root by 28 restoring iterations. `dmfc1` and `dmtc1`
+move a 64-bit register through a pair; `cvt.s.l` and `cvt.d.l` convert the pair's 64-bit integer exactly (a word's by
+`cvt.s.w`'s path, another shifted a bit a cycle); the conversions to `.l` are those to `.w`, the word sign-extended into
+the pair (beyond a word's range a value saturates as a word's).
 
 ### Address translation
 
@@ -486,9 +490,10 @@ the SDRAM, where the runtime is, and `0xF000_0000` - `0xFFFF_FFFF` the registers
 
 ### 64-bit instructions and the helpers
 
-`emulate_64` does the Reserved Instructions on the context's 64-bit registers: `ddiv(u)`, the unaligned doubleword
-loads and stores, and the FPU's `dmfc1`, `dmtc1`, conversions from `.l` and the round / trunc / ceil / floor / cvt to
-`.l` (a 64-bit integer is an FPU register pair; the arithmetic is the FPU's single precision). An entry costs far
+`emulate_64` does the Reserved Instructions on the context's 64-bit registers: `ddiv(u)` of a 64-bit operand, the
+unaligned doubleword loads and stores, and -- on a core without them in hardware -- the FPU's `dmfc1`, `dmtc1`,
+conversions from `.l` and the round / trunc / ceil / floor / cvt to `.l` (a 64-bit integer is an FPU register pair;
+the arithmetic is the FPU's single precision). An entry costs far
 more than the instruction it stands for, which matters for code that divides in a loop. A compiler's conversions
 between a 64-bit integer and a float are two of the FPU's in a row (`dmtc1` and `cvt.d.l`, or `trunc.l.s` and
 `dmfc1`): the second, behind the first or in the delay slot of the `jr ra` behind it, is done on the same entry.
