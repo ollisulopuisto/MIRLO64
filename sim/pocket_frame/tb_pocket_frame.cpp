@@ -19,9 +19,9 @@ static unsigned src(const Cfg &c, int x, int y) { return in_pic(c, x, y) ? (colo
 static int choose(const Cfg &c) {
     if (c.woven) return 1;
     switch (c.mode) {
-    case 1: if (c.W >= 638 && c.W <= 640) { if (c.H == 240) return 2; if (c.H == 224) return 3; if (c.H == 216) return 4; } return 0;
-    case 3: if (!c.dock) { if (c.H == 240 && c.W >= 520) return 5; if ((c.H == 224 || c.H == 216) && c.W >= 480) return 6; } return 0;
-    case 4: return c.H == 240 && c.W >= 588 ? 7 : 0;
+    case 1: if (c.W >= 600 && c.W <= 640 && c.H != 0) { if (c.H <= 216 && c.T + 216 <= 240) return 4; if (c.H <= 224 && c.T + 224 <= 240) return 3; if (c.H <= 240) return 2; } return 0;
+    case 3: if (!c.dock) { if (c.H >= 234 && c.H <= 240 && c.W >= 520) return 5; if (c.H >= 216 && c.H < 234 && c.W >= 480) return 6; } return 0;
+    case 4: return c.H >= 200 && c.H <= 240 && c.W >= 588 ? 7 : 0;
     default: return 0;
     }
 }
@@ -30,9 +30,9 @@ static Rect rect(const Cfg &c, int s) {
     switch (s) {
     case 3: return { 0, 640, c.T, 224 };
     case 4: return { 0, 640, c.T, 216 };
-    case 5: return { c.L + (c.W - 520) / 2, 520, c.T + 3, 234 };
-    case 6: return { c.L + (c.W - 480) / 2, 480, c.T + (c.H == 224 ? 4 : 0), 216 };
-    case 7: return { c.L + (c.W - 588) / 2, 588, c.T, 240 };
+    case 5: return { c.L + (c.W - 520) / 2, 520, c.T + (c.H - 234) / 2, 234 };
+    case 6: return { c.L + (c.W - 480) / 2, 480, c.T + (c.H - 216) / 2, 216 };
+    case 7: return { c.L + (c.W - 588) / 2, 588, 0, 240 };
     default: return { 0, 640, 0, 240 };
     }
 }
@@ -109,6 +109,13 @@ int main(int argc, char **argv) {
     run("stretch216", Cfg{1, 0,  0, 12, 640, 216, 0});
     run("stretch638", Cfg{1, 0,  2, 0, 638, 240, 0});
     run("stretch320", Cfg{1, 0,  0, 0, 320, 240, 0});      // (no preset: Original)
+    // a 237-line window (libultra's, SM64's) at the default Crop Vertical 8, and the crop's other sizes
+    run("stretch221", Cfg{1, 0,  0, 8, 638, 221, 0});
+    run("stretch232", Cfg{1, 0,  0, 4, 638, 232, 0});
+    run("overscale221", Cfg{3, 0,  0, 8, 638, 221, 0});
+    run("overscale237", Cfg{3, 0,  0, 0, 638, 237, 0});
+    run("hybrid221", Cfg{4, 0,  0, 8, 638, 221, 0});
+    run("hybrid-dock221", Cfg{4, 1,  0, 8, 638, 221, 0});
     run("overscale",  Cfg{3, 0,  0, 0, 640, 240, 0});
     run("overscale-d", Cfg{3, 1,  0, 0, 640, 240, 0});
     run("overscale224", Cfg{3, 0,  0, 8, 640, 224, 0});

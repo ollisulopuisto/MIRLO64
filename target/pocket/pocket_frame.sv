@@ -4,12 +4,14 @@
 // what the scaler counts). Which preset is announced to the Pocket, as upstream's slot word does, one frame ahead, on the
 // bounds the frame being sent has; the frame that has other bounds than the announcement made is sent black.
 //
-//   mode  Screen Size            preset (video.json), by the picture's bounds (w x h)
+//   mode  Screen Size            preset (video.json), by the picture's bounds (x y w h)
 //   0     Original               0: 640 x 240, as the scan-out sends it
-//   1     Fill (stretch)         2: 640 x 240, 3: 640 x 224, 4: 640 x 216 -- w 638 .. 640 and that h; else 0
+//   1     Fill (stretch)         w 600 .. 640: 4: 640 x 216 (h <= 216), 3: 640 x 224 (h <= 224), 2: 640 x 240 (h <= 240) -- the first
+//                                that holds the picture's lines (from its first line y, inside the field); else 0
 //   2     Fit (keep aspect)      0
-//   3     Fill (overscale)       5: 520 x 234 (h 240, w >= 520), 6: 480 x 216 (h 224 or 216, w >= 480) -- else 0; docked: 0
-//   4     Hybrid                 7: 588 x 240 (h 240, w >= 588) -- else 0
+//   3     Fill (overscale)       5: 520 x 234 (h 234 .. 240, w >= 520), 6: 480 x 216 (h 216 .. 233, w >= 480), centred in the
+//                                picture -- else 0; docked: 0
+//   4     Hybrid                 7: 588 x 240 (h 200 .. 240, w >= 588): the field's lines, the picture's columns -- else 0
 //   woven frame (640 x 480)      1, whatever the setting: the scan-out's stream as it is
 //
 // The picture's bounds are the window less the crop options (n64_video's picture_x .. picture_h), in the field's own
@@ -29,20 +31,20 @@ module pocket_frame (
     (* async_reg = "true" *) logic [3:0] set_m, set_s;
     always_ff @(posedge clk_vid) begin set_m <= {docked, screen_mode}; set_s <= set_m; end
 
-    function automatic [2:0] choose(input [3:0] s, input [9:0] w, h);
+    function automatic [2:0] choose(input [3:0] s, input [9:0] y, w, h);
         begin
             choose = 3'd0;
             case (s[2:0])
-            3'd1: if (w >= 638 && w <= 640) begin
-                      if (h == 240) choose = 3'd2;
-                      else if (h == 224) choose = 3'd3;
-                      else if (h == 216) choose = 3'd4;
+            3'd1: if (w >= 600 && w <= 640 && h != 0) begin
+                      if (h <= 216 && y + 10'd216 <= 240) choose = 3'd4;
+                      else if (h <= 224 && y + 10'd224 <= 240) choose = 3'd3;
+                      else if (h <= 240) choose = 3'd2;
                   end
             3'd3: if (!s[3]) begin
-                      if (h == 240 && w >= 520) choose = 3'd5;
-                      else if ((h == 224 || h == 216) && w >= 480) choose = 3'd6;
+                      if (h >= 234 && h <= 240 && w >= 520) choose = 3'd5;
+                      else if (h >= 216 && h < 234 && w >= 480) choose = 3'd6;
                   end
-            3'd4: if (h == 240 && w >= 588) choose = 3'd7;
+            3'd4: if (h >= 200 && h <= 240 && w >= 588) choose = 3'd7;
             default: ;
             endcase
         end
@@ -53,7 +55,7 @@ module pocket_frame (
     logic [2:0]  ann_slot = 0, act_slot = 0;
     logic [39:0] ann_b = 0, act_b = 0;
     wire  [39:0] live_b = {pic_x, pic_y, pic_w, pic_h};
-    wire  [2:0]  next_slot = ann ? 3'd1 : choose(set_s, pic_w, pic_h);
+    wire  [2:0]  next_slot = ann ? 3'd1 : choose(set_s, pic_y, pic_w, pic_h);
     logic vs_d = 0, de_d = 0, vde_d = 0;
     wire  frame_start = vs && !vs_d;
     wire  bypass = woven || act_slot <= 3'd2;      // (a woven frame, or a preset that is the whole field: 0, 1 and 2)
@@ -66,9 +68,9 @@ module pocket_frame (
         case (act_slot)
         3'd3: begin ry0 = bt; rh = 224; end
         3'd4: begin ry0 = bt; rh = 216; end
-        3'd5: begin rx0 = bl + ((bw - 10'd520) >> 1); rw = 520; ry0 = bt + 10'd3; rh = 234; end
-        3'd6: begin rx0 = bl + ((bw - 10'd480) >> 1); rw = 480; ry0 = bt + (bh == 224 ? 10'd4 : 10'd0); rh = 216; end
-        3'd7: begin rx0 = bl + ((bw - 10'd588) >> 1); rw = 588; ry0 = bt; rh = 240; end
+        3'd5: begin rx0 = bl + ((bw - 10'd520) >> 1); rw = 520; ry0 = bt + ((bh - 10'd234) >> 1); rh = 234; end
+        3'd6: begin rx0 = bl + ((bw - 10'd480) >> 1); rw = 480; ry0 = bt + ((bh - 10'd216) >> 1); rh = 216; end
+        3'd7: begin rx0 = bl + ((bw - 10'd588) >> 1); rw = 588; ry0 = 0; rh = 240; end
         default: ;
         endcase
     end
