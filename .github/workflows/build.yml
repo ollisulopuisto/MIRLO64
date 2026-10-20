@@ -3,6 +3,10 @@ name: Build MIRLO64 (patched v0.1)
 on:
   workflow_dispatch:
     inputs:
+      seeds:
+        description: "JSON list of fitter seeds to try, e.g. [16] (default: the list in the matrix below)"
+        required: false
+        default: ""
       reuse_run:
         description: "Run id whose closed bitstream (its mirlo64-release artifact) to reuse: no fits, only the runtime and the package (for a change with no RTL in it)"
         required: false
@@ -88,7 +92,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        seed: [12, 27, 5, 20, 3, 41, 1, 7, 2, 4, 6, 8, 9, 10, 11, 13]
+        seed: ${{ fromJSON(inputs.seeds || '[12, 27, 5, 20, 3, 41, 1, 7, 2, 4, 6, 8, 9, 10, 11, 13]') }}
     steps:
       - uses: actions/checkout@v4
         with:
