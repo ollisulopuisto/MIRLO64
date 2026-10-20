@@ -1,0 +1,50 @@
+{
+  "note": "Seeds that closed timing when fitted on the Windows build box (tools/winfit/fit.py, no fit.sh macros: the compile build.yml does). NOT reproducible on the Linux CI: the same seed gives a different fit there (seed 16: 18,256 ALMs and +0.075 ns here, 18,291 ALMs and -0.262 ns in CI). Use the box's own mirlo.rev for these; projects/fits.json (the nightly's) is separate. Seeds tried on the box: 14-37, of which 14,17-24,26,28,29,31-34,37 failed (most: the fitter needs more LABs than the device has).",
+  "quartus": "25.1std.0 Build 1129 10/21/2025 SC Lite Edition",
+  "sources": "67433275ca4827862763385e04ce778944f8ba76b4c2825ea39a97d7aefba532",
+  "best_seed": 35,
+  "fits": [
+    {
+      "seed": 35,
+      "worst_slack_ns": 0.111,
+      "alms": 18270,
+      "mirlo_rev_sha256": "cbfe38d79762df4977419975b148920dbd63a9362a1e7a6b0254ea08dc235311",
+      "date": "2026-10-20"
+    },
+    {
+      "seed": 30,
+      "worst_slack_ns": 0.079,
+      "alms": 18259,
+      "mirlo_rev_sha256": "4a8376e472f3ced8136a078cfdbb4f58f6e38210e47751e943bcf2997fbb9aae",
+      "date": "2026-10-20"
+    },
+    {
+      "seed": 16,
+      "worst_slack_ns": 0.075,
+      "alms": 18256,
+      "mirlo_rev_sha256": "fe2900121eb712171f709e5b0b59cadc6c8040e3cc088c6c231de03c17c5782c",
+      "date": "2026-10-20"
+    },
+    {
+      "seed": 25,
+      "worst_slack_ns": 0.072,
+      "alms": 18289,
+      "mirlo_rev_sha256": "1e79c040fd6d6c4b03d47e9a785aa6301bc0d35acf782aa4d0269b1b3174eb90",
+      "date": "2026-10-20"
+    },
+    {
+      "seed": 36,
+      "worst_slack_ns": 0.052,
+      "alms": 18118,
+      "mirlo_rev_sha256": "d1361dcf6dc4deccf9224faf9e8f110767681b723009cec1a8d23ed43dd18e2b",
+      "date": "2026-10-20"
+    },
+    {
+      "seed": 15,
+      "worst_slack_ns": 0.032,
+      "alms": 18202,
+      "mirlo_rev_sha256": "7b9e8c88600ab579bda5648ced3515901bee2242c8bc811b8e49dd55d8ba3e59",
+      "date": "2026-10-20"
+    }
+  ]
+}
