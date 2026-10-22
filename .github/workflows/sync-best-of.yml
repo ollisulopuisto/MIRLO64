@@ -1,0 +1,46 @@
+name: Sync best-of
+# Every day: best-of (the build that goes on the Pocket) with the fork's chain (fork-patches), upstream's main and the upstream
+# branches in TRACK (tools/sync_best_of.sh) merged in, as a pull request into best-of: sync/best-of-upstream. Nothing is pushed
+# to best-of itself, nothing is built; a merge that changes the hardware says FIT NEEDED in the PR (a seed sweep follows).
+# A merge that conflicts is left out and named in the PR. A scheduled workflow runs from the default branch (patched-v0.1).
+# A merge that brings in a change to .github/workflows needs SYNC_TOKEN (a PAT with the "workflow" scope), else the push is refused.
+on:
+  schedule:
+    - cron: '47 5 * * *'     # after Sync upstream (05:17 UTC) has brought fork-patches up to date
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+      - name: Merge into the sync branch
+        id: sync
+        run: |
+          git config user.name "sync-best-of"
+          git config user.email "noreply@github.com"
+          git remote add upstream https://github.com/tortugaveloz/MIRLO64.git
+          git checkout -q patched-v0.1
+          PUSH=1 bash tools/sync_best_of.sh
+      - name: Open or update the pull request
+        if: steps.sync.outputs.changed == '1'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # REST, not `gh pr`: GraphQL wants read:org, which a PAT without it lacks
+          title="Sync best-of with upstream and fork-patches"
+          [ "${{ steps.sync.outputs.fit_needed }}" = 1 ] && title="$title (FIT NEEDED)"
+          owner="${GH_REPO%%/*}"
+          existing="$(gh api --method GET "repos/$GH_REPO/pulls" -f state=open -f base=best-of -f "head=$owner:sync/best-of-upstream" --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh api --method PATCH "repos/$GH_REPO/pulls/$existing" -f title="$title" -F body=@report.md >/dev/null
+            echo "Updated PR #$existing"
+          else
+            gh api --method POST "repos/$GH_REPO/pulls" -f title="$title" -F body=@report.md -f base=best-of -f head=sync/best-of-upstream --jq '"Created PR #\(.number)"'
+          fi
