@@ -121,6 +121,7 @@ jobs:
           sed -i "s/^set_global_assignment -name SEED .*/set_global_assignment -name SEED ${{ matrix.seed }}/" projects/mirlo.qsf
           grep -n 'name SEED' projects/mirlo.qsf
           cd projects
+          set -o pipefail
           "$QUARTUS_BIN/quartus_sh" --flow compile mirlo 2>&1 | tee ../compile.log | tail -n 40
       - name: Timing closure check
         id: closure
@@ -153,7 +154,12 @@ jobs:
   release:
     name: Package release zip
     needs: [software, fit]
-    if: ${{ !cancelled() && needs.software.result == 'success' }}
+    # fit is skipped when reusing a run (reuse_run set): then release still runs and packages
+    # the reused bitstream. When not reusing, fit ran (it never fails: a seed that doesn't
+    # close just reports closed=false) and release picks the best closing seed. always() lets
+    # release run even when fit was skipped on the reuse path; needs.software.result and the
+    # reuse_run / needs.fit.result checks below keep it from running when it shouldn't.
+    if: ${{ always() && !cancelled() && needs.software.result == 'success' && (inputs.reuse_run != '' || needs.fit.result == 'success') }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4

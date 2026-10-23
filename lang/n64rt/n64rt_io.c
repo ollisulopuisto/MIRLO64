@@ -1495,7 +1495,7 @@ static void dbg_tick(void)
         const u32 pc = n64rt_mon_pc(), pa = pc & 0x1FFFFFFFu;
         int busy = 1;
         if ((pc >> 29) >= 4u && (pc >> 29) <= 5u && pa >= 4u && pa < 0x00800000u) busy = !n64rt_dbg_idle(hw_rd(pa), hw_rd(pa - 4u));
-        n64rt_dbg_sample(&s_dbg, busy, n64rt_rsp_running(), !mrdp_status_idle_read(), s_frames);
+        n64rt_dbg_sample(&s_dbg, busy, n64rt_rsp_running(), !rdp_status_idle_read(), s_frames);
     }
     if (type < 2u || !width) return;
     /* The picture is drawn once into a scratch buffer (cached RAM, no frame buffer's stride): when a column is added, the rate changes or the
