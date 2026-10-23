@@ -1,4 +1,4 @@
-// rtl/rdp against the C model (lang/c/mrdp/mrdp.c built with MRDP_N64, the
+// rtl/rdp against the C model (lang/c/rdp/rdp.c built with RDP_N64, the
 // contract), on real graphics tasks.
 //   tb_rdp [-o out_prefix] task_gfx_*.bin ...
 // A task dump (sim/rsp) is run on the RSP's reference model; the RDP commands
@@ -11,6 +11,7 @@
 // random texture image at any alignment, triangles and rectangles in every
 // cycle type): what real tasks do not reach.
 //   TB_STEP=1   compare after every command, stop at the first that differs
+//   TB_C32=1    random streams into a 32-bit colour image (docs/cimg32.md)
 #include "Vrdp_top.h"
 #include "Vrdp_top___024root.h"
 #include "verilated.h"
@@ -24,10 +25,10 @@
 extern "C" {
 #include "rsp.h"
 }
-#include "mrdp.h"   // mrdp.c is built as C++ here too
+#include "rdp.h"   // rdp.c is built as C++ here too
 
 static const uint32_t SIZE = 8u << 20;                     // the RDRAM (the RSP's)
-static const uint32_t MSIZE = 16u << 20;                   // the RTL's and the model's: and the hidden plane at 8 MiB (mrdp.h)
+static const uint32_t MSIZE = 16u << 20;                   // the RTL's and the model's: and the hidden plane at 8 MiB (rdp.h)
 static uint8_t *rsp_mem, *rtl_mem, *mdl_mem;
 static uint16_t mdl_rd(void *, uint32_t a) { a &= MSIZE - 2; return (uint16_t)(mdl_mem[a] << 8 | mdl_mem[a + 1]); }
 static void mdl_wr(void *, uint32_t a, uint16_t v) { a &= MSIZE - 2; mdl_mem[a] = (uint8_t)(v >> 8); mdl_mem[a + 1] = (uint8_t)v; }
@@ -178,17 +179,29 @@ static unsigned gr(unsigned n) { return gr() % n; }
 static int grs(int n) { return (int)gr(2 * n + 1) - n; }
 // (the random streams' images: the depth image a multiple of 8 KiB above the colour image -- in the same bank of the SoC's SDRAM,
 // word for word, TB_SDRAM's rows -- or TB_ZIMG=<address>: where given, 0x280800 a bank on)
-static const uint32_t R_CIMG = 0x200000, R_ZIMG = getenv("TB_ZIMG") ? (uint32_t)strtoul(getenv("TB_ZIMG"), 0, 0) : 0x280000, R_TEX = 0x100000;
+// TB_C32=1: the colour image a 32-bit one (RGBA8888, the coverage in the alpha byte), its width (TB_CW, else by the seed:
+// 320, 296, or 640 or 1000 for spans longer than the line buffers' 512 pixels a set, which the RTL draws in two halves);
+// a wide one's scissor and primitives span its width, and the depth image is 1 MiB on, past the colour image's rows
+static const bool c32_mode = getenv("TB_C32") && atoi(getenv("TB_C32"));
+static const uint32_t R_CIMG = 0x200000, R_ZIMG = getenv("TB_ZIMG") ? (uint32_t)strtoul(getenv("TB_ZIMG"), 0, 0) : c32_mode ? 0x300000 : 0x280000, R_TEX = 0x100000;
+static unsigned c32_sw = 320;           // (TB_C32: the scissor's full width, the scale of the primitives' columns)
+static int c32x(int v) { return c32_mode ? (int)((int64_t)v * (int)c32_sw / 320) : v; }
 static void cmd2(uint32_t a, uint32_t b) { cmds.push_back(a); cmds.push_back(b); }
 // TB_CC=1: the combiner's arithmetic under test -- cycle types 0 and 1 only, the
 // blender passing the combiner's colour alone (no FORCE_BL, P = the pixel), every
 // combiner word random, the colour registers set often
 static const bool cc_mode = getenv("TB_CC") != nullptr;
+// TB_LOD=1: streams for the texture LOD (docs/lod.md) -- 2-cycle mostly, DaDy of S, T, W on the scale of DaDx (not
+// random words: the step to the next line then puts nearly every pixel at the far level), steps from a fraction of a
+// texel to tens, the LOD blend (TEXEL1 - TEXEL0) * LOD_FRACTION + TEXEL0 often, SET_PRIM_COLOR's minimum level, more
+// YUV tiles. Without it the streams are what they were, call for call.
+static const bool lod_mode = getenv("TB_LOD") != nullptr;
 static void rand_modes()
 {
     static const unsigned cyc[10] = { 0, 0, 0, 0, 1, 1, 1, 2, 3, 0 };
     uint32_t h = gr() & 0x00FFFFFFu & ~(3u << 20), l = gr() << 8 | gr(256);
-    h |= (cc_mode ? gr(2) : cyc[gr(10)]) << 20;
+    h |= (cc_mode ? gr(2) : (lod_mode && gr(4)) ? 1u : cyc[gr(10)]) << 20;
+    if (lod_mode && gr(2)) h |= 1u << 16;               // (TEX_LOD three times in four)
     if (cc_mode) l &= ~(0xF0000000u | 1u << 14);
     if (gr(3)) h &= ~(1u << 15);                       // the TLUT mostly off
     if (gr(4) == 0) l &= ~0x30u;                       // sometimes no Z at all
@@ -198,7 +211,9 @@ static void rand_modes()
 static void rand_tile(unsigned t)
 {
     static const unsigned fmts[8] = { 0, 0, 2, 3, 4, 0, 3, 1 };
-    unsigned fmt = fmts[gr(8)], size = gr(4), line = gr(4) ? gr(17) : gr(512), tmem = gr(3) ? gr(256) & ~3u : gr(512);
+    unsigned fmt = fmts[gr(8)], size = gr(4);
+    if (lod_mode && gr(6) == 0) { fmt = 1; size = 2; }  // (YUV 16: a converting pass checks the tile before TEXEL1's)
+    unsigned line = gr(4) ? gr(17) : gr(512), tmem = gr(3) ? gr(256) & ~3u : gr(512);
     uint32_t w1 = t << 24 | gr(16) << 20 | gr(2) << 19 | gr(2) << 18 | gr(2) << 9 | gr(2) << 8;
     w1 |= (gr(3) ? gr(8) : gr(16)) << 14 | (gr(3) ? 0 : gr(16)) << 10 | (gr(3) ? gr(8) : gr(16)) << 4 | (gr(3) ? 0 : gr(16));
     cmd2(0x35000000u | fmt << 21 | size << 19 | line << 9 | tmem, w1);
@@ -226,16 +241,17 @@ static void rand_load()
         cmd2(0x30000000u | (s0 << 2 | gr(4)) << 12 | (gr(6) ? 0 : gr(8) << 2), t << 24 | ((s1 << 2 | gr(4)) & 0xFFF) << 12);
     }
 }
-static void put_group(const int32_t v[4], const int32_t dx[4], const int32_t de[4])
+static void put_group(const int32_t v[4], const int32_t dx[4], const int32_t de[4], const int32_t *dy = nullptr)
 {
     uint32_t w[16];
-    for (int i = 0; i < 16; i++) w[i] = gr() << 8 | gr(256);     // DaDy: whatever
+    for (int i = 0; i < 16; i++) w[i] = gr() << 8 | gr(256);     // DaDy: whatever (TB_LOD: dy)
     for (int k = 0; k < 4; k++) {
         int wi = k >> 1, sh = (k & 1) ? 0 : 16;
         uint32_t m = ~(0xFFFFu << sh);
         w[0 + wi] = (w[0 + wi] & m) | ((uint32_t)v[k] >> 16) << sh;   w[4 + wi] = (w[4 + wi] & m) | ((uint32_t)v[k] & 0xFFFF) << sh;
         w[2 + wi] = (w[2 + wi] & m) | ((uint32_t)dx[k] >> 16) << sh;  w[6 + wi] = (w[6 + wi] & m) | ((uint32_t)dx[k] & 0xFFFF) << sh;
         w[8 + wi] = (w[8 + wi] & m) | ((uint32_t)de[k] >> 16) << sh;  w[12 + wi] = (w[12 + wi] & m) | ((uint32_t)de[k] & 0xFFFF) << sh;
+        if (dy) { w[10 + wi] = (w[10 + wi] & m) | ((uint32_t)dy[k] >> 16) << sh; w[14 + wi] = (w[14 + wi] & m) | ((uint32_t)dy[k] & 0xFFFF) << sh; }
     }
     for (int i = 0; i < 16; i++) cmds.push_back(w[i]);
 }
@@ -244,8 +260,8 @@ static void rand_tri()
     // three vertices, x 16.16 and y in quarter rows, around the image; now and then far outside
     int64_t x[3]; int y[3];
     int big = gr(12) == 0;
-    for (int i = 0; i < 3; i++) { x[i] = (int64_t)((int)gr(big ? 1200 : 400) - (big ? 400 : 40)) << 16 | gr(65536); y[i] = (int)gr(big ? 4 * 600 : 4 * 300) - (big ? 600 : 120); }
-    if (gr(6) == 0) { int c = (int)gr(320) << 16, d = (int)gr(4 * 240); for (int i = 0; i < 3; i++) { x[i] = c + grs(6 << 16); y[i] = d + grs(24); } }   // a small one
+    for (int i = 0; i < 3; i++) { x[i] = (int64_t)((int)gr(c32x(big ? 1200 : 400)) - c32x(big ? 400 : 40)) << 16 | gr(65536); y[i] = (int)gr(big ? 4 * 600 : 4 * 300) - (big ? 600 : 120); }
+    if (gr(6) == 0) { int c = (int)gr(c32x(320)) << 16, d = (int)gr(4 * 240); for (int i = 0; i < 3; i++) { x[i] = c + grs(6 << 16); y[i] = d + grs(24); } }   // a small one
     if (gr(5) == 0) {          // on the edge walker's grid: vertices on quarter pixels, a few LSBs off (the sticky bit's cases)
         for (int i = 0; i < 3; i++) x[i] = (x[i] & ~(int64_t)0x3FFF) | (gr(3) == 0 ? gr(4) : 0);
     }
@@ -277,6 +293,16 @@ static void rand_tri()
         for (int k = 0; k < 2; k++) { v[k] = grs(wide ? 0x7FFFFFF0 : 64 << 21); dx[k] = grs(wide ? 1 << 24 : 1 << 20); de[k] = grs(wide ? 1 << 24 : 1 << 20); }
         v[2] = gr(8) ? (int32_t)(0x04000000u + gr(0x7B0000) * 256u) : grs(0x7FFFFFF0); dx[2] = grs(1 << (gr(4) ? 16 : 22)); de[2] = grs(1 << (gr(4) ? 16 : 22));
         v[3] = (int32_t)(gr() << 8); dx[3] = (int32_t)gr(); de[3] = (int32_t)gr();
+        if (lod_mode) {
+            // steps of S, T from a sixteenth of a texel a pixel to tens (2^21 is a texel), DaDy on the same scale; W's
+            // steps a small part of W (the perspective divide then gives steps on that scale too)
+            // (and now and then hundreds of texels, and a W that crosses 1.0 down to 0 and below inside the triangle)
+            int32_t dy[4];
+            for (int k = 0; k < 2; k++) { dx[k] = grs(1 << (14 + gr(15))); dy[k] = grs(1 << (14 + gr(15))); de[k] = grs(1 << (17 + gr(9))); }
+            dx[2] = grs(1 << (12 + gr(8))); dy[2] = grs(1 << (12 + gr(8))); dy[3] = (int32_t)gr();
+            if (gr(8) == 0) { v[2] = grs(1 << 18); dx[2] = grs(1 << 15); dy[2] = grs(1 << 15); }
+            put_group(v, dx, de, dy);
+        } else
         put_group(v, dx, de);
     }
     if (fl & 1) {
@@ -286,8 +312,8 @@ static void rand_tri()
 }
 static void rand_rect(int tex)
 {
-    unsigned x0 = gr(8) ? gr(4 * 300) : gr(4096), y0 = gr(8) ? gr(4 * 230) : gr(4096);
-    unsigned x1 = gr(8) ? x0 + gr(4 * 120) : gr(4096), y1 = gr(8) ? y0 + gr(4 * 60) : gr(4096);
+    unsigned x0 = gr(8) ? gr(c32x(4 * 300)) : gr(4096), y0 = gr(8) ? gr(4 * 230) : gr(4096);
+    unsigned x1 = gr(8) ? x0 + gr(c32x(4 * 120) * (c32_sw > 512 ? 4 : 1)) : gr(4096), y1 = gr(8) ? y0 + gr(4 * 60) : gr(4096);
     if (!tex) { cmd2(0x36000000u | (x1 & 0xFFF) << 12 | (y1 & 0xFFF), (x0 & 0xFFF) << 12 | (y0 & 0xFFF)); return; }
     cmd2((gr(5) ? 0x24000000u : 0x25000000u) | (x1 & 0xFFF) << 12 | (y1 & 0xFFF), gr(8) << 24 | (x0 & 0xFFF) << 12 | (y0 & 0xFFF));
     static const unsigned steps[6] = { 0x0400, 0x1000, 0x0200, 0x0800, 0xFC00, 0x0155 };
@@ -295,6 +321,15 @@ static void rand_rect(int tex)
 }
 static void rand_combine()
 {
+    if (lod_mode && gr(2)) {
+        // cycle 0: (TEXEL1 - TEXEL0) * LOD_FRACTION + TEXEL0, colour and alpha; cycle 1: COMBINED, or now and then the
+        // fraction again, (TEXEL0 - COMBINED) * LOD_FRACTION + COMBINED (TEXEL0 there: the second pass's sample)
+        uint32_t hi = 2u << 20 | 13u << 15 | 2u << 12 | 0u << 9, lo = 1u << 28 | 1u << 15 | 1u << 12 | 1u << 9;
+        if (gr(3)) { hi |= 15u << 5 | 31u; lo |= 15u << 24 | 0u << 6 | 7u << 21 | 7u << 18 | 7u << 3 | 0u; }
+        else { hi |= 1u << 5 | 13u; lo |= 0u << 24 | 0u << 6 | 1u << 21 | 0u << 18 | 0u << 3 | 0u; }
+        cmd2(0x3C000000u | hi, lo);
+        return;
+    }
     unsigned k = cc_mode ? 9 : gr(10);
     if (k < 4)      cmd2(0x3C000000u | 0xFFFFFFu, 0xFF000000u | 1u << 15 | 7u << 12 | 1u << 9 | 1u << 6 | 7u << 3 | 1u | 7u << 21 | 7u << 18);   // TEXEL0
     else if (k < 6) cmd2(0x3C000000u | 1u << 20 | 4u << 15 | 1u << 12 | 4u << 9 | 1u << 5 | 4u, 0xFF000000u | 7u << 15 | 7u << 12 | 7u << 9 | 7u << 6 | 7u << 3 | 7u | 1u << 21 | 4u << 18);   // TEXEL0 * SHADE
@@ -317,16 +352,22 @@ static void rand_combine()
 }
 static void rand_stream(unsigned seed, int n)
 {
-    // TB_CW=<w>: the colour image's width (320; Banjo-Kazooie's is 292: rows share hidden-plane groups)
-    static const unsigned cw1 = getenv("TB_CW") ? (unsigned)atoi(getenv("TB_CW")) - 1u : 319u;
+    // TB_CW=<w>: the colour image's width (320; one game's is 292: rows share hidden-plane groups)
+    static unsigned cw1 = getenv("TB_CW") ? (unsigned)atoi(getenv("TB_CW")) - 1u : 319u;
     // TB_C8=1: the colour image an 8-bit one (a byte a pixel), as software draws a colour-indexed texture
-    static const unsigned csz = getenv("TB_C8") && atoi(getenv("TB_C8")) ? 1u : 2u;
+    static const unsigned csz = c32_mode ? 3u : getenv("TB_C8") && atoi(getenv("TB_C8")) ? 1u : 2u;
     grng = seed * 2654435761u + 12345u;
     for (uint32_t i = 0; i < SIZE; i++) rsp_mem[i] = (uint8_t)gr(256);
     cmds.clear();
+    if (c32_mode) {
+        static const unsigned ws[4] = { 320, 296, 640, 1000 };
+        cw1 = getenv("TB_CW") ? cw1 : ws[seed % 4] - 1u;
+        c32_sw = cw1 + 1u > 1023u ? 1023u : cw1 + 1u;
+    }
+    const uint32_t scis = (c32_mode ? c32_sw : 320u) << 14 | 240u << 2;
     cmd2(0x3F000000u | csz << 19 | cw1, R_CIMG);
     cmd2(0x3E000000u, R_ZIMG);
-    cmd2(0x2D000000u, 320u << 14 | 240u << 2);
+    cmd2(0x2D000000u, scis);
     for (int t = 0; t < 8; t++) rand_tile((unsigned)t);
     rand_timg(); rand_modes(); rand_combine();
     for (int i = 0; i < n; i++) {
@@ -339,14 +380,18 @@ static void rand_stream(unsigned seed, int n)
         else if (k < 68) rand_tile(gr(8));
         else if (k < 74) rand_timg();
         else if (k < 84) rand_load();
-        else if (k < 90) cmd2((cc_mode && gr(2) ? (gr(3) ? 0x3Au + gr(2) : 0x2Cu) : 0x37u + gr(5)) << 24 | gr(256), gr() << 8 | gr(256));        // fill, fog, blend, prim, env (TB_CC: and convert)
+        else if (k < 90) {
+            uint32_t w0 = (cc_mode && gr(2) ? (gr(3) ? 0x3Au + gr(2) : 0x2Cu) : 0x37u + gr(5)) << 24 | gr(256);        // fill, fog, blend, prim, env (TB_CC: and convert)
+            if (lod_mode) w0 |= gr(32) << 8;                                                  // (SET_PRIM_COLOR's minimum level)
+            cmd2(w0, gr() << 8 | gr(256));
+        }
         else if (k < 91) cmd2(0x2E000000u, gr() << 8 | gr(256));                              // prim depth
         else if (k < 92) cmd2(0x2C000000u | gr(1 << 22), gr() << 8 | gr(256));                // convert: K4, K5 (the combiner's)
         else if (k < 94) {                                                                    // scissor
-            unsigned x0 = gr(4 * 100), y0 = gr(4 * 80);
-            cmd2(0x2D000000u | x0 << 12 | y0, (x0 + gr(4 * 320 - x0 + 1)) << 12 | (y0 + gr(4 * 240 - y0 + 1)));
+            unsigned x0 = gr(c32x(4 * 100)), y0 = gr(4 * 80);
+            cmd2(0x2D000000u | x0 << 12 | y0, (x0 + gr(c32x(4 * 320) - x0 + 1)) << 12 | (y0 + gr(4 * 240 - y0 + 1)));
         }
-        else if (k < 95) cmd2(0x2D000000u, 320u << 14 | 240u << 2);
+        else if (k < 95) cmd2(0x2D000000u, scis);
         else if (k < 96) {                                                                    // (now and then not a 16-bit image)
             // TB_RAND_CZ=1: and, one time in three, the depth image as the colour image,
             // as a game clears its Z buffer: fill mode, a colour, a few rectangles (or a
@@ -372,12 +417,17 @@ static void rand_stream(unsigned seed, int n)
     cmd2(0x29000000u, 0);
 }
 
-static void write_ppm(const char *path, const uint8_t *mem, uint32_t cimg, uint32_t width)
+static void write_ppm(const char *path, const uint8_t *mem, uint32_t cimg, uint32_t width, unsigned size)
 {
     FILE *o = fopen(path, "wb");
     if (!o) return;
     fprintf(o, "P6\n%u 240\n255\n", width);
     for (uint32_t i = 0; i < width * 240u; i++) {
+        if (size == 3) {                                    // (a 32-bit image: its R, G, B bytes as they are)
+            uint32_t a = (cimg + 4 * i) & (SIZE - 4);
+            fwrite(mem + a, 1, 3, o);
+            continue;
+        }
         uint32_t a = (cimg + 2 * i) & (SIZE - 2);
         unsigned v = mem[a] << 8 | mem[a + 1], r5 = v >> 11, g5 = (v >> 6) & 31, b5 = (v >> 1) & 31;
         unsigned char c[3] = { (unsigned char)(r5 << 3 | r5 >> 2), (unsigned char)(g5 << 3 | g5 >> 2), (unsigned char)(b5 << 3 | b5 >> 2) };
@@ -400,7 +450,7 @@ int main(int argc, char **argv)
     if (getenv("TB_STALL")) mem_stall = (unsigned)atoi(getenv("TB_STALL"));
     rsp_mem = (uint8_t *)malloc(SIZE); rtl_mem = (uint8_t *)malloc(MSIZE); mdl_mem = (uint8_t *)malloc(MSIZE);
     static rsp_t s;
-    static mrdp_t mdl;
+    static rdp_t mdl;
     int bad = 0;
     const bool rnd_mode = !strcmp(argv[ai], "-r");
     char rname[64];
@@ -437,7 +487,7 @@ int main(int argc, char **argv)
         memset(rtl_mem + SIZE, 0xFF, MSIZE - SIZE);         // (the hidden plane: all ones, as the runtime sets it)
         memset(mdl_mem + SIZE, 0xFF, MSIZE - SIZE);
 
-        mrdp_init(&mdl, nullptr, mdl_rd, mdl_wr);
+        rdp_init(&mdl, nullptr, mdl_rd, mdl_wr);
         if (top) delete top;
         top = new Vrdp_top;
         cmdq.clear(); reads.clear(); wr_addrs.clear();
@@ -445,13 +495,13 @@ int main(int argc, char **argv)
         for (int i = 0; i < 8; i++) tick();
         top->rst = 0;
         uint64_t c0 = cycles, ncmd = 0;
-        uint32_t cimg = 0, width = 320;
+        uint32_t cimg = 0, width = 320; unsigned csize = 2;
         std::vector<uint32_t> cur;
         if (const char *dp = getenv("TB_DUMP")) {          // TB_DUMP=file: the command words, big-endian (to replay on the model alone)
             if (FILE *df = fopen(dp, "wb")) { for (uint32_t x : cmds) { uint8_t b4[4]; wbe32(b4, x); fwrite(b4, 1, 4, df); } fclose(df); }
         }
         for (uint32_t x : cmds) {
-            cmdq.push_back(x); mrdp_push(&mdl, x);
+            cmdq.push_back(x); rdp_push(&mdl, x);
             cur.push_back(x);
             if (mdl.ncmd != 0) continue;                    // command not complete yet
             ncmd++;
@@ -464,11 +514,11 @@ int main(int argc, char **argv)
             {
                 unsigned o = (cur[0] >> 24) & 63;
                 if (((o & 0x3A) == 0x0A) || o == 0x24 || o == 0x25) {       // a textured primitive: its texel's kind
-                    const mrdp_tile_t &t = mdl.tile[o < 0x10 ? (cur[0] >> 16) & 7 : (cur[1] >> 24) & 7];
+                    const rdp_tile_t &t = mdl.tile[o < 0x10 ? (cur[0] >> 16) & 7 : (cur[1] >> 24) & 7];
                     kinds.insert(((mdl.other_h >> 20) & 3) << 12 | ((mdl.other_h >> 14) & 3) << 8 | t.fmt << 4 | t.size);
                 }
             }
-            if (((cur[0] >> 24) & 63) == MRDP_OP_SET_CIMG && mdl.cimg != mdl.zimg) { cimg = mdl.cimg; width = mdl.cimg_width; }
+            if (((cur[0] >> 24) & 63) == RDP_OP_SET_CIMG && mdl.cimg != mdl.zimg) { cimg = mdl.cimg; width = mdl.cimg_width; csize = mdl.cimg_size; }
             if (step) {
                 while (!rtl_idle()) tick();
                 for (int i = 0; i < 16; i++) tick();
@@ -518,10 +568,11 @@ int main(int argc, char **argv)
         if (diff) printf(", %llu 16-bit words differ, first at %06x\n", (unsigned long long)diff, first);
         if (sdram) { printf("\n    SDRAM: %llu row misses, %llu cycles lost turning between reads and writes, %llu of the other master's accesses", (unsigned long long)sd.n_miss, (unsigned long long)sd.n_turn, (unsigned long long)sd.n_cpu); sd.n_miss = sd.n_turn = sd.n_cpu = 0; }
         if (prof) {
-            static const char *nm[20] = { "idle (waiting for commands)", "triangle start", "row", "setup", "read the span's Z", "read the span's colour", "pixels", "drain the pipeline",
-                                          "write colour", "write Z", "next row", "wait for memory", "fill", "texture load", "sync", "rectangle start", "load start", "span", "attributes", "XL" };
+            static const char *nm[21] = { "idle (waiting for commands)", "triangle start", "row", "setup", "read the span's Z", "read the span's colour", "pixels", "drain the pipeline",
+                                          "write colour", "write Z", "next row", "wait for memory", "fill", "texture load", "sync", "rectangle start", "load start", "span", "attributes", "XL",
+                                          "a span's second half" };
             printf("\n");
-            for (int i = 0; i < 20; i++) if (st_cyc[i]) printf("    %-28s %9llu cycles  %5.1f %%\n", nm[i], (unsigned long long)st_cyc[i], 100.0 * st_cyc[i] / cycles);
+            for (int i = 0; i < 21; i++) if (st_cyc[i]) printf("    %-28s %9llu cycles  %5.1f %%\n", nm[i], (unsigned long long)st_cyc[i], 100.0 * st_cyc[i] / cycles);
             for (int i = 0; i < 32; i++) st_cyc[i] = 0;
         }
         if (getenv("TB_KINDS")) {
@@ -532,8 +583,8 @@ int main(int argc, char **argv)
         if (diff || top->sync_count != mdl.sync_count || !rtl_idle()) bad = 1;
         if (prefix && cimg) {
             char path[1024];
-            snprintf(path, sizeof path, "%s_%d_rtl.ppm", prefix, k); write_ppm(path, rtl_mem, cimg, width);
-            snprintf(path, sizeof path, "%s_%d_model.ppm", prefix, k); write_ppm(path, mdl_mem, cimg, width);
+            snprintf(path, sizeof path, "%s_%d_rtl.ppm", prefix, k); write_ppm(path, rtl_mem, cimg, width, csize);
+            snprintf(path, sizeof path, "%s_%d_model.ppm", prefix, k); write_ppm(path, mdl_mem, cimg, width, csize);
         }
     }
     if (top) delete top;

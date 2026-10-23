@@ -71,7 +71,7 @@ module interact_bridge_test;
         .aud_fill(12'd0), .br_file_size(32'd0), .br_complete_trigger(1'b0), .br_current_address(32'd0), .br_command_result_code(3'd0),
         .br_host_reset_n(1'b1), .br_host_loaded(1'b1), .cont_key(cont0), .cont_joy(cont0), .cont_trig(cont0),
         .vblank(1'b0), .tv_pal(1'b0), .bus_errors(16'd0), .su_valid(1'b0), .su_data(32'd0), .cmd_ready(1'b1),
-        .mrdp_sync_count(32'd0), .mrdp_load_count(32'd0), .mrdp_unknown_ops(16'd0), .mrdp_idle(1'b1),
+        .rdp_sync_count(32'd0), .rdp_load_count(32'd0), .rdp_unknown_ops(16'd0), .rdp_idle(1'b1),
         .uart_txfull(1'b0), .uart_rx_byte(8'd0), .uart_rxempty(1'b1), .mon_sp(1'b0), .mon_field(1'b0), .mon_dp(1'b0),
         .mi_w_mi(1'b0), .mi_w_pi(1'b0), .mi_w_we(1'b0), .mi_w_a(2'd0), .mi_w_wd(32'd0), .d_rdata(32'd0), .d_ack(1'b0),
         .io_req(1'b0), .io_we(1'b0), .io_adr(24'd0), .io_wd(32'd0), .vi_irq(1'b0), .vi_chg(1'b0), .vi_clr(1'b0),

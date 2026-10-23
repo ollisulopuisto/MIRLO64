@@ -86,7 +86,7 @@
 //  - Caches: 16 KiB I, 8 KiB D, direct mapped, 32-byte lines, physically
 //    tagged; KSEG0 RDRAM only. The D-cache writes through an 8-entry write
 //    buffer: memory is always current for the engines that read it (the RSP
-//    firmware, MRDP, the audio core). A read goes out only with the buffer
+//    firmware, RDP, the audio core). A read goes out only with the buffer
 //    empty. ld, sd, ldc1 and sdc1 to cached memory are two words in two
 //    cycles, through the cache and the write buffer as any other. Uncached,
 //    device and TLB-mapped accesses (but a fetch from a cacheable mapped page,
@@ -205,6 +205,9 @@ module mips_core #(
     // table that were cacheable (the entry's C bit, COP0 23's bit 5) -- and a fetch from such a page runs through
     // the I-cache like KSEG0's (see "The page registers" above F). 0: a mapped fetch is always the slow path.
     parameter bit FPG = 0,
+    // the D-cache drops a line another master writes into (FLAT, the SDRAM's 64 MiB): sn_t turns over for each of
+    // those writes, sn_line is its line (pa[25:5]); see "The snoop" below the cache RAM writes
+    parameter bit SNOOP = 0,
     parameter bit SIM_COUNT_RETIRE = 0      // Count/Random advance per executed instruction (co-simulation)
 ) (
     input  wire         clk,
@@ -231,6 +234,11 @@ module mips_core #(
     input  wire  [31:0] mem_rdata,
     input  wire         irq_rcp,            // Cause.IP2 (the MI)
     input  wire         irq_mon,            // MON: the monitor level's interrupt
+    // SNOOP: another master's write (sampled here: from another clock, each value lasts a cycle of this one at least),
+    // and the hold on those writes while the lines to drop pile up
+    input  wire         sn_t,
+    input  wire  [20:0] sn_line,
+    output logic        sn_hold,
     // retire trace (co-simulation)
     output logic        tr_retire,
     output logic [31:0] tr_pc,
@@ -648,6 +656,8 @@ logic        ic_we;  logic [IW-1:0] ic_waddr;  logic [31:0] ic_wdata;
 logic        ict_we; logic [IW-4:0]  ict_waddr; logic [ITW:0] ict_wdata;
 logic        dc_we;  logic [DW-1:0] dc_waddr;  logic [31:0] dc_wdata; logic [3:0] dc_wbe;
 logic        dct_we; logic [DW-4:0] dct_waddr; logic [16:0] dct_wdata;
+logic        sn_go; logic [DW-4:0] sn_idx;  // (SNOOP) a line to drop, by the tags' write port when the core leaves it
+logic        sn_kill;                        // (SNOOP) the line being read in was written meanwhile: it comes in invalid
 logic        slow_is_d;
 logic        slow_d_own;                     // P_SLOW was granted to M's slow path (else to F's)
 
@@ -695,11 +705,16 @@ logic [31:0] f_pc;
 logic        f_ok;                           // the RAMs hold f_pc's line this cycle
 logic        ds_next;                        // the next instruction into D is a delay slot
 logic        rd_pend, rd_taken, rd_annul;    // its branch's decision, when it left D before it
-logic [31:0] rd_target;
+logic [31:0] rd_target;                      // (!FAST)
+// FAST: E's branch's two ways, its target (rd_tt) and the instruction after its delay slot (rd_tn), registered as it
+// leaves E with whether it was taken (rd_tk): the choice is made behind the registers, where the fetch reads it (rd_tgt),
+// so the branch's decision is not in front of 32 selects
+logic        rd_tk;
+logic [31:0] rd_tt, rd_tn;
 
 logic        d_valid, d_dly, d_fexc;
 logic        d_fmiss;                        // FAST: D's word is of another line than its pc's
-// FAST: the branch that left E last cycle (rd_res) -- rd_target is where the
+// FAST: the branch that left E last cycle (rd_res) -- rd_tgt is where the
 // fetch goes after its delay slot, rd_annul says the slot is dropped, rd_fix
 // that the fetch went elsewhere. rd_pend then keeps the two for a delay slot
 // that is still to come. e_bp: the fetch followed E's branch as taken
@@ -885,7 +900,10 @@ wire        e_lt   = FAST ? ((e_a[31] != e_bv[31]) ? e_a[31] : e_cs[31]) : $sign
 wire        e_ltu  = FAST ? !e_cs[32] : e_a < e_bv;
 wire        e_eq   = e_a == e_bv;
 wire [5:0]  e_fn  = e_insn[5:0];
-wire [4:0]  e_sh  = (e_fn == 6'h04 || e_fn == 6'h06 || e_fn == 6'h07) ? e_a[4:0] : e_insn[10:6];
+// (FAST: whether the amount is rs's -- sllv, srlv, srav -- is a register set with e_insn, e_k_shv, so the shifter's
+// amount is one select after rs's forwarding and no decode of e_insn sits in front of it)
+logic       e_k_shv;
+wire [4:0]  e_sh  = (FAST ? e_k_shv : (e_fn == 6'h04 || e_fn == 6'h06 || e_fn == 6'h07)) ? e_a[4:0] : e_insn[10:6];
 
 // one shifter: SRL/SRA directly, SLL as a right shift of the bit-reversed value
 function automatic logic [31:0] rev32(input logic [31:0] v);
@@ -1437,8 +1455,9 @@ wire f_hit_m = PG && f_ok && !f_misal && ic_tq[ITW] && ((f_mhit0 && ic_tq[ITW-1:
 wire f_hit = f_hit_k || f_hit_m;
 wire f_have = f_ok && (fs == FS_READY || (fs == FS_RUN && ((FAST ? f_cx : f_hit) || f_misal)));
 wire f_take = !d_valid || d_adv;
-// (FAST) the fetch went the wrong way behind the delay slot: to rd_target now
+// (FAST) the fetch went the wrong way behind the delay slot: to rd_tgt now
 wire b_redir = FAST && rd_res && rd_fix && !ds_next;
+wire [31:0] rd_tgt = rd_tk ? rd_tt : rd_tn;
 wire f_deliver = f_have && f_take && !flush && !d_imiss && !b_redir;
 // (what the fetch has under way is dropped by a flush, and by that)
 wire f_kill = flush || b_redir;
@@ -1488,9 +1507,9 @@ logic [31:0] f_nx;
 always_comb begin
     if (flush) f_nx = flush_pc;
     else if (d_imiss) f_nx = d_pc;
-    else if (b_redir) f_nx = rd_target;
+    else if (b_redir) f_nx = rd_tgt;
     else if (!f_have) f_nx = f_pc;
-    else if (ds_next) f_nx = (rd_res || rd_pend) ? rd_target : f_pc + 32'd4;    // (the delay slot of a branch decided, or not yet)
+    else if (ds_next) f_nx = (rd_res || rd_pend) ? rd_tgt : f_pc + 32'd4;    // (the delay slot of a branch decided, or not yet)
     else if (d_ok && d_k_cti) f_nx = d_k_pred ? d_ptarget : f_pc + 32'd4;
     else f_nx = f_pc + 32'd4;
 end
@@ -1591,14 +1610,16 @@ end
 // =============================================================== cache RAM writes
 always_comb begin
     ic_we = 0; ic_waddr = 0; ic_wdata = 0; ict_we = 0; ict_waddr = 0; ict_wdata = 0;
-    dc_we = 0; dc_waddr = 0; dc_wdata = 0; dc_wbe = 0; dct_we = 0; dct_waddr = 0; dct_wdata = 0;
+    dc_we = 0; dc_waddr = 0; dc_wdata = 0; dc_wbe = 0;
+    // (SNOOP: a line another master wrote is dropped in a cycle the core writes no tag, sn_go says)
+    dct_we = sn_go; dct_waddr = sn_idx; dct_wdata = 0;
     if (port == P_ILINE && mem_rvalid) begin
         ic_we = 1; ic_waddr = {PG ? {f_fill_col, f_fill_pa[11:5]} : f_fill_pa[IW+1:5], f_cnt}; ic_wdata = mem_rdata;
         if (f_cnt == 3'd7) begin ict_we = 1; ict_waddr = PG ? {f_fill_col, f_fill_pa[11:5]} : f_fill_pa[IW+1:5]; ict_wdata = {1'b1, f_fill_pa[28:TLO]}; end
     end
     if (port == P_DLINE && mem_rvalid) begin
         dc_we = 1; dc_wbe = 4'hF;
-        if (ms_cnt == 3'd7) begin dct_we = 1; dct_waddr = m_fpa[DW+1:5]; dct_wdata = {1'b1, m_fpa[28:13]}; end
+        if (ms_cnt == 3'd7) begin dct_we = 1; dct_waddr = m_fpa[DW+1:5]; dct_wdata = {!sn_kill, m_fpa[28:13]}; end
     end
     // a store's word: into the D-cache (hit), or drop the line an uncached store may shadow
     if ((m_commit_e || m_w0) && m_st && !m_sc_fail) begin
@@ -1624,6 +1645,62 @@ end
 // the D-cache read: the next M's address, or M's own while it waits
 // (a cached 64-bit load: its second word once the first is taken)
 always_comb dc_raddr = m_stall ? {m_addr[DW+1:3], (m_cw && (m_w0 || m_ph)) ? 1'b1 : m_addr[2]} : e_ea[DW+1:2];
+
+// =============================================================== the snoop (SNOOP)
+// The D-cache's lines are 32 bytes, the VR4300's 16. Software drops a buffer's lines before another master writes
+// into it, but a buffer that is 16-byte aligned shares a line with the 16 bytes beside it, and a load of those while
+// the transfer is under way reads the line back from memory without the transfer's words: on the console the two are
+// different lines. So the line of every write of another master is looked up, and dropped when the cache holds it.
+//   S  sn_t and sn_line sampled; a new write when sn_t has turned over
+//   R  its index read from a copy of the tags (sn_dup: the valid bit and the nine tag bits above the index, written
+//      with the tags: its read port is the snoop's alone, so a lookup never waits); the line M's refill reads, if it
+//      is this one, comes in invalid (sn_kill: it may hold words from before the write)
+//   C  the copy compared; a hit is registered
+//   Q  the hit's index queued (sn_q), and dropped from the queue's head through the tags' write port in a cycle where
+//      the core writes no tag (a refill's last word, an uncached store into cached memory and a cache instruction
+//      may write one: sn_core). With two or more waiting, sn_hold holds the other masters' writes.
+// A drop of a line the core has written since (nine tag bits are not all of them) only costs a refill. The core's own
+// accesses take the cycles they took without it, but where a drop or sn_kill changes what a tag says.
+generate if (SNOOP) begin : g_sn
+    logic          sn_ts, sn_seen, r_kill, c_v, h_v;
+    logic [20:0]   sn_ls;
+    logic [DC_LOG2+8:0] c_line;                          // (the index and the nine bits the copy has)
+    logic [9:0]    c_q;                                  // the copy's entry at R's index
+    logic [9:0]    sn_dup [DC_LINES];
+    logic [DW-4:0] h_idx;
+    (* ramstyle = "MLAB" *) logic [DW-4:0] sn_q [8];      // (not an M10K of its own)
+    logic [2:0]    q_r, q_w;
+    logic [3:0]    q_n;
+    wire           r_v = sn_ts != sn_seen;
+    wire           r_fill = r_v && ms == MS_REFILL && sn_ls == m_fpa[25:5];
+    wire           sn_core = (port == P_DLINE && ms_cnt == 3'd7) || (m_valid && m_c.cache) ||
+                             (m_valid && m_st && !m_cached && pa_cached(m_pa));
+    wire  [3:0]    q_nn = q_n + {3'd0, h_v} - {3'd0, sn_go};
+    assign sn_go   = q_n != 4'd0 && !sn_core;
+    assign sn_idx  = sn_q[q_r];
+    assign sn_kill = r_kill || r_fill;
+    always_ff @(posedge clk) begin
+        sn_ts <= sn_t; sn_ls <= sn_line; sn_seen <= sn_ts;
+        c_line <= sn_ls[DC_LOG2+8:0];
+        c_q <= sn_dup[sn_ls[DC_LOG2-1:0]];
+        if (dct_we) sn_dup[dct_waddr] <= {dct_wdata[16], dct_wdata[DC_LOG2:DC_LOG2-8]};
+        h_idx <= c_line[DC_LOG2-1:0];
+        if (h_v) sn_q[q_w] <= h_idx;
+        if (rst) begin c_v <= 1'b0; h_v <= 1'b0; r_kill <= 1'b0; q_r <= '0; q_w <= '0; q_n <= '0; sn_hold <= 1'b0; end
+        else begin
+            c_v <= r_v;
+            h_v <= c_v && c_q[9] && c_q[8:0] == c_line[DC_LOG2+8:DC_LOG2];
+            if (ms != MS_REFILL) r_kill <= 1'b0; else if (r_fill) r_kill <= 1'b1;
+            if (h_v) q_w <= q_w + 3'd1;
+            if (sn_go) q_r <= q_r + 3'd1;
+            q_n <= q_nn;
+            sn_hold <= q_nn >= 4'd2;
+        end
+    end
+end else begin : g_nosn
+    assign sn_go = 1'b0; assign sn_idx = '0; assign sn_kill = 1'b0;
+    always_comb sn_hold = 1'b0;
+end endgenerate
 
 // =============================================================== retire trace
 always_comb begin
@@ -1899,6 +1976,7 @@ always_ff @(posedge clk) begin
             e_bp <= d_k_pred && f_deliver;
             e_ptarget <= d_ptarget;
             e_k_grp <= 2'd3; e_k_op <= 3'd1; e_k_f <= 1'b0;                 // (nothing)
+            e_k_shv <= d_insn[5:0] == 6'h04 || d_insn[5:0] == 6'h06 || d_insn[5:0] == 6'h07;
             e_k_sub <= d_cx.alu != A_ADD;                                   // (the adder subtracts: sub, and for the compares)
             case (d_cx.alu)
             A_ADD:  e_k_grp <= 2'd0;
@@ -1932,7 +2010,7 @@ always_ff @(posedge clk) begin
         rd_res <= 1'b0; rd_fix <= 1'b0;
         if (FAST && !flush && e_adv && e_valid && e_cti) begin
             rd_res <= 1'b1; rd_fix <= e_taken != e_bp;
-            rd_annul <= e_c.likely && !e_taken; rd_target <= e_taken ? e_target : e_pc + 32'd8;
+            rd_annul <= e_c.likely && !e_taken; rd_tk <= e_taken; rd_tt <= e_target; rd_tn <= e_pc + 32'd8;
         end
         if (flush) begin
             d_valid <= 0; ds_next <= 0; rd_pend <= 0;

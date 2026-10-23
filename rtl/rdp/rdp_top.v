@@ -1,19 +1,22 @@
 // RDP -- Mirlo's rasterizer for the N64's own command stream, as a game's
 // microcode on the RSP (rtl/rsp) gives it. The contract is the C model,
-// lang/c/mrdp/mrdp.c built with MRDP_N64: for the same command stream the RTL
-// writes the same memory. From MRDP (rtl/mrdp), which draws the
+// lang/c/rdp/rdp.c built with RDP_N64: for the same command stream the RTL
+// writes the same memory. From RDP (rtl/rdp), which draws the
 // geometry core's triangles: here the triangles are the N64's (0x08..0x0F),
 // TMEM is the N64's 4 KiB loaded by LOAD BLOCK / LOAD TILE / LOAD TLUT and
 // decoded by the tile's format when sampled, texture rectangles, 2-cycle and
 // copy mode are in, and the images are the game's (RGBA5551, the N64's byte
-// order). The coverage (anti-aliasing) is the N64's (lang/c/mrdp/mrdp.h,
-// MRDP_CVG): with AA_EN a triangle is walked four subscanlines a row, and its
+// order). The coverage (anti-aliasing) is the N64's (lang/c/rdp/rdp.h,
+// RDP_CVG): with AA_EN a triangle is walked four subscanlines a row, and its
 // pixels carry their 8-sample masks. YUV textures are converted (SET_CONVERT).
-// Not done: LOD.
+// The texture LOD of a 2-cycle primitive is the model's (docs/lod.md): rdp_pix
+// computes it; this module issues the pixels in the walk's order, with the
+// ghosts that needs, and gives the next line's S, T, W. A colour image may be a
+// 32-bit one (docs/cimg32.md): cimg32 below.
 //
 // Commands are executed one at a time. A primitive is drawn row by row: the
 // row's Z and color spans are read into on-chip line buffers, the pixels run
-// through mrdp_pix at one a clock, then the span is written back (only the
+// through rdp_pix at one a clock, then the span is written back (only the
 // pixels that passed). State commands wait for the previous primitive to
 // finish, so the pixel pipeline never sees a state change mid-flight.
 module rdp_top (
@@ -46,7 +49,7 @@ module rdp_top (
     output wire        idle             // no command in progress, nothing pending
 );
     // ======================================================================
-    // state (lang/c/mrdp/mrdp.h mrdp_t)
+    // state (lang/c/rdp/rdp.h rdp_t)
     // ======================================================================
     reg [23:0] other_h;
     reg [31:0] other_l;
@@ -61,18 +64,25 @@ module rdp_top (
     reg [31:0] cimg, zimg, timg;
     reg [10:0] cimg_width, timg_width;
     reg [1:0]  timg_size;
-    reg        cimg_ok;             // the colour image is a 16-bit or an 8-bit one (what is drawn to)
-    // An 8-bit colour image (lang/c/mrdp/mrdp.c wr8): a pixel is a byte at cimg + y * width + x, the blender's red as it
+    reg        cimg_ok;             // the colour image is a 16-bit, an 8-bit or a 32-bit one (what is drawn to)
+    // An 8-bit colour image (lang/c/rdp/rdp.c wr8): a pixel is a byte at cimg + y * width + x, the blender's red as it
     // is (copy: the texel's; fill: the fill colour's byte for the address). Written only: the pixels read neither it nor
     // a depth, and no hidden coverage goes with it. The pixel pipe's results go through the new buffers as for a 16-bit
     // image, the byte in a pixel's colour bits 15:8; the write engine puts a word's two pixels in their half of the
     // memory word (rdp_mem wr_c8). The rows must start on a 4-byte boundary, as a 16-bit image's.
     reg        cimg8;
+    // A 32-bit colour image (docs/cimg32.md; lang/c/rdp/rdp.c draw_pixel_cvg): a pixel is a word at cimg + (y * width + x)
+    // * 4, R G B and the coverage in the alpha byte's top three bits; the depth image keeps its 16-bit layout, and no
+    // hidden coverage goes with it. The line buffers keep their blocks: the old colour buffer holds a pixel a word, the
+    // new one {R8 G8 B8 cvg3} an entry (rdp_mem, rdp_pix), so a set holds 512 pixels of a row and a longer span is drawn
+    // in two halves (S_SPL). Copy mode into one draws nothing, as the model.
+    reg        cimg32;
 
     // The 8 tiles, in two small RAMs (SET_TILE writes the format half,
     // SET_TILESIZE and LOAD_TILE the size half): as flip-flops they were 688
     // registers plus their write decode and an 8-way read mux. Read through
-    // one registered port at p_tile (ts_* below).
+    // one registered port (ts_* below), at the tile of the pass about to enter
+    // rdp_pix's P5 (tl_ra): the primitive's when nothing draws (the loads').
     //   tl_attr: {fmt 3, size 2, pal 4, line 9, tmem 9, cs, ms, ct, mt, masks 4, shifts 4, maskt 4, shiftt 4}
     //   tl_size: {uls 12, ult 12, lrs 12, lrt 12}
     (* ramstyle = "M10K, no_rw_check" *) reg [46:0] tl_attr [0:7];
@@ -94,8 +104,11 @@ module rdp_top (
     wire rd_mem1 = other_l[29:28] == 2'd1 || other_l[21:20] == 2'd1;
     wire rd_p    = (cyc == 2'd1) ? (other_l[29:28] == 2'd1 || (other_l[29:28] == 2'd0 && rd_mem0))
                                  : other_l[31:30] == 2'd1;
-    // (and the memory's coverage: IM_RD, with AA_EN or CVG_X_ALPHA)
-    wire need_mem = (cyc[1] || cimg8) ? 1'b0 : (other_l[6] && (other_l[3] || other_l[12])) ? 1'b1
+    // (and the memory's coverage: IM_RD, with AA_EN or CVG_X_ALPHA; and its
+    // colour for CLR_ON_CVG with CVG_X_ALPHA and without AA_EN, where a pixel
+    // with no scaled coverage is written as the blender's M)
+    wire need_mem = (cyc[1] || cimg8) ? 1'b0
+                  : ((other_l[6] && (other_l[3] || other_l[12])) || (other_l[7] && other_l[12] && !other_l[3])) ? 1'b1
                   : !other_l[14] ? rd_p : (cyc == 2'd1) ? (rd_mem0 | rd_mem1) : rd_mem0;
     wire z_cmp = other_l[4] && !cyc[1] && !cimg8;       // (copy and fill mode have no depth, nor an 8-bit image)
     wire z_upd = other_l[5] && !cyc[1] && !cimg8;
@@ -114,7 +127,7 @@ module rdp_top (
     // (from the ninth on) wait in a staging RAM and are put together -- each
     // value, DaDx and DaDe from its integer and fraction halves -- in S_VSET
     reg        t_lft;
-    reg [2:0]  t_tile;
+    reg [2:0]  t_tile, t_lvl;      // (t_lvl: the level count, the LOD's)
     reg [13:0] t_yl, t_ym, t_yh;
     reg [31:0] t_xl, t_dxl, t_xh, t_dxh, t_xm, t_dxm;
     // the attribute start values go straight into e[] (row-start values):
@@ -126,7 +139,10 @@ module rdp_top (
     // read muxes, write muxes and eight row-step adders cost ~ALMs
     reg [31:0] adx [0:7];
     (* ramstyle = "MLAB, no_rw_check" *) reg [31:0] e_ram [0:7];
-    (* ramstyle = "MLAB, no_rw_check" *) reg [31:0] ade_ram [0:7];
+    // ade_ram's rows 8..15 hold a copy of adx[] (DaDx), for the span setup's
+    // products: read there, they keep an 8-way choice of adx out of the shared
+    // multiplier's operand select. The MLAB is 32 rows deep: they cost nothing
+    (* ramstyle = "MLAB, no_rw_check" *) reg [31:0] ade_ram [0:15];
     // (a texrect's second 64-bit word, S T / DsDx DtDy, lands in t_xl, t_dxl)
 
     function automatic [5:0] cmd_len;        // in 32-bit words, from the first word
@@ -152,7 +168,7 @@ module rdp_top (
     // ======================================================================
     // RAMs
     // ======================================================================
-    // TMEM: a copy for each of the filter's three texels
+    // TMEM: two copies of two read ports for the filter's three texels (rdp_tmem)
     wire [10:0] tm_ra0, tm_ra1, tm_ra2;
     wire [15:0] tm_q0, tm_q1, tm_q2, tm_h0, tm_h1, tm_h2, tl_q0, tl_q1, tl_q2;
     wire [7:0]  tl_a0, tl_a1, tl_a2;
@@ -160,11 +176,11 @@ module rdp_top (
     wire [8:0]  tm_wa;
     wire [15:0] tm_wd0, tm_wd1, tm_wd2, tm_wd3;
     rdp_tmem tmem0 (.clk(clk), .we(tm_we), .wa(tm_wa), .wd0(tm_wd0), .wd1(tm_wd1), .wd2(tm_wd2), .wd3(tm_wd3),
-                    .ra(tm_ra0), .q(tm_q0), .qh(tm_h0), .ta(tl_a0), .tq(tl_q0));
-    rdp_tmem tmem1 (.clk(clk), .we(tm_we), .wa(tm_wa), .wd0(tm_wd0), .wd1(tm_wd1), .wd2(tm_wd2), .wd3(tm_wd3),
-                    .ra(tm_ra1), .q(tm_q1), .qh(tm_h1), .ta(tl_a1), .tq(tl_q1));
-    rdp_tmem tmem2 (.clk(clk), .we(tm_we), .wa(tm_wa), .wd0(tm_wd0), .wd1(tm_wd1), .wd2(tm_wd2), .wd3(tm_wd3),
-                    .ra(tm_ra2), .q(tm_q2), .qh(tm_h2), .ta(tl_a2), .tq(tl_q2));
+                    .ra_a(tm_ra0), .q_a(tm_q0), .qh_a(tm_h0), .ta_a(tl_a0), .tq_a(tl_q0),
+                    .ra_b(tm_ra1), .q_b(tm_q1), .qh_b(tm_h1), .ta_b(tl_a1), .tq_b(tl_q1));
+    rdp_tmem #(.RA(0)) tmem1 (.clk(clk), .we(tm_we), .wa(tm_wa), .wd0(tm_wd0), .wd1(tm_wd1), .wd2(tm_wd2), .wd3(tm_wd3),
+                    .ra_a(11'd0), .q_a(), .qh_a(), .ta_a(8'd0), .tq_a(),
+                    .ra_b(tm_ra2), .q_b(tm_q2), .qh_b(tm_h2), .ta_b(tl_a2), .tq_b(tl_q2));
 
     // span line buffers: 512 words of two pixels, and two sets of each -- a
     // row is on the other set than the row before, so that its reads, its
@@ -176,39 +192,42 @@ module rdp_top (
     wire        mw_z_we, mw_c_we;
     wire [9:0]  mw_addr;
     wire [31:0] mw_data;
-    wire [9:0]  pix_lb_ra;
+    wire [9:0]  pix_lb_ra, pix_clb_ra;      // (the depth's and the colour's: a 32-bit image's colour word is the pixel's)
     wire [31:0] zlb_rd, clb_rd;
-    mrdp_sdpram #(.AW(10), .DW(32), .NB(2)) zold (.clk(clk), .we(mw_z_we), .waddr(mw_addr), .wdata(mw_data), .wbe(2'b11), .raddr(pix_lb_ra), .rdata(zlb_rd));
-    mrdp_sdpram #(.AW(10), .DW(32), .NB(2)) cold (.clk(clk), .we(mw_c_we), .waddr(mw_addr), .wdata(mw_data), .wbe(2'b11), .raddr(pix_lb_ra), .rdata(clb_rd));
+    rdp_sdpram #(.AW(10), .DW(32), .NB(2)) zold (.clk(clk), .we(mw_z_we), .waddr(mw_addr), .wdata(mw_data), .wbe(2'b11), .raddr(pix_lb_ra), .rdata(zlb_rd));
+    rdp_sdpram #(.AW(10), .DW(32), .NB(2)) cold (.clk(clk), .we(mw_c_we), .waddr(mw_addr), .wdata(mw_data), .wbe(2'b11), .raddr(pix_clb_ra), .rdata(clb_rd));
     reg         zn_we, cn_we, msk_we;
-    reg  [9:0]  nb_wa;
+    reg  [9:0]  nb_wa;                  // the depth buffers' {set, word}
+    reg         nb_x0;                  // the pixel's x[0]: the new colour buffer's address, a 32-bit image's {set, x[8:0]}
+    wire [9:0]  cn_wa = cimg32 ? {nb_wa[9], nb_wa[7:0], nb_x0} : nb_wa;
     reg  [31:0] zn_wd;
-    reg  [35:0] cn_wd;                  // {colour 16, hidden 2} x 2, the even pixel first
-    reg  [1:0]  nb_be;
+    reg  [35:0] cn_wd;                  // {colour 16, hidden 2} x 2, the even pixel first (a 32-bit image: {R8 G8, 0, pass, B8 cvg3, 0})
+    reg  [1:0]  nb_be, cn_be;
     reg  [1:0]  zm_wd, cm_wd, msk_be;
     wire [9:0]  mem_lb_ra;
     wire [31:0] znew_rd;
     wire [35:0] cnew_rd;
     wire [1:0]  zm_rd, cm_rd;
     wire [9:0]  zn_ra = mem_lb_ra;
-    mrdp_sdpram #(.AW(10), .DW(32), .NB(2)) znew (.clk(clk), .we(zn_we), .waddr(nb_wa), .wdata(zn_wd), .wbe(nb_be), .raddr(zn_ra), .rdata(znew_rd));
-    mrdp_sdpram #(.AW(10), .DW(36), .NB(2)) cnew (.clk(clk), .we(cn_we), .waddr(nb_wa), .wdata(cn_wd), .wbe(nb_be), .raddr(mem_lb_ra), .rdata(cnew_rd));
+    rdp_sdpram #(.AW(10), .DW(32), .NB(2)) znew (.clk(clk), .we(zn_we), .waddr(nb_wa), .wdata(zn_wd), .wbe(nb_be), .raddr(zn_ra), .rdata(znew_rd));
+    rdp_sdpram #(.AW(10), .DW(36), .NB(2)) cnew (.clk(clk), .we(cn_we), .waddr(cn_wa), .wdata(cn_wd), .wbe(cn_be), .raddr(mem_lb_ra), .rdata(cnew_rd));
     // the raw hidden-bit buffers (rdp_mem): the span's groups' words, by {set,
     // group mod 128}, a copy for the pixels and one for the write engine
     wire        hl_we;
     wire [7:0]  hl_wa, pix_hl_ra, mem_hl_ra;
     wire [31:0] pix_hl_rd, mem_hl_rd;
-    mrdp_sdpram #(.AW(8), .DW(32), .NB(1)) hraw0 (.clk(clk), .we(hl_we), .waddr(hl_wa), .wdata(mw_data), .wbe(1'b1), .raddr(pix_hl_ra), .rdata(pix_hl_rd));
-    mrdp_sdpram #(.AW(8), .DW(32), .NB(1)) hraw1 (.clk(clk), .we(hl_we), .waddr(hl_wa), .wdata(mw_data), .wbe(1'b1), .raddr(mem_hl_ra), .rdata(mem_hl_rd));
+    rdp_sdpram #(.AW(8), .DW(32), .NB(1)) hraw0 (.clk(clk), .we(hl_we), .waddr(hl_wa), .wdata(mw_data), .wbe(1'b1), .raddr(pix_hl_ra), .rdata(pix_hl_rd));
+    rdp_sdpram #(.AW(8), .DW(32), .NB(1)) hraw1 (.clk(clk), .we(hl_we), .waddr(hl_wa), .wdata(mw_data), .wbe(1'b1), .raddr(mem_hl_ra), .rdata(mem_hl_rd));
     reg  [9:0]  rwb [0:1];              // the rows' colour word base (bits 9:0), by set
-    mrdp_sdpram #(.AW(10), .DW(2), .NB(2)) zmsk (.clk(clk), .we(msk_we), .waddr(nb_wa), .wdata(zm_wd), .wbe(msk_be), .raddr(zn_ra), .rdata(zm_rd));
-    mrdp_sdpram #(.AW(10), .DW(2), .NB(2)) cmsk (.clk(clk), .we(msk_we), .waddr(nb_wa), .wdata(cm_wd), .wbe(msk_be), .raddr(mem_lb_ra), .rdata(cm_rd));
+    // (a 32-bit image's pass bits are in cnew's entries, so that cmsk keeps zmsk's addresses: the fit packs the two)
+    rdp_sdpram #(.AW(10), .DW(2), .NB(2)) zmsk (.clk(clk), .we(msk_we), .waddr(nb_wa), .wdata(zm_wd), .wbe(msk_be), .raddr(zn_ra), .rdata(zm_rd));
+    rdp_sdpram #(.AW(10), .DW(2), .NB(2)) cmsk (.clk(clk), .we(msk_we), .waddr(nb_wa), .wdata(cm_wd), .wbe(msk_be), .raddr(mem_lb_ra), .rdata(cm_rd));
     // a triangle's attribute words: word 8 + k of the command at k
     wire        vr_we = cmd_valid && cmd_ready && collecting && is_tri && widx >= 6'd8;
     wire [5:0]  vr_wa6 = widx - 6'd8;
     reg  [5:0]  vr_ra;
     wire [31:0] vr_q;
-    mrdp_sdpram #(.AW(6), .DW(32), .NB(1)) vram (.clk(clk), .we(vr_we), .waddr(vr_wa6),
+    rdp_sdpram #(.AW(6), .DW(32), .NB(1)) vram (.clk(clk), .we(vr_we), .waddr(vr_wa6),
                                                  .wdata(cmd_data), .wbe(1'b1), .raddr(vr_ra), .rdata(vr_q));
 
     // ======================================================================
@@ -226,14 +245,39 @@ module rdp_top (
     // triangle's own S/T adders -- and pass s = cur[4] >>> shS, t = cur[5] >>> 5
     reg  [2:0]  shS;
     // a triangle's S and T are the N64's -- s10.5 in the integer half, against
-    // a W of s.15 -- taken to the pipeline's units (lang/c/mrdp/mrdp.c draw_pixel)
-    wire [4:0]  shN = other_h[19] ? 5'd4 : 5'd5;
-    wire [31:0] pr_s = p_direct ? asr(cur[4], {2'b0, shS}) : asr(cur[4], shN);
-    wire [31:0] pr_t = p_direct ? asr(cur[5], 5'd5) : asr(cur[5], shN);
-    // The drawing tile's fields, registered: indexing tile[p_tile] straight
-    // into the pixel pipe was the worst path of the first fit (-4 ns). p_tile
-    // and the tiles change only between primitives, many cycles before the
-    // first pixel.
+    // a W of s.15 -- and go to the pipeline as they are: its perspective divide, and the
+    // affine path, take the integer halves (lang/c/rdp/rdp.c draw_pixel_cvg)
+    // The LOD (docs/lod.md): a 2-cycle primitive with TEX_LOD, or whose combiner reads LOD_FRACTION (C 13 in a colour, C
+    // 0 in an alpha, either cycle). (Registered: the modes are set many clocks before a primitive's first pixel.)
+    reg         lod_on;
+    always @(posedge clk) lod_on <= cyc == 2'd1 && (other_h[16] || cc_hi[19:15] == 5'd13 || cc_hi[4:0] == 5'd13
+                                                         || cc_hi[11:9] == 3'd0 || cc_lo[20:18] == 3'd0);
+    reg         lod_lft;            // the walk goes to the right (a triangle's lft; a rectangle's always): x + 1 is next
+    reg  [2:0]  lod_lvl;            // the level count (the triangle's level field; a rectangle's 0)
+    reg  [4:0]  min_lvl;            // SET_PRIM_COLOR's minimum level
+    reg         pix_ghost;          // the pixel issued is a ghost: through the perspective divide for its neighbour's LOD, never drawn
+    // The next line's S, T, W, which rdp_pix's P0 takes the clock after a pixel's (pix_valid down): plus DaDy, of which a
+    // triangle keeps the top 17 bits (ldy_*, from its texture block), or a texture rectangle's row step (t_dxl: DsDx
+    // flipped, DtDy not), the exact next row as the model takes it (the console keeps 17 bits of it as of a 16.16 DaDy,
+    // which would drop t_dxl's low 4 bits). On the whole 32 bits, as the model adds them: a sum that
+    // wraps wraps there too.
+    reg  [16:0] ldy_s, ldy_t, ldy_w;
+    wire        lpass = !pix_valid;
+    wire        rflip = op == 6'h25;
+    wire [31:0] dy_s = p_direct ? (rflip ? {{16{t_dxl[31]}}, t_dxl[31:16]} : 32'd0) : {ldy_s, 15'd0};
+    wire [31:0] dy_t = p_direct ? (rflip ? 32'd0 : {{16{t_dxl[15]}}, t_dxl[15:0]}) : {ldy_t, 15'd0};
+    wire [31:0] cur_s = cur[4] + (lpass ? dy_s : 32'd0);
+    wire [31:0] cur_t = cur[5] + (lpass ? dy_t : 32'd0);
+    wire [31:0] cur_w = {cur[6][31:15] + ((lpass && !p_direct) ? ldy_w : 17'd0), cur[6][14:0]};
+    wire [31:0] pr_s = p_direct ? asr(cur_s, {2'b0, shS}) : cur_s;
+    wire [31:0] pr_t = p_direct ? asr(cur_t, 5'd5) : cur_t;
+    // The pass's tile's fields, registered: indexing tile[p_tile] straight
+    // into the pixel pipe was the worst path of the first fit (-4 ns). rdp_pix
+    // names the tile a clock before its P5 takes the fields (tl_ra): the
+    // primitive's, the next (TEXEL1's), or with the LOD the pixel's level's.
+    // One read a clock serves both passes (it was a second copy of each RAM
+    // for the next tile); the tiles change only between primitives.
+    wire [2:0] tl_ra;
     reg [2:0]  ts_fmt;
     reg [1:0]  ts_sz;
     reg [3:0]  ts_pal;
@@ -243,54 +287,42 @@ module rdp_top (
     reg [3:0]  ts_masks, ts_shifts, ts_maskt, ts_shiftt;
     reg [11:0] ts_uls, ts_ult, ts_lrs, ts_lrt;
     always @(posedge clk) begin
-        {ts_fmt, ts_sz, ts_pal, ts_line, ts_tmem, ts_cs, ts_ms, ts_ct, ts_mt, ts_masks, ts_shifts, ts_maskt, ts_shiftt} <= tl_attr[p_tile];
-        {ts_uls, ts_ult, ts_lrs, ts_lrt} <= tl_size[p_tile];
+        {ts_fmt, ts_sz, ts_pal, ts_line, ts_tmem, ts_cs, ts_ms, ts_ct, ts_mt, ts_masks, ts_shifts, ts_maskt, ts_shiftt} <= tl_attr[tl_ra];
+        {ts_uls, ts_ult, ts_lrs, ts_lrt} <= tl_size[tl_ra];
     end
-    // and the next tile's (TEXEL1: tile + 1, wrapping at 8), for a pixel's second pass (rdp_pix two_pass)
-    wire [2:0] p_tile1 = p_tile + 3'd1;
-    reg [2:0]  ts1_fmt;
-    reg [1:0]  ts1_sz;
-    reg [3:0]  ts1_pal;
-    reg [8:0]  ts1_line;
-    reg [8:0]  ts1_tmem;
-    reg        ts1_cs, ts1_ms, ts1_ct, ts1_mt;
-    reg [3:0]  ts1_masks, ts1_shifts, ts1_maskt, ts1_shiftt;
-    reg [11:0] ts1_uls, ts1_ult, ts1_lrs, ts1_lrt;
-    always @(posedge clk) begin
-        {ts1_fmt, ts1_sz, ts1_pal, ts1_line, ts1_tmem, ts1_cs, ts1_ms, ts1_ct, ts1_mt, ts1_masks, ts1_shifts, ts1_maskt, ts1_shiftt} <= tl_attr[p_tile1];
-        {ts1_uls, ts1_ult, ts1_lrs, ts1_lrt} <= tl_size[p_tile1];
-    end
+    // which tiles are YUV 16-bit ones (a pass that converts checks its tile's, or with CONVERT_ONE the one before)
+    reg [7:0]  yuv_vec;
+    initial yuv_vec = 8'd0;
     wire two_pass;
     wire        px_valid, px_cpass, px_zpass, pix_busy, px_set;
     reg         set_cur;            // the line-buffer set of the row being drawn
     wire [9:0]  px_x;
     wire [15:0] px_color, px_depth;
     wire [7:0]  px_r8;
+    wire [26:0] px_c27;                 // a 32-bit image's pixel: {R8 G8 B8 cvg3}
     wire [1:0]  px_hid;
     rdp_pix pix (
         .clk(clk), .rst(rst),
         .other_h(other_h), .other_l(other_l), .cc_hi(cc_hi), .cc_lo(cc_lo),
         .prim(prim), .env(env), .fog(fog), .blend(blend),
         .prim_lod_frac(prim_lod_frac), .k4(k4), .k5(k5), .cv_k03(cv_k03), .prim_z(prim_z), .z_tol(p_zbuf ? z_tol : 16'd1), .fill(fill),
-        .prim_dz(prim_dz), .need_mem(need_mem), .c8(cimg8), .p_aa(p_aa), .z_dx(adx[7]), .z_dy(zdy),
+        .prim_dz(prim_dz), .need_mem(need_mem), .c8(cimg8), .c32(cimg32), .p_aa(p_aa), .z_dx(adx[7]), .z_dy(zdy),
         .p_shade(p_shade), .p_tex(p_tex), .p_zbuf(p_zbuf), .p_direct(p_direct),
         .t_fmt(ts_fmt), .t_size(ts_sz), .t_pal(ts_pal), .t_line(ts_line), .t_tmem(ts_tmem),
         .t_cs(ts_cs), .t_ms(ts_ms), .t_ct(ts_ct), .t_mt(ts_mt),
         .t_masks(ts_masks), .t_shifts(ts_shifts), .t_maskt(ts_maskt), .t_shiftt(ts_shiftt),
         .t_uls(ts_uls), .t_ult(ts_ult), .t_lrs(ts_lrs), .t_lrt(ts_lrt),
-        .t1_fmt(ts1_fmt), .t1_size(ts1_sz), .t1_pal(ts1_pal), .t1_line(ts1_line), .t1_tmem(ts1_tmem),
-        .t1_cs(ts1_cs), .t1_ms(ts1_ms), .t1_ct(ts1_ct), .t1_mt(ts1_mt),
-        .t1_masks(ts1_masks), .t1_shifts(ts1_shifts), .t1_maskt(ts1_maskt), .t1_shiftt(ts1_shiftt),
-        .t1_uls(ts1_uls), .t1_ult(ts1_ult), .t1_lrs(ts1_lrs), .t1_lrt(ts1_lrt), .two_pass(two_pass),
+        .tl_ra(tl_ra), .p_tile(p_tile), .yuv_vec(yuv_vec), .two_pass(two_pass),
+        .lod_on(lod_on), .lod_lft(lod_lft), .lod_lvl(lod_lvl), .min_lvl(min_lvl), .in_ghost(pix_ghost),
         .in_valid(pix_valid), .in_x(pix_x), .in_set(set_cur), .row_y(y[1:0]),
         .in_r(cur[0]), .in_g(cur[1]), .in_b(cur[2]), .in_a(cur[3]),
-        .in_s(pr_s), .in_t(pr_t), .in_w(cur[6]), .in_z(cur[7]), .in_mask(pix_mask),
+        .in_s(pr_s), .in_t(pr_t), .in_w(cur_w), .in_z(cur[7]), .in_mask(pix_mask),
         .tm_a0(tm_ra0), .tm_a1(tm_ra1), .tm_a2(tm_ra2),
         .tm_q0(tm_q0), .tm_q1(tm_q1), .tm_q2(tm_q2), .tm_h0(tm_h0), .tm_h1(tm_h1), .tm_h2(tm_h2),
         .tl_a0(tl_a0), .tl_a1(tl_a1), .tl_a2(tl_a2), .tl_q0(tl_q0), .tl_q1(tl_q1), .tl_q2(tl_q2),
-        .lb_raddr(pix_lb_ra), .zlb_rdata(zlb_rd), .clb_rdata(clb_rd),
+        .lb_raddr(pix_lb_ra), .clb_raddr(pix_clb_ra), .zlb_rdata(zlb_rd), .clb_rdata(clb_rd),
         .hl_raddr(pix_hl_ra), .hl_rdata(pix_hl_rd), .rwb0(rwb[0]), .rwb1(rwb[1]), .out_hid(px_hid),
-        .out_valid(px_valid), .out_set(px_set), .out_x(px_x), .out_color(px_color), .out_r8(px_r8), .out_depth(px_depth),
+        .out_valid(px_valid), .out_set(px_set), .out_x(px_x), .out_color(px_color), .out_r8(px_r8), .out_c27(px_c27), .out_depth(px_depth),
         .out_cpass(px_cpass), .out_zpass(px_zpass), .busy(pix_busy));
 
     // ======================================================================
@@ -300,8 +332,10 @@ module rdp_top (
     // results, or a fill): each waits here for its engine
     reg         rq_pend, rq_load, rq_z, rq_c, rq_h, rq_set;
     reg  [31:0] rq_zbase, rq_cbase;
-    reg  [9:0]  rq_x0;
-    reg  [10:0] rq_x1;
+    // (a span's read takes its columns from xs, xe: they stay as they are while the read waits, since the row's pixels
+    // wait for it)
+    reg  [9:0]  xs, xe_m1;
+    reg  [10:0] xe;
     reg  [10:0] rq_ldst, rq_ln;
     reg  [1:0]  rq_lmode;
     reg  [11:0] rq_ldxt;
@@ -325,15 +359,15 @@ module rdp_top (
     reg  [10:0] res_q [0:1];
     // a set's old buffers are not written while the last pixels of the row
     // that had them are still ahead of the pipe's read of them
-    reg  [3:0]  old_hold [0:1];
+    reg  [4:0]  old_hold [0:1];
     rdp_mem mem (
         .clk(clk), .rst(rst),
-        .rd_valid(rq_pend && old_hold[rq_set] == 4'd0 && hz_ok), .rd_ready(rd_ready), .rd_load(rq_load), .rd_z(rq_z), .rd_c(rq_c), .rd_h(rq_h),
-        .rd_zbase(rq_zbase), .rd_cbase(rq_cbase), .rd_x0(rq_x0), .rd_x1(rq_x1), .rd_set(rq_set),
+        .rd_valid(rq_pend && old_hold[rq_set] == 5'd0 && hz_ok), .rd_ready(rd_ready), .rd_load(rq_load), .rd_z(rq_z), .rd_c(rq_c), .rd_h(rq_h),
+        .rd_zbase(rq_zbase), .rd_cbase(rq_cbase), .rd_x0(xs), .rd_x1(xe), .rd_set(rq_set), .rd_c32(cimg32),
         .rd_ldst(rq_ldst), .rd_ln(rq_ln), .rd_lmode(rq_lmode), .rd_ldxt(rq_ldxt), .rd_lodd(rq_lodd),
         .z_have(z_have), .c_have(c_have), .h_done(h_done), .hlbw_we(hl_we), .hlbw_addr(hl_wa),
         .lbw_z_we(mw_z_we), .lbw_c_we(mw_c_we), .lbw_addr(mw_addr), .lbw_data(mw_data),
-        .wr_valid(wq_pend), .wr_ready(wr_ready), .wr_fill(wq_fill), .wr_z(wq_z), .wr_c8(cimg8),
+        .wr_valid(wq_pend), .wr_ready(wr_ready), .wr_fill(wq_fill), .wr_z(wq_z), .wr_c8(cimg8), .wr_c32(cimg32), .wr_fmode(cyc == 2'd3),
         .wr_cbase(wq_cbase), .wr_zbase(wq_zbase), .wr_x0(wq_x0), .wr_x1(wq_x1), .wr_fillc(fill), .wr_set(wq_set),
         .res_a(res_q[0]), .res_b(res_q[1]),
         .lbr_addr(mem_lb_ra), .lbr_zdata(znew_rd), .lbr_cdata(cnew_rd), .lbr_zmask(zm_rd), .lbr_cmask(cm_rd),
@@ -359,16 +393,26 @@ module rdp_top (
                S_PIX = 5'd6,   S_FIN = 5'd7,      S_NEXT = 5'd10,
                S_FILL = 5'd12, S_LOAD = 5'd13,    S_SYNC = 5'd14, S_RECT_INIT = 5'd15,
                S_LOAD_INIT = 5'd16, S_VSET = 5'd18,
-               S_XL = 5'd19;
+               S_XL = 5'd19,     S_SPL = 5'd20;
     reg [4:0]  st;
     reg        row_wq;              // the row's write-back has been asked for
     // the row's next pixel: its word in the span, and whether what it reads of
     // memory is in the old buffers
     wire [9:0] pix_wi = ({9'd0, xs[0]} + px_cnt) >> 1;
-    wire       pix_ok = !rq_pend && h_done && (!z_cmp || z_have > pix_wi) && (!need_mem || c_have > pix_wi);
-    // a pixel that goes through the texture stages twice (rdp_pix two_pass) is issued every second clock:
-    // pix_valid is still up the clock after an issue
-    wire       pix_go = pix_ok && !(two_pass && pix_valid);
+    // (a 32-bit image's colour span: a word a pixel)
+    wire       pix_ok = !rq_pend && h_done && (!z_cmp || z_have > pix_wi) && (!need_mem || c_have > (cimg32 ? px_cnt : pix_wi));
+    // a pixel that goes through the texture stages twice (rdp_pix two_pass), or takes the LOD, is issued every second
+    // clock: pix_valid is still up the clock after an issue
+    wire       pix_slot = !((two_pass || lod_on) && pix_valid);
+    // The LOD: a pixel's next pixel goes through the perspective divide two clocks after it when the walk goes to the
+    // right (pix_fol: rdp_pix takes its step from the next pass A), so the pixel issued then is the next one, or -- its
+    // memory not in, or the span ended -- a ghost of it (through the perspective divide, never drawn; the pixel itself
+    // follows when it can). Walking left, the span's first pixel is preceded by a ghost of the pixel before it (pix_g0).
+    reg        pix_fol, pix_g0, pix_stp;    // (pix_stp: cur steps to the next place at the next issue)
+    wire [10:0] pix_pos = {1'b0, xs} + {1'b0, px_cnt};
+    wire       pix_end = pix_pos == xe;
+    wire       pix_gh = lod_on && pix_slot && (pix_g0 || (pix_fol && (pix_end || !pix_ok)));
+    wire       pix_go = pix_ok && pix_slot && !pix_gh && !(lod_on && pix_end);
     // nothing of the primitive is under way any more
     wire       all_quiet = !pix_busy && !pix_valid && !px_valid && !msk_we
                          && !rq_pend && !rd_busy && !wq_pend && !wr_busy;
@@ -418,16 +462,16 @@ module rdp_top (
             default: voff = 6'd12;
         endcase
     endfunction
-    function automatic attr_on;             // mrdp_attr_on()
+    function automatic attr_on;             // rdp_attr_on()
         input [2:0] fl;
         input [2:0] a;
         attr_on = a < 3'd4 ? fl[2] : a < 3'd7 ? fl[1] : fl[0];
     endfunction
     reg [31:0] row_off;            // y * width * 2 (color / Z images; an 8-bit colour image's y * width)
-    reg [9:0]  xs, xe_m1;
-    reg [10:0] xe;
+    // the row's colour base: a 32-bit image's row is twice the bytes of the depth image's
+    wire [31:0] crow = cimg + (cimg32 ? {row_off[30:0], 1'b0} : row_off);
     reg [9:0]  px_cnt;
-    // loads (lang/c/mrdp/mrdp.c load_block, load_tlut, load_tile_n64)
+    // loads (lang/c/rdp/rdp.c load_block, load_tlut, load_tile_n64)
     reg [9:0]  tt, tt1;             // LOAD TILE's rows
     reg [22:0] l_ti;                // the row's first texel in the image (t * width + s)
     reg [10:0] l_dst;               // its 16-bit word of TMEM
@@ -454,7 +498,7 @@ module rdp_top (
     wire signed [13:0] yl_end_aa = ($signed(t_yl) + 14'sd3) >>> 2;
     wire signed [11:0] yb_aa = (yl_end_aa < $signed({2'b0, sc_y1})) ? yl_end_aa[11:0] : $signed({1'b0, sc_y1});
 
-    // ---- AA_EN: the N64's walker (lang/c/mrdp/mrdp.c draw_triangle_aa). The
+    // ---- AA_EN: the N64's walker (lang/c/rdp/rdp.c draw_triangle_aa). The
     // edges at subscanline aa_j: three running edges, set up at the first
     // row's top (S_AAINIT) and stepped (DxDy >> 2) & ~1 a subscanline. A
     // subscanline a clock (S_AASUB): its edges in eighths with the sticky
@@ -464,7 +508,11 @@ module rdp_top (
     reg  [2:0]  aa_j;
     wire [31:0] aq_h = asr(t_dxh, 5'd2) & ~32'd1, aq_m = asr(t_dxm, 5'd2) & ~32'd1, aq_l = asr(t_dxl, 5'd2) & ~32'd1;
     // S_AAINIT: an edge's start, X & ~1 (XL as S_XL left it) plus the product (one adder for the three)
-    wire [31:0] aa_init = ((mi == 5'd2) ? (t_xh & ~32'd1) : (mi == 5'd3) ? (t_xm & ~32'd1) : t_xl) + mul_p[31:0];
+    // (and S_XL's XL - product, TRI_INIT's XH + product: one adder for the five)
+    wire        aa_sub = st == S_XL;
+    wire [31:0] aa_x = (st == S_TRI_INIT) ? t_xh : aa_sub ? (t_xl & ~32'd1)
+                     : (mi == 5'd2) ? (t_xh & ~32'd1) : (mi == 5'd3) ? (t_xm & ~32'd1) : t_xl;
+    wire [31:0] aa_init = aa_x + (mul_p[31:0] ^ {32{aa_sub}}) + {31'd0, aa_sub};
     wire signed [13:0] aa_yq = {y, aa_j[1:0]};
     // (the minor edge -- M above YM, L from it -- chosen a subscanline ahead, aa_lo)
     reg         aa_lo;
@@ -522,6 +570,15 @@ module rdp_top (
     wire [7:0]  aa_mask = {aa_cj[0] | aa_cj[1], aa_cj[2] | aa_cj[3]};
     // the span: the subscanlines' union, its end to the scissor
     wire [10:0] aa_xe = ({1'b0, aa_max} + 11'd1 < {1'b0, sc_x1}) ? {1'b0, aa_max} + 11'd1 : {1'b0, sc_x1};
+    // A 32-bit image's span longer than a set holds (512 pixels) is drawn in two halves (spl): xe is the first half's
+    // end, and the second half, from there to the span's end (xe2: a rectangle's xb, a triangle's aa_xe, both as they
+    // were when the row began), is a row of its own on the other set (S_SPL) that goes on with the walk. (The cut: a
+    // rectangle's columns; a triangle's min(aa_max + 1, scissor) - aa_min, as two compares side by side.)
+    reg        spl;
+    wire       r_cut = cimg32 && ({1'b0, xb} - {1'b0, xa}) > 11'd512;
+    wire [10:0] aa_m512 = {1'b0, aa_min} + 11'd512;
+    wire       a_cut = cimg32 && {1'b0, aa_max} >= aa_m512 && {1'b0, sc_x1} > aa_m512;
+    wire [10:0] xe2 = kind_tri ? aa_xe : {1'b0, xb};
 
     // arithmetic shift right, evaluated on its own: inside a wider expression
     // with any unsigned operand, $signed(v) >>> n is a LOGICAL shift
@@ -531,10 +588,6 @@ module rdp_top (
         asr = $signed(v) >>> n;
     endfunction
 
-    function automatic [31:0] sx12;   // sign-extend a 12-bit row / column index
-        input [11:0] v;
-        sx12 = {{20{v[11]}}, v};
-    endfunction
     // a - b of two 12-bit rows, sign-extended: 13 bits (a row above -2048
     // + 1023 is 3071 rows away; 12 bits wrapped it, seed 3140)
     function automatic [31:0] rdiff;
@@ -559,18 +612,64 @@ module rdp_top (
     end
     wire vset_w = st == S_VSET && (vs == 4'd15 || (vs == 4'd0 && !attr_on(tflags, vi)));
     wire vset_on = vs == 4'd15;
+    wire vgx_w = st == S_VSET && vs == (vz ? 4'd5 : 4'd7);
     wire tinit_w = st == S_TRI_INIT && mi >= 5'd5 && mi <= 5'd12;
     wire step_w = !es[3];
     wire [2:0]  e_wa = vset_w ? vi : tinit_w ? mi[2:0] - 3'd5 : es[2:0];
     // (TRI_INIT's write of e + k DaDe reads e where it writes it, as the product comes -- two clocks after DaDe was
     // read at ea for it; one adder for that and for the row step's e + DaDe)
-    wire [31:0] e_q = e_ram[tinit_w ? e_wa : ea], ade_q = ade_ram[ea];
+    // (the span setup reads DaDx at mi, its rows; the rest DaDe at ea)
+    wire [3:0]  ada = (st == S_SETUP) ? {1'b1, mi[2:0]} : {1'b0, ea};
+    wire [31:0] e_q = e_ram[tinit_w ? e_wa : ea], ade_q = ade_ram[ada];
     wire [31:0] e_add = e_q + (tinit_w ? mul_p[31:0] : ade_q);
     wire [31:0] e_wd = vset_w ? (vset_on ? vval : 32'd0) : e_add;
     always @(posedge clk) begin
         if (vset_w || tinit_w || step_w) e_ram[e_wa] <= e_wd;
-        if (vset_w) ade_ram[vi] <= vset_on ? vde : 32'd0;
+        // DaDx goes in at a step of S_VSET after vgx is complete and before
+        // the step that writes DaDe (Z: 5, the others: 7); an attribute that
+        // is off is not written, and its product is 0 (S_SETUP)
+        if (vset_w) ade_ram[{1'b0, vi}] <= vset_on ? vde : 32'd0;
+        else if (vgx_w) ade_ram[{1'b1, vi}] <= vgx;
     end
+
+    // ---- the shared multiplier's operands, by state and step. A product is
+    // read exactly two clocks after its operands were chosen and never later,
+    // so the operands need no hold: at the steps whose product nobody reads
+    // they are don't-care, and the select is left with the sources alone. The
+    // row differences y - YH, y - YM and y - 0 (the image row) are one
+    // subtractor; AA_EN's start slopes are TRI_INIT's with bits 2..0 cleared;
+    // a texrect's DsDx / DtDy and its row / column distances are one choice each
+    // the span's start from the H edge, 16.16 (the LOD walking left: from its ghost, a pixel before)
+    wire [10:0] xs_g = {1'b0, xs} - {10'd0, lod_on && !lod_lft};
+    wire [31:0] dxs = {{5{xs_g[10]}}, xs_g, 16'd0} - exh;
+    wire [31:0] r_dsdx = {{16{t_dxl[31]}}, t_dxl[31:16]}, r_dtdy = {{16{t_dxl[15]}}, t_dxl[15:0]};
+    wire signed [10:0] r_dc11 = $signed({1'b0, xs}) - $signed({1'b0, rx0});      // (11 and 13 bits, then extended)
+    // in quarter pixels, the products then over 4: the rows from YH's whole row, the columns from XH itself
+    // (4 (xs - XH's column) - XH's fraction; none in copy mode): the column-stepped attribute is the plane at XH
+    wire [31:0] r_dcol = {{19{r_dc11[10]}}, r_dc11, 2'b00} - {30'd0, rxf};
+    wire [31:0] r_drow = {rdiff(y, ry0), 2'b00};
+    wire [11:0] md_b = (mi == 5'd2) ? ymr : ((st == S_TRI_INIT && mi == 5'd11) || st == S_RECT_INIT) ? 12'd0 : y0r;
+    wire [31:0] md_k = rdiff(y, md_b);
+    wire [31:0] md_dx = ((mi == 5'd0) ? t_dxh : (mi == 5'd1) ? t_dxm : t_dxl) & {29'h1FFFFFFF, {3{st != S_AAINIT}}};
+    reg  [31:0] mul_ad, mul_bd;
+    always @* begin
+        mul_ad = 32'bx; mul_bd = 32'bx;
+        case (st)
+        // XL - (YM's quarter rows) x the subscanline step (that in mul_a, as the other wide operands)
+        S_XL:        begin mul_ad = aq_l; mul_bd = {30'd0, t_ym[1:0]}; end
+        // the edges (0..2), e + k DaDe (3..10, ea = mi - 3), the first row's offset (11)
+        S_TRI_INIT:  begin mul_ad = md_k; mul_bd = (mi < 5'd3) ? md_dx : (mi == 5'd11) ? {21'd0, cimg_width} : ade_q; end
+        S_AAINIT:    begin mul_ad = md_k; mul_bd = md_dx; end
+        // DaDx (its rows of ade_ram) x the span's offset; an attribute that is off: 0 (the offset forced to it)
+        S_SETUP: if (kind_tri) begin mul_ad = attr_on(tflags, mi[2:0]) ? dxs : 32'd0; mul_bd = ade_q; end
+                 else begin mul_ad = mi[0] ? r_dtdy : r_dsdx; mul_bd = (mi[0] ^ (op == 6'h25)) ? r_drow : r_dcol; end
+        S_RECT_INIT: begin mul_ad = md_k; mul_bd = {21'd0, cimg_width}; end
+        // LOAD BLOCK's whole texels, the others' 10.2
+        S_LOAD_INIT: begin mul_ad = (l_kind == 2'd0) ? {20'd0, w0[11:0]} : {22'd0, w0[11:2]}; mul_bd = {21'd0, timg_width}; end
+        default: ;
+        endcase
+    end
+    always @(posedge clk) begin mul_a <= mul_ad; mul_b <= mul_bd; end
 
     // AA_EN: the subscanline stages
     always @(posedge clk) begin
@@ -596,7 +695,6 @@ module rdp_top (
     end
 
     integer i;
-    reg [31:0] dxs;          // span start offset from the H edge, 16.16
     always @(posedge clk) begin
         zn_we <= 1'b0; cn_we <= 1'b0; msk_we <= 1'b0;
         pix_valid <= 1'b0;
@@ -609,19 +707,19 @@ module rdp_top (
             busy_exec <= 1'b0;
             rq_pend <= 1'b0; wq_pend <= 1'b0; row_wq <= 1'b0; set_cur <= 1'b0;
             res_n[0] <= 11'd0; res_n[1] <= 11'd0; res_d[0] <= 11'd0; res_d[1] <= 11'd0; res_q[0] <= 11'd0; res_q[1] <= 11'd0;
-            old_hold[0] <= 4'd0; old_hold[1] <= 4'd0;
+            old_hold[0] <= 5'd0; old_hold[1] <= 5'd0;
             sync_count <= 0; load_count <= 0; unknown_ops <= 0;
             other_h <= 0; other_l <= 0; cc_hi <= 0; cc_lo <= 0;
             fill <= 0; fog <= 0; blend <= 0; prim <= 0; env <= 0; prim_lod_frac <= 0; k4 <= 0; k5 <= 0; cv_k03 <= 0; prim_z <= 0;
             sc_xh <= 0; sc_yh <= 0; sc_xl <= 12'd4092; sc_yl <= 12'd4092;
             cimg <= 0; zimg <= 0; timg <= 0; cimg_width <= 11'd1; timg_width <= 11'd1;
-            timg_size <= 2'd0; cimg_ok <= 1'b0; cimg8 <= 1'b0;
+            timg_size <= 2'd0; cimg_ok <= 1'b0; cimg8 <= 1'b0; cimg32 <= 1'b0;
         end else begin
             // ---- the engines take their requests
-            if (rq_pend && rd_ready && old_hold[rq_set] == 4'd0 && hz_ok) rq_pend <= 1'b0;
+            if (rq_pend && rd_ready && old_hold[rq_set] == 5'd0 && hz_ok) rq_pend <= 1'b0;
             if (wq_pend && wr_ready) wq_pend <= 1'b0;
-            if (old_hold[0] != 4'd0) old_hold[0] <= old_hold[0] - 4'd1;
-            if (old_hold[1] != 4'd0) old_hold[1] <= old_hold[1] - 4'd1;
+            if (old_hold[0] != 5'd0) old_hold[0] <= old_hold[0] - 5'd1;
+            if (old_hold[1] != 5'd0) old_hold[1] <= old_hold[1] - 5'd1;
 
             // ---- pixel results into the new buffers
             res_d[0] <= res_n[0]; res_d[1] <= res_n[1];
@@ -632,10 +730,15 @@ module rdp_top (
                 msk_be <= px_x[0] ? 2'b10 : 2'b01;
                 cm_wd <= {2{px_cpass}};
                 zm_wd <= {2{px_zpass}};
-                cn_wd <= cimg8 ? {2{px_r8, 10'd0}} : {px_color, px_hid, px_color, px_hid};
                 zn_wd <= {px_depth, px_depth};
                 nb_be <= px_x[0] ? 2'b01 : 2'b10;       // the even pixel in [31:16]
-                cn_we <= px_cpass;
+                // (a 32-bit image: the pixel's entry whole, written whether it passed or not, its pass bit in bit 27)
+                // (laid out so that the write engine's word, {[35:20], [17:2]}, is {R G B, cvg << 5}: the pass bit in [19])
+                nb_x0 <= px_x[0];
+                cn_wd <= cimg8 ? {2{px_r8, 10'd0}} : cimg32 ? {px_c27[26:11], px_cpass, 1'b0, px_c27[10:0], 7'd0}
+                                                            : {px_color, px_hid, px_color, px_hid};
+                cn_be <= cimg32 ? 2'b11 : px_x[0] ? 2'b01 : 2'b10;
+                cn_we <= px_cpass || cimg32;
                 zn_we <= px_zpass;
                 res_n[px_set] <= res_n[px_set] + 11'd1;
             end
@@ -650,6 +753,7 @@ module rdp_top (
                     if (op0[5:3] == 3'b001) begin
                         t_lft <= cmd_data[23];
                         t_tile <= cmd_data[18:16];
+                        t_lvl <= cmd_data[21:19];
                         t_yl <= cmd_data[13:0];
                         for (i = 0; i < 8; i = i + 1) adx[i] <= 0;
                     end
@@ -683,12 +787,13 @@ module rdp_top (
             S_IDLE: if (exec_go) begin
                 exec_go <= 1'b0;
                 busy_exec <= 1'b1;
-                if ((is_tri || op == 6'h24 || op == 6'h25 || op == 6'h36) && !cimg_ok) begin
-                    busy_exec <= 1'b0;          // a 32-bit colour image: nothing drawn
+                if ((is_tri || op == 6'h24 || op == 6'h25 || op == 6'h36) && (!cimg_ok || (cimg32 && cyc == 2'd2))) begin
+                    busy_exec <= 1'b0;          // a 4-bit colour image, or copy mode into a 32-bit one: nothing drawn
                 end else if (is_tri) begin
                     kind_tri <= 1'b1; kind_texrect <= 1'b0; kind_rect <= 1'b0; kind_fillmode <= 1'b0;
                     tflags <= op[2:0];
                     p_shade <= op[2]; p_tex <= op[1]; p_zbuf <= op[0]; p_direct <= 1'b0; p_tile <= t_tile;
+                    lod_lft <= t_lft; lod_lvl <= t_lvl;
                     y0r <= $signed(t_yh) >>> 2;
                     ymr <= $signed(t_ym) >>> 2;
                     p_aa <= 1'b1;               // every triangle is walked as the N64 walks it
@@ -712,6 +817,7 @@ module rdp_top (
                         kind_rect <= 1'b1;
                         p_shade <= 1'b0; p_tex <= op != 6'h36; p_zbuf <= 1'b0; p_direct <= 1'b1;
                         p_tile <= w1[26:24];
+                        lod_lft <= 1'b1; lod_lvl <= 3'd0;       // (walked left to right; the far level is level 0)
                         rx0 <= w1[23:14];
                         rxf <= (cyc != 2'd2) ? w1[13:12] : 2'd0;
                         ry0 <= {2'b00, w1[11:2]};
@@ -756,6 +862,7 @@ module rdp_top (
                         st <= S_LOAD_INIT;
                     end
                     6'h35: begin
+                        yuv_vec[w1[26:24]] <= w0[23:21] == 3'd1 && w0[20:19] == 2'd2;
                         tl_attr[w1[26:24]] <= {w0[23:21], w0[20:19], w1[23:20], w0[17:9], w0[8:0],
                                                w1[9], w1[8], w1[19], w1[18],
                                                w1[7:4], w1[3:0], w1[17:14], w1[13:10]};
@@ -764,14 +871,15 @@ module rdp_top (
                     6'h37: begin fill <= w1; busy_exec <= 1'b0; end
                     6'h38: begin fog <= w1; busy_exec <= 1'b0; end
                     6'h39: begin blend <= w1; busy_exec <= 1'b0; end
-                    6'h3A: begin prim <= w1; prim_lod_frac <= w0[7:0]; busy_exec <= 1'b0; end
+                    6'h3A: begin prim <= w1; prim_lod_frac <= w0[7:0]; min_lvl <= w0[12:8]; busy_exec <= 1'b0; end
                     6'h3B: begin env <= w1; busy_exec <= 1'b0; end
                     6'h3C: begin cc_hi <= w0[23:0]; cc_lo <= w1; busy_exec <= 1'b0; end
                     6'h3D: begin timg <= w1; timg_width <= {1'b0, w0[9:0]} + 11'd1; timg_size <= w0[20:19]; busy_exec <= 1'b0; end
                     6'h3E: begin zimg <= w1; busy_exec <= 1'b0; end
                     6'h3F: begin
                         cimg <= w1; cimg_width <= {1'b0, w0[9:0]} + 11'd1;
-                        cimg_ok <= w0[20:19] == 2'd2 || w0[20:19] == 2'd1; cimg8 <= w0[20:19] == 2'd1;
+                        cimg_ok <= w0[20:19] == 2'd2 || w0[20:19] == 2'd1 || w0[20:19] == 2'd3;
+                        cimg8 <= w0[20:19] == 2'd1; cimg32 <= w0[20:19] == 2'd3;
                         busy_exec <= 1'b0;
                     end
                     default: begin unknown_ops <= unknown_ops + 16'd1; busy_exec <= 1'b0; end
@@ -783,14 +891,22 @@ module rdp_top (
             // scanline as XH and XM are at YH's: back by the quarter rows between
             // (AA_EN: XL & ~1, back by the subscanline step (DxLDy >> 2) & ~1)
             S_XL: begin
-                if (mi == 5'd0) begin mul_a <= {30'd0, t_ym[1:0]}; mul_b <= aq_l; end
-                if (mi == 5'd2) begin t_xl <= (t_xl & ~32'd1) - mul_p[31:0]; st <= S_VSET; end
+                if (mi == 5'd2) begin t_xl <= aa_init; st <= S_VSET; end
                 mi <= (mi == 5'd2) ? 5'd0 : mi + 5'd1;
             end
 
             // ---- an attribute's value, DaDx, DaDe from the staging RAM (the
             // data two steps after the address)
             S_VSET: begin
+                // (the LOD's DaDy of S, T, W: read at steps 6 and 7, free, its integer half there at 15 and its fraction's
+                // top bit at the next attribute's step 0 -- the model keeps the top 17 bits)
+                if (vs == 4'd0 && tflags[1] && (vi == 3'd5 || vi == 3'd6 || vi == 3'd7)) begin
+                    case (vi)
+                        3'd5: ldy_s[0] <= vr_q[31];
+                        3'd6: ldy_t[0] <= vr_q[15];
+                        default: ldy_w[0] <= vr_q[31];
+                    endcase
+                end
                 case (vs)
                     4'd0: if (!attr_on(tflags, vi)) begin
                               vi <= vi + 3'd1;
@@ -814,10 +930,16 @@ module rdp_top (
                     end
                     4'd5: if (vz) begin zdy <= vr_q; vs <= 4'd15; end
                           else begin vr_ra <= vgb + voff(3'd5, vz) + {5'd0, vi[1]}; vgx[15:0] <= vhalf; vs <= 4'd6; end
-                    4'd6: begin vde[31:16] <= vhalf; vs <= 4'd7; end
-                    4'd7: begin vde[15:0] <= vhalf; vs <= 4'd15; end
+                    4'd6: begin vde[31:16] <= vhalf; vs <= 4'd7; vr_ra <= vgb + 6'd10 + {5'd0, vi[1]}; end
+                    4'd7: begin vde[15:0] <= vhalf; vs <= 4'd15; vr_ra <= vgb + 6'd14 + {5'd0, vi[1]}; end
                     default: begin                   // 15: the attribute's registers
-                        adx[vi] <= vgx;             // e[vi], ade[vi]: the RAM writes below
+                        adx[vi] <= vgx;
+                        if (!vz) case (vi)
+                            3'd4: ldy_s[16:1] <= vhalf;
+                            3'd5: ldy_t[16:1] <= vhalf;
+                            3'd6: ldy_w[16:1] <= vhalf;
+                            default: ;
+                        endcase             // e[vi], ade[vi]: the RAM writes below
                         if (vz) z_tol <= zt_m;
                         vs <= 4'd0; vi <= vi + 3'd1;
                         if (vi == 3'd7) st <= S_TRI_INIT;
@@ -829,20 +951,10 @@ module rdp_top (
             // that row's offset into the images (y * width * 2; an 8-bit image's y * width)
             S_TRI_INIT: begin
                 begin : tri_init
-                    reg [31:0] k;
-                    k = rdiff(y, y0r);
-                    case (mi)
-                        5'd0: begin mul_a <= k; mul_b <= t_dxh; end
-                        5'd1: begin mul_a <= k; mul_b <= t_dxm; end
-                        5'd2: begin mul_a <= rdiff(y, ymr); mul_b <= t_dxl; end
-                        5'd3, 5'd4, 5'd5, 5'd6, 5'd7, 5'd8, 5'd9, 5'd10:
-                              begin mul_a <= k; mul_b <= ade_q; end       // ea = mi - 3
-                        5'd11: begin mul_a <= sx12(y); mul_b <= {21'd0, cimg_width}; end
-                        default: ;
-                    endcase
+                    // (the operands: mul_ad / mul_bd)
                     // products come back two cycles later
                     case (mi)
-                        5'd2:  exh <= t_xh + mul_p[31:0];
+                        5'd2:  exh <= aa_init;
                         // 5..12: e[mi - 5] = e + k DaDe (the RAM writes below)
                         5'd13: row_off <= cimg8 ? mul_p[31:0] : {mul_p[30:0], 1'b0};
                         default: ;
@@ -859,9 +971,8 @@ module rdp_top (
             // rows down times four subscanline steps (DxDy & ~7)
             S_AAINIT: begin
                 case (mi)
-                    5'd0: begin mul_a <= rdiff(y, y0r); mul_b <= t_dxh & ~32'd7; end
-                    5'd1: begin mul_a <= rdiff(y, y0r); mul_b <= t_dxm & ~32'd7; end
-                    5'd2: begin mul_a <= rdiff(y, ymr); mul_b <= t_dxl & ~32'd7; ax_h <= aa_init; end
+                    5'd0, 5'd1: ;
+                    5'd2: ax_h <= aa_init;
                     5'd3: ax_m <= aa_init;
                     default: begin ax_l <= aa_init; st <= S_ROW; end
                 endcase
@@ -880,12 +991,15 @@ module rdp_top (
                     // rectangles: columns fixed
                     xs <= xa;
                     xe <= {1'b0, xb};
+                    spl <= 1'b0;
                     mi <= 5'd0;
                     st <= kind_fillmode ? S_FILL : S_SETUP;
                     if (!kind_fillmode) begin
+                        // (a 32-bit image's span of more than 512 pixels: its first half)
+                        if (r_cut) begin xe <= {1'b0, xa} + 11'd512; spl <= 1'b1; end
                         set_cur <= !set_cur;
-                        rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= !cimg8; rq_set <= !set_cur;
-                        rq_zbase <= zimg + row_off; rq_cbase <= cimg + row_off; rq_x0 <= xa; rq_x1 <= {1'b0, xb};
+                        rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= !cimg8 && !cimg32; rq_set <= !set_cur;
+                        rq_zbase <= zimg + row_off; rq_cbase <= crow;
                         rwb[!set_cur] <= cimg[11:2] + row_off[11:2];
                     end
                 end
@@ -904,12 +1018,13 @@ module rdp_top (
                 if (!aa_any || {1'b0, aa_min} >= aa_xe) st <= S_NEXT;
                 else begin
                     xs <= aa_min;
-                    xe <= aa_xe;
+                    xe <= a_cut ? aa_m512 : aa_xe;
+                    spl <= a_cut;
                     mi <= 5'd0;
                     st <= S_SETUP;
                     set_cur <= !set_cur;
-                    rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= !cimg8; rq_set <= !set_cur;
-                    rq_zbase <= zimg + row_off; rq_cbase <= cimg + row_off; rq_x0 <= aa_min; rq_x1 <= aa_xe;
+                    rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= !cimg8 && !cimg32; rq_set <= !set_cur;
+                    rq_zbase <= zimg + row_off; rq_cbase <= crow;
                     rwb[!set_cur] <= cimg[11:2] + row_off[11:2];
                 end
             end
@@ -919,8 +1034,6 @@ module rdp_top (
             // the S/T accumulators (texrects)
             S_SETUP: begin
                 if (kind_tri) begin
-                    dxs = {xs, 16'd0} - exh;
-                    if (mi < 5'd8) begin mul_a <= adx[mi[2:0]]; mul_b <= dxs; end
                     if (mi >= 5'd2 && mi < 5'd10)
                         cur[mi - 5'd2] <= e_q + mul_p[47:16];                // ea = mi - 2
                     mi <= mi + 5'd1;
@@ -932,32 +1045,20 @@ module rdp_top (
                     // texrect: t_xl = S T, t_dxl = DsDx DtDy; copy mode steps 4x
                     begin : rect_setup
                         reg [2:0] ds;
-                        reg signed [31:0] dsdx, dtdy, sv, tv, dcol, drow;
-                        reg signed [10:0] dc11;
+                        reg signed [31:0] sv, tv;
                         ds = (cyc == 2'd2) ? 3'd7 : 3'd5;
                         sv = {{16{t_xl[31]}}, t_xl[31:16]};   tv = {{16{t_xl[15]}}, t_xl[15:0]};
-                        dsdx = {{16{t_dxl[31]}}, t_dxl[31:16]}; dtdy = {{16{t_dxl[15]}}, t_dxl[15:0]};
-                        dc11 = $signed({1'b0, xs}) - $signed({1'b0, rx0});      // (11 and 13 bits, then extended)
-                        // in quarter pixels, the products then over 4: the rows from YH's whole row, the columns
-                        // from XH itself (4 (xs - XH's column) - XH's fraction; none in copy mode) -- the
-                        // column-stepped attribute is the plane at XH
-                        dcol = {{19{dc11[10]}}, dc11, 2'b00} - {30'd0, rxf};
-                        drow = {rdiff(y, ry0), 2'b00};
-                        case (mi)
-                            5'd0: begin mul_a <= dsdx; mul_b <= (op == 6'h25) ? drow : dcol; end
-                            5'd1: begin mul_a <= dtdy; mul_b <= (op == 6'h25) ? dcol : drow; end
-                            default: ;
-                        endcase
                         if (mi == 5'd2) cur[4] <= (sv <<< ds) + mul_p[33:2];
                         if (mi == 5'd3) cur[5] <= (tv <<< 5) + mul_p[33:2];
                         shS <= ds;
-                        adx[4] <= (op == 6'h25 || op == 6'h36) ? 32'd0 : dsdx;
-                        adx[5] <= (op == 6'h25) ? dtdy : 32'd0;
+                        adx[4] <= (op == 6'h25 || op == 6'h36) ? 32'd0 : r_dsdx;
+                        adx[5] <= (op == 6'h25) ? r_dtdy : 32'd0;
                         mi <= mi + 5'd1;
                         if (mi == 5'd3) st <= S_PIX;
                     end
                 end
                 px_cnt <= 10'd0;
+                pix_stp <= 1'b0; pix_fol <= 1'b0; pix_g0 <= lod_on && !lod_lft;
             end
 
             // ---- pixels, one a clock as what they read of memory comes in.
@@ -973,22 +1074,39 @@ module rdp_top (
                     // this row's, waiting on pixels the read gates, would hold it forever)
                     if (!wq_pend && !rq_pend) begin
                         wq_pend <= 1'b1; wq_fill <= 1'b0; wq_z <= z_upd; wq_set <= set_cur;
-                        wq_cbase <= cimg + row_off; wq_zbase <= zimg + row_off; wq_x0 <= xs; wq_x1 <= xe;
+                        wq_cbase <= crow; wq_zbase <= zimg + row_off; wq_x0 <= xs; wq_x1 <= xe;
                         res_n[set_cur] <= 11'd0; res_d[set_cur] <= 11'd0; res_q[set_cur] <= 11'd0;
                         row_wq <= 1'b1;
                     end
-                end else if (pix_go) begin
-                    pix_valid <= 1'b1;
-                    pix_x <= xs + px_cnt;
-                    pix_mask <= !p_aa ? 8'hFF : (p_aaen || aa_mask[7]) ? aa_mask : 8'h00;   // (no AA_EN: sample 7 or nothing)
-                    if (px_cnt != 10'd0) begin
+                end else if (pix_gh) begin
+                    // a ghost: cur goes to its place but the pixel is not counted (walking right, the pixel itself
+                    // follows it there: no step then; walking left, the span's first pixel is the next place)
+                    pix_valid <= 1'b1; pix_ghost <= 1'b1; pix_mask <= 8'h00;
+                    if (pix_stp) begin
                         for (i = 0; i < 8; i = i + 1) cur[i] <= cur[i] + adx[i];
                     end
-                    px_cnt <= px_cnt + 10'd1;
-                    if ({1'b0, xs} + {1'b0, px_cnt} + 11'd1 == xe) begin
-                        st <= S_NEXT;
+                    pix_stp <= pix_g0; pix_g0 <= 1'b0; pix_fol <= 1'b0;
+                    if (pix_end) begin
+                        st <= spl ? S_SPL : S_NEXT;
                         row_wq <= 1'b0;
-                        old_hold[set_cur] <= two_pass ? 4'd15 : 4'd14;
+                        old_hold[set_cur] <= 5'd20;
+                    end
+                end else if (pix_go) begin
+                    pix_valid <= 1'b1; pix_ghost <= 1'b0;
+                    pix_x <= xs + px_cnt;
+                    pix_mask <= !p_aa ? 8'hFF : (p_aaen || aa_mask[7]) ? aa_mask : 8'h00;   // (no AA_EN: sample 7 or nothing)
+                    if (pix_stp) begin
+                        for (i = 0; i < 8; i = i + 1) cur[i] <= cur[i] + adx[i];
+                    end
+                    pix_stp <= 1'b1;
+                    pix_fol <= lod_on && lod_lft;
+                    px_cnt <= px_cnt + 10'd1;
+                    // (walking right with the LOD the row ends with the last pixel's ghost)
+                    if ({1'b0, xs} + {1'b0, px_cnt} + 11'd1 == xe && !(lod_on && lod_lft)) begin
+                        st <= spl ? S_SPL : S_NEXT;
+                        row_wq <= 1'b0;
+                        // (its last line buffer read: the pixel's P9, D clocks later with the LOD)
+                        old_hold[set_cur] <= lod_on ? 5'd20 : two_pass ? 5'd15 : 5'd14;
                     end
                 end
             end
@@ -996,8 +1114,22 @@ module rdp_top (
             // ---- fill mode rectangles: straight to memory
             S_FILL: if (!wq_pend) begin
                 wq_pend <= 1'b1; wq_fill <= 1'b1; wq_z <= 1'b0; wq_set <= 1'b0;
-                wq_cbase <= cimg + row_off; wq_x0 <= xs; wq_x1 <= xe;
+                wq_cbase <= crow; wq_x0 <= xs; wq_x1 <= xe;
                 st <= S_NEXT;
+            end
+
+            // ---- a 32-bit image's span's second half: its own reads on the other set, then its pixels, the walk going
+            // on from the first half's last pixel (cur holds it, and steps at the next issue; the LOD walking left first
+            // issues a ghost of that pixel, as at a span's start)
+            S_SPL: begin
+                xs <= xe[9:0]; xe <= xe2; spl <= 1'b0;
+                px_cnt <= 10'd0;
+                pix_g0 <= lod_on && !lod_lft;
+                if (lod_on && !lod_lft) pix_stp <= 1'b0;
+                st <= S_PIX;
+                set_cur <= !set_cur;
+                rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= 1'b0; rq_set <= !set_cur;
+                rq_zbase <= zimg + row_off; rq_cbase <= crow;
             end
 
             // ---- the primitive's end: its pixels out of the pipe and back
@@ -1021,7 +1153,6 @@ module rdp_top (
 
             // ---- rectangles: row offset of the first row
             S_RECT_INIT: begin
-                if (mi == 5'd0) begin mul_a <= sx12(y); mul_b <= {21'd0, cimg_width}; end
                 if (mi == 5'd2) begin row_off <= cimg8 ? mul_p[31:0] : {mul_p[30:0], 1'b0}; st <= S_ROW; end
                 mi <= mi + 5'd1;
             end
@@ -1034,10 +1165,6 @@ module rdp_top (
                     reg [12:0] nt;
                     // LOAD BLOCK's coordinates are whole texels, the others' 10.2
                     s0 = w0[23:14]; t0 = w0[11:2]; s1 = w1[23:14]; t1 = w1[11:2];
-                    if (mi == 5'd0) begin
-                        mul_a <= (l_kind == 2'd0) ? {20'd0, w0[11:0]} : {22'd0, t0};
-                        mul_b <= {21'd0, timg_width};
-                    end
                     if (mi == 5'd2) begin
                         l_ti <= mul_p[22:0] + ((l_kind == 2'd0) ? {11'd0, w0[23:12]} : {13'd0, s0});
                         l_dst <= {ts_tmem, 2'b00};

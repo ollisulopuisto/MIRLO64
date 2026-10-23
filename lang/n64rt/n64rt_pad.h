@@ -268,8 +268,8 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
     const uint32_t dp = (set1 >> 22) & 3u;                       /* D-pad */
     const int dpad_swap = dp == 1u && mode != 1u && mode != 2u;
     int8_t sx = 0, sy = 0;
-    int from_dpad = mode != 1u && mode != 2u;
-    if (!from_dpad) {
+    int from_dpad = mode != 1u && mode != 2u && mode != 3u;     /* (3: none -- the stick stays centred) */
+    if (!from_dpad && mode != 3u) {
         int8_t x = 0, y = 0;
         if (analog) {
             const int sh = mode == 2u ? 16 : 0;

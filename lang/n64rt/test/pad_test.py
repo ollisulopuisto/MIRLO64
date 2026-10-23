@@ -130,6 +130,8 @@ def _spec(keys, joy, s0, s1, fields):
             sx, sy = dpad_stick()                 # no stick to speak of: the D-pad
         else:
             sx, sy = use
+    elif smode == 3:
+        sx, sy = 0, 0                             # none: centred
     else:
         sx, sy = dpad_stick()                     # D-pad, or an unknown value
     dmode = (s1 >> 22) & 3                        # the N64's D-pad: 0 none, 1 the D-pad, 2 L stick, 3 R stick

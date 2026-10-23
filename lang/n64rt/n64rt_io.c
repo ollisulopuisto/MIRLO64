@@ -1,9 +1,10 @@
 /* n64rt: the N64's hardware behind libultra's functions -- VI, PI, SI, AI,
  * the RSP's tasks, the caches, libultra's 64-bit helpers.
  *
- * The RSP's tasks are reported for now (and finish at once): the graphics
- * path (f3d_emit -> the geom core -> MRDP) and the audio path (the audio
- * core's ABI firmware) come next. */
+ * The RSP's tasks run on Mirlo's RSP with the game's own microcode, and the
+ * RDP draws what they leave in RDRAM (n64rt_rsp.c). The AI is in hardware
+ * (rtl/soc/rcp_ai.sv) when the SoC has it; else the game CPU feeds the
+ * Pocket's audio FIFO itself (n64rt_rsp.c). */
 #include <string.h>
 #include <generated/csr.h>
 #include <system.h>
@@ -84,6 +85,12 @@ static u32 s_vi_gamma;
  * Stadium's hi-res menus and its 3D screens: a frame of noise), and its gamma
  * a part of one (a band of the picture far too bright). */
 static u32 s_vi_width_cur = 320, s_vi_gamma_cur;
+/* VI_STATUS type 3: the frame buffer's pixels are 32-bit (RGBA8888), 4 bytes each -- VI_WIDTH stays a count of pixels, so
+ * the pitch in bytes, the words a row reads and the picture's bytes double; the scan-out is told by WIDTH's bit 17 and
+ * takes it with the pitch at its frame boundary (rtl/soc/n64_video.sv vi_px32). The game's (s_vi_px32) and the one
+ * given to the scan-out with the width (s_vi_px32_cur), as the width's two. */
+static u32 s_vi_px32, s_vi_px32_cur;
+#define VI_BPP(px32) ((px32) ? 4u : 2u)
 /* What the scan-out shows (rtl/soc/n64_video.sv) is the VI's own: a 640-clock line, 240 lines, the picture's window in them
  * (H_START / H_END and V_START / V_END, from the VI's 108 and 37 -- PAL's 128 and 95), the framebuffer's pixel
  * (i X_SCALE) >> 10 at the window's clock i and its row (j Y_SCALE) >> 10 at its line j, the rows WIDTH pixels apart. The VI's
@@ -133,7 +140,7 @@ static u32 vi_pic_bytes(void)
     if (!rows) rows = 240u;
     u32 ys = s_vi_ys > 0x800u ? 0x800u : s_vi_ys ? s_vi_ys : 0x400u;
     n64rt_vi_fit(y0, rows, ys, &rows, &ys);
-    return w * 2u * (((rows * ys) >> 10) + 2u);
+    return w * VI_BPP(s_vi_px32_cur) * (((rows * ys) >> 10) + 2u);
 }
 static void vi_width_gamma(void)
 {
@@ -143,14 +150,16 @@ static void vi_width_gamma(void)
     const u32 xs = s_vi_xs & 0xFFFu ? (s_vi_xs > 0x400u ? 0x400u : s_vi_xs & 0xFFFu) : 0x200u;
     u32 ys = s_vi_ys > 0x800u ? 0x800u : s_vi_ys ? s_vi_ys : 0x400u;     /* (2.0 at most: a serrated picture's field, every other row) */
     n64rt_vi_fit(y0, rows, ys, &rows, &ys);
-    /* the window's last pixel's source pixel, the priming's seven before it (rtl/soc/n64_video.sv NPE - NF), two to a word, and one more */
-    const u32 nw = ((((pw - 1u) * xs) >> 10) + 8u) / 2u + 1u;
+    /* the window's last pixel's source pixel, the priming's seven before it (rtl/soc/n64_video.sv NPE - NF), two to a word (a
+     * 32-bit picture's: one), and one more */
+    const u32 np = (((pw - 1u) * xs) >> 10) + 8u;
+    const u32 nw = s_vi_px32_cur ? np + 1u : np / 2u + 1u;
     s_vi_tall_cur = 0;
     video_framebuffer_scale_write(xs | ys << 16);
     video_framebuffer_rowwords_write(nw);
     video_framebuffer_hwindow_write(px0 | pw << 16);
     video_framebuffer_window_write(y0 << 8 | rows << 16);
-    video_framebuffer_width_write(w | (s_vi_gamma_cur ? 1u << 16 : 0u) | TV_WIDTH_BIT);
+    video_framebuffer_width_write(w | (s_vi_gamma_cur ? 1u << 16 : 0u) | (s_vi_px32_cur ? 1u << 17 : 0u) | TV_WIDTH_BIT);
 }
 void n64rt_osViSetMode(void *mode)
 {
@@ -164,6 +173,7 @@ void n64rt_osViSetMode(void *mode)
         s_vi_l = l; if (ys) s_vi_ys = ys; if (xs) s_vi_xs = xs; s_vi_hs = m[7]; s_vi_vs = m[12]; s_vi_width_cur = ~0u;       /* (taken with the width, at the next field) */
     }
     s_vi_gamma = (((const u32 *)mode)[1] >> 3) & 1u;     /* comRegs.ctrl: VI_CTRL_GAMMA_ON */
+    s_vi_px32 = (((const u32 *)mode)[1] & 3u) == 3u;     /* comRegs.ctrl: VI_CTRL_TYPE_32 (taken with the width, at the next field) */
     s_vi_black = 0;                          /* (libultra: a new mode's state is "mode updated" alone) */
     {   /* OSViMode: type (u8, padded), comRegs {ctrl, width, burst, vSync, hSync, leap, hStart, xScale,
          * vCurrent}, fldRegs[2] {origin, yScale, vStart, vBurst, vIntr} */
@@ -219,7 +229,7 @@ void *n64rt_osViGetNextFramebuffer(void) { return (void *)(uintptr_t)s_fb_next; 
 /* A stretch of the game's code, compared every VI field with the copy taken
  * at boot (n64rt_watch_arm): Pokemon Stadium's func_800060E0 at 0x8000_6170
  * came back overwritten twice, with what looked like audio samples. Read
- * uncached (KSEG1): the audio core and MRDP write SDRAM behind the D-cache. */
+ * uncached (KSEG1): the audio core and RDP write SDRAM behind the D-cache. */
 #define WATCH_PA    0x00006000u
 #define WATCH_WORDS 256u
 static u32 s_watch[WATCH_WORDS];
@@ -263,9 +273,10 @@ static void vi_apply_base(void)
 {
     u32 base = s_fb_next;
     if (s_vi_width_cur >= 512u && s_vi_width_cur != ~0u && s_fb_prev < s_fb_next) {
-        /* (one row of the 640-pixel picture, 1280 bytes, apart: WIDTH 640's two rows' pitch is WIDTH * 2, WIDTH 1280's is WIDTH) */
-        const u32 d = s_fb_next - s_fb_prev;
-        if (d == s_vi_width_cur * 2u || (s_vi_width_cur >= 1024u && d == s_vi_width_cur)) base = s_fb_prev;
+        /* (one row of the 640-pixel picture, 1280 bytes, apart: WIDTH 640's two rows' pitch is WIDTH * 2, WIDTH 1280's is WIDTH;
+         * a 32-bit picture's twice that) */
+        const u32 d = s_fb_next - s_fb_prev, b = VI_BPP(s_vi_px32_cur);
+        if (d == s_vi_width_cur * b || (s_vi_width_cur >= 1024u && d == s_vi_width_cur * (b / 2u))) base = s_fb_prev;
     }
     if (base != s_fb_cur) {
         s_fb_cur = base;
@@ -307,7 +318,7 @@ static void vi_field_common(void)
 void n64rt_vi_field(void)
 {
     vi_field_common();
-    if (s_vi_width != s_vi_width_cur) { s_vi_width_cur = s_vi_width; vi_width_gamma(); }
+    if (s_vi_width != s_vi_width_cur || s_vi_px32 != s_vi_px32_cur) { s_vi_width_cur = s_vi_width; s_vi_px32_cur = s_vi_px32; vi_width_gamma(); }
     vi_apply_base();
     {
         /* Black: the game's (osViBlack), or a framebuffer that does not lie in
@@ -403,13 +414,13 @@ static void copy_words(void *dst, const void *src, u32 size)
     }
 }
 void n64rt_gfx_quiesce(void) __attribute__((weak));
-/* does [pa, pa + size) touch a frame buffer (at its widest: 640 x 480 x 16 bits, 320 x 240 x 32)? */
+/* does [pa, pa + size) touch a frame buffer (at its widest: 640 x 480 x 16 bits, 320 x 240 x 32; a 32-bit hi-res one's twice) */
 static int fb_overlaps(u32 pa, u32 size)
 {
 #ifdef N64RT_OWN
     vi_hw_note_origin();                              /* (the VI in hardware: the runtime did not see the game's writes of ORIGIN) */
 #endif
-    const u32 bytes = s_vi_width_cur >= 512u && s_vi_width_cur != ~0u ? 640u * 480u * 2u : 320u * 240u * 4u;
+    const u32 bytes = s_vi_width_cur >= 512u && s_vi_width_cur != ~0u ? 640u * 480u * VI_BPP(s_vi_px32_cur) : 320u * 240u * 4u;
     for (u32 i = 0; i < 4u; i++)
         if (s_fb_ring[i] && pa < s_fb_ring[i] + bytes && s_fb_ring[i] < pa + size) return 1;
     return 0;
@@ -1378,6 +1389,7 @@ void n64rt_vi_hw_event(void)
     if (xs) s_vi_xs = xs;
     if (hs) s_vi_hs = hs;                              /* (0: osViBlack) */
     s_vi_width = s_vi_width_cur = w;
+    s_vi_px32 = s_vi_px32_cur = (hw_rd(0x04400000u) & 3u) == 3u;   /* VI_STATUS type 3: 32-bit pixels (rcp_vi.sv: a change of it wakes this too) */
     vi_width_gamma();
     {
         const u32 bytes = vi_pic_bytes(), lim = n64rt_game->mem_size + 0x1000u;
@@ -1690,7 +1702,7 @@ static void vi_write(u32 o, u32 v)
     if (o >= 0x38u) return;
     s_vi[o >> 2] = v;
     switch (o) {
-    case 0x00: s_vi_gamma = (v >> 3) & 1u; break;                    /* VI_STATUS: VI_CTRL_GAMMA_ON */
+    case 0x00: s_vi_gamma = (v >> 3) & 1u; s_vi_px32 = (v & 3u) == 3u; break;   /* VI_STATUS: VI_CTRL_GAMMA_ON; type 3, 32-bit pixels (taken at the field) */
     case 0x04:
 #ifdef N64RT_DEBUG
         {   /* (when in the field, in SoC cycles from the field event, the game's VI_ORIGIN write lands: the scan-out latches 19,799 cycles after it) */

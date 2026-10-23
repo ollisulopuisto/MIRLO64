@@ -1,7 +1,7 @@
 /* The software pipeline of a graphics task: the RSP reference model
  * (sim/rsp) runs the game's microcode on a task dump, the RDP commands it
- * gives go to MRDP's reference model (lang/c/mrdp), which draws into the
- * dump's RDRAM; the colour image comes out as a PPM. For MRDP's work on taking
+ * gives go to RDP's reference model (lang/c/rdp), which draws into the
+ * dump's RDRAM; the colour image comes out as a PPM. For RDP's work on taking
  * the N64's command stream: what a frame looks like, in seconds.
  *
  *   rdp_task [-o out_prefix] [-n] task_gfx_*.bin ...
@@ -9,22 +9,25 @@
  *     -v  the commands, as they come
  *   RDP_WATCH=<hex address>: the commands that write that word of RDRAM
  *   RDP_RAW=1: and the colour image as it is (prefix_N.raw)
+ * It counts the pixels that took the texture LOD (docs/lod.md) by level.
+ * The PPM is of the last colour image at its own size: a 32-bit one's
+ * (docs/cimg32.md) R, G, B bytes as they are.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "rsp.h"
-#include "mrdp.h"
+#include "rdp.h"
 
 #define RDRAM_SIZE (8u << 20)
-#define MEM_SIZE (16u << 20)                 /* and the hidden plane at 8 MiB (mrdp.h, MRDP_HID_BASE) */
+#define MEM_SIZE (16u << 20)                 /* and the hidden plane at 8 MiB (rdp.h, RDP_HID_BASE) */
 static uint8_t ram[MEM_SIZE];
 static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
 static void wbe32(uint8_t *p, uint32_t v) { p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16); p[2] = (uint8_t)(v >> 8); p[3] = (uint8_t)v; }
 
-/* MRDP's memory: the N64's RDRAM, 16-bit big-endian */
+/* RDP's memory: the N64's RDRAM, 16-bit big-endian */
 static uint16_t rd16(void *c, uint32_t a) { (void)c; a &= MEM_SIZE - 2; return (uint16_t)(ram[a] << 8 | ram[a + 1]); }
-static mrdp_t rdp;
+static rdp_t rdp;
 static uint32_t watch = ~0u, cur_w[8], cur_n;
 static unsigned long cur_i;
 static void wr16(void *c, uint32_t a, uint16_t v)
@@ -37,7 +40,7 @@ static void wr16(void *c, uint32_t a, uint16_t v)
         {
             unsigned op = (cur_w[0] >> 24) & 63u;
             int ti = (op == 0x24 || op == 0x25) ? (int)((cur_w[1] >> 24) & 7) : (int)((cur_w[0] >> 16) & 7);
-            const mrdp_tile_t *t = &rdp.tile[ti];
+            const rdp_tile_t *t = &rdp.tile[ti];
             printf("      other modes %08x %08x, combine %08x %08x; tile %d: fmt %u size %u line %u tmem %u palette %u, s %u..%u t %u..%u (10.2), "
                    "mask %u/%u shift %u/%u clamp %u/%u mirror %u/%u; texture image %06x width %u\n",
                    rdp.other_h, rdp.other_l, rdp.combine_hi, rdp.combine_lo, ti, t->fmt, t->size, t->line, t->tmem, t->palette,
@@ -49,7 +52,7 @@ static void wr16(void *c, uint32_t a, uint16_t v)
 
 static int draw = 1, verbose;
 static uint64_t ops[64];
-static uint32_t last_cimg, last_width;
+static uint32_t last_cimg, last_width, last_size;
 static FILE *trace;
 static void on_rdp(void *user, const uint32_t *w, int n)
 {
@@ -78,14 +81,14 @@ static void on_rdp(void *user, const uint32_t *w, int n)
         for (int i = 0; i < 6; i++) printf(" %04x", rd16(0, a + 2 * i));
         printf("\n");
     }
-    if (!skip) for (int i = 0; i < 2 * n; i++) mrdp_push(&rdp, w[i]);
+    if (!skip) for (int i = 0; i < 2 * n; i++) rdp_push(&rdp, w[i]);
     else { /* a draw skipped: the state it would have set (the primitive's tile) is not needed */ }
     if (trace) {   /* RDP_TRACE=<file>: every command, all its words, and the pixels it drew */
         fprintf(trace, "%02x %d", op, 2 * n);
         for (int i = 0; i < 2 * n; i++) fprintf(trace, " %08x", w[i]);
         fprintf(trace, " px=%llu\n", (unsigned long long)(rdp.pixels_drawn - px0));
     }
-    if (op == MRDP_OP_SET_CIMG && rdp.cimg != rdp.zimg) { last_cimg = rdp.cimg; last_width = rdp.cimg_width; }
+    if (op == RDP_OP_SET_CIMG && rdp.cimg != rdp.zimg) { last_cimg = rdp.cimg; last_width = rdp.cimg_width; last_size = rdp.cimg_size; }
 }
 
 int main(int argc, char **argv)
@@ -113,9 +116,9 @@ int main(int argc, char **argv)
         rsp_reset(&s, ram, RDRAM_SIZE);
         memset(ram + RDRAM_SIZE, 0xFF, MEM_SIZE - RDRAM_SIZE);      /* (the plane: all ones, as the runtime sets it) */
         s.rdp_cmd = on_rdp;
-        mrdp_init(&rdp, 0, rd16, wr16);
+        rdp_init(&rdp, 0, rd16, wr16);
         memset(ops, 0, sizeof ops);
-        last_cimg = 0; last_width = 320;
+        last_cimg = 0; last_width = 320; last_size = 2;
         uint8_t task[64];
         if (getenv("RDP_CLEARFB")) { /* RDP_CLEARFB=addr[,addr]: the colour buffers start black (not the last frame's) */
             const char *e = getenv("RDP_CLEARFB");
@@ -132,12 +135,22 @@ int main(int argc, char **argv)
                (unsigned long long)s.rdp_cmds, (unsigned long long)rdp.pixels_drawn, rdp.unknown_ops);
         for (int i = 0; i < 64; i++) if (ops[i]) printf(" %02x:%llu", i, (unsigned long long)ops[i]);
         printf("\n");
+        /* what of the frame took the texture LOD (docs/lod.md) */
+        printf("  LOD: %llu pixels (2-cycle, TEX_LOD), %llu magnified, %llu at the far level; by level:", (unsigned long long)rdp.lod_px,
+               (unsigned long long)rdp.lod_mag, (unsigned long long)rdp.lod_far);
+        for (int i = 0; i < 8; i++) printf(" %llu", (unsigned long long)rdp.lod_lvl[i]);
+        printf("\n");
         if (draw && last_cimg) {
             char path[1024];
             snprintf(path, sizeof path, "%s_%d.ppm", prefix, k);
             if ((f = fopen(path, "wb"))) {
                 fprintf(f, "P6\n%u 240\n255\n", last_width);
                 for (uint32_t i = 0; i < last_width * 240u; i++) {
+                    if (last_size == 3) {           /* RGBA8888: R, G, B as they are (the alpha byte is the coverage) */
+                        const uint8_t *p = ram + ((last_cimg + 4 * i) & (MEM_SIZE - 4));
+                        fwrite(p, 1, 3, f);
+                        continue;
+                    }
                     uint16_t v = rd16(0, last_cimg + 2 * i);
                     unsigned r5 = v >> 11, g5 = (v >> 6) & 31, b5 = (v >> 1) & 31;
                     uint8_t px[3] = { (uint8_t)(r5 << 3 | r5 >> 2), (uint8_t)(g5 << 3 | g5 >> 2), (uint8_t)(b5 << 3 | b5 >> 2) };
@@ -146,18 +159,19 @@ int main(int argc, char **argv)
                 fclose(f);
             }
             /* RDP_RAW=1: the colour image as it is too (RGBA5551 big-endian, bit 0
-             * the coverage), for a model of the VI's filters (sim/vi_filter/vi_model.py) */
+             * the coverage; a 32-bit image's RGBA8888, the coverage in the alpha byte's
+             * top bits), for a model of the VI's filters (sim/vi_filter/vi_model.py) */
             snprintf(path, sizeof path, "%s_%d.raw", prefix, k);
             if (getenv("RDP_RAW") && (f = fopen(path, "wb"))) {
-                fwrite(ram + (last_cimg & (RDRAM_SIZE - 1)), 1, last_width * 240u * 2u, f);
+                fwrite(ram + (last_cimg & (RDRAM_SIZE - 1)), 1, last_width * 240u * (last_size == 3 ? 4u : 2u), f);
                 fclose(f);
             }
-            /* and its pixels' hidden coverage bits, a byte each (prefix_N.hid) */
+            /* and its pixels' hidden coverage bits, a byte each (prefix_N.hid; a 32-bit image has none) */
             snprintf(path, sizeof path, "%s_%d.hid", prefix, k);
-            if (getenv("RDP_RAW") && (f = fopen(path, "wb"))) {
+            if (getenv("RDP_RAW") && last_size != 3 && (f = fopen(path, "wb"))) {
                 for (uint32_t i = 0; i < last_width * 240u; i++) {
                     uint32_t a = (last_cimg + 2 * i) & (RDRAM_SIZE - 2), kk = (a >> 1) & 15u;
-                    uint32_t ha = MRDP_HID_BASE + ((a >> 5) << 2) + (kk < 8u ? 2u : 0u);
+                    uint32_t ha = RDP_HID_BASE + ((a >> 5) << 2) + (kk < 8u ? 2u : 0u);
                     uint8_t h = (uint8_t)((rd16(0, ha) >> (2u * (kk & 7u))) & 3u);
                     fwrite(&h, 1, 1, f);
                 }

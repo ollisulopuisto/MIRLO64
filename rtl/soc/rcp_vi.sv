@@ -18,9 +18,13 @@
 //            picture the game gives as two fields' origins one row of the buffer apart (libultra: the second is the first
 //            + WIDTH * 2 bytes) is one frame of both, from the lower: the 640 x 480 frame -- a write of the
 //            base + one row leaves the base as it is. A serrated picture is sent woven, its 480 rows in order from the
-//            base (rtl/soc/n64_video.sv).
+//            base (rtl/soc/n64_video.sv). A serrated picture's origin written in the second field (VI_CURRENT's field
+//            bit, which libultra's retrace handler reads to pick the field's origin) is that field's: the base is the
+//            row before it, the first field's of the same buffer -- a game that swaps its buffer every field gives
+//            each field's origin in a buffer the other field's is not in, and the frame is the newest buffer whole.
 //   STATUS   GAMMA (bit 3), taken at the latch, is the scan-out's gamma correction; AA_MODE (bits 9:8, 0 or 1:
-//            anti-alias) and DIVOT_ENABLE (bit 4) its filters (MIRLO_VI_AA).
+//            anti-alias) and DIVOT_ENABLE (bit 4) its filters (MIRLO_VI_AA). TYPE (bits 1:0; 3: 32-bit pixels) is the
+//            runtime's to give the scan-out with the pitch it goes with: a change of its bit 0 (2 and 3) is a `chg`.
 //   H_START  0: black (osViBlack) -- the scan-out reads nothing from the next frame on -- and so is an origin that has
 //            the picture out of the game's RDRAM (`thr`, MONITOR.VITHR: the last origin, in 64-byte units, a picture
 //            of the mode's size fits at; the runtime keeps it).
@@ -30,7 +34,7 @@
 //            runtime's choice from the ROM's region (n64rt_boot.c). The
 //            half-line counter of a PAL field is 312 lines (CURRENT 0..623), VI_V_START's first line 47 (libultra's PAL modes:
 //            half-line 95) where the NTSC modes' is 18.
-//   WIDTH, H_START, V_START, X_SCALE, Y_SCALE   what the scan-out's window and size come from (the runtime computes them: n64rt_io.c, and
+//   WIDTH, H_START, V_START, X_SCALE, Y_SCALE, and STATUS' TYPE   what the scan-out's window, size and pixel size come from (the runtime computes them: n64rt_io.c, and
 //            is told when one of them has changed -- `chg`, a pulse -- reading the registers back).
 // The accesses are sequenced by mirlo_mips.sv: the address is held while the access lasts; for a read, `rd` is the answer
 // in the cycle after the address (rd_s); a write is done in the cycle `wr_s` is up.
@@ -52,7 +56,7 @@ module rcp_vi (
     output wire         vi_clr,         // a write to CURRENT (the MI's VI bit is cleared)
     // events
     output logic        irq,            // a pulse: the line V_INTR names began
-    output logic        chg,            // a pulse: WIDTH, H_START, V_START, X_SCALE or Y_SCALE changed
+    output logic        chg,            // a pulse: WIDTH, H_START, V_START, X_SCALE, Y_SCALE or STATUS' TYPE changed
     // the scan-out's
     output wire  [25:0] base,           // the framebuffer's byte address in the SDRAM
     output wire         il,             // a serrated picture: SERRATE (VI_CTRL bit 6), hi-res (sent woven)
@@ -79,21 +83,33 @@ logic [11:0] wid;
 logic [8:0]  vint;
 logic        st_gamma, st_serr, hs_zero, gm_f;
 logic        st_aa, st_dv, st_dd;
+logic        st_px32;                   // STATUS' TYPE 3: 32-bit pixels (a row is twice the bytes)
 logic        vs_set, vs_pal;            // V_SYNC has been written; and it names 625 lines (576 or more)
 assign vi_pal = vs_set ? vs_pal : tv_def;
 // a hi-res picture's second field's origin: the base + one row of the 640-pixel picture (1280 bytes), which the base does not follow: with
 // WIDTH 640 (libultra's interlaced modes: Y_SCALE 2.0) that is WIDTH * 2 bytes; with WIDTH 1280 (Donkey Kong 64's: the
 // buffer's pitch is two rows, Y_SCALE 1.0, so a field is every other row) it is WIDTH bytes
-wire         row_up = |wid[11:9] && (wd[22:0] == org_b + {10'd0, wid, 1'b0} || (|wid[11:10] && wd[22:0] == org_b + {11'd0, wid}));
+// (one subtracter: the written origin's distance from the base, mod 2^23, against the two row sizes and, below, against 0)
+wire  [22:0] org_d  = wd[22:0] - org_b;
+wire         row_up = |wid[11:9] && (org_d == {10'd0, wid, 1'b0} || (|wid[11:10] && org_d == {11'd0, wid}));
 logic [8:0]  nl;
 logic [1:0]  hold;
 logic        field;
+// An origin written in a serrated hi-res picture's second field (the field bit as the game reads it) is the second field's:
+// the base is one row of the buffer before it -- WIDTH * 2 bytes, WIDTH bytes for a pitch of two rows, twice either for
+// 32-bit pixels. libultra writes each field's origin from the field bit, and a game that swaps its buffer every field
+// (a flight game's 640 x 480 screens, 50 a second) writes the first field's origin of one buffer and the second field's of
+// the next: the base is then every field's buffer's first row, and the woven frame stays at the same rows. Not when it is
+// the base or a row on (row_up): the same buffer, or the same origin for both fields.
+wire [13:0]  rowb   = (|wid[11:10] ? {2'd0, wid} : {1'd0, wid, 1'b0}) << st_px32;
+wire         org_f2 = field && st_serr && |wid[11:9];
 assign vi_clr = wr_s && a == 4'd4;
 always_ff @(posedge clk) begin
-    if (rst) begin org_b <= 23'd0; wid <= 12'd0; vint <= 9'd0; st_gamma <= 1'b0; st_serr <= 1'b0; hs_zero <= 1'b1; st_aa <= 1'b0; st_dv <= 1'b0; st_dd <= 1'b0; vs_set <= 1'b0; vs_pal <= 1'b0; end
+    if (rst) begin org_b <= 23'd0; wid <= 12'd0; vint <= 9'd0; st_gamma <= 1'b0; st_serr <= 1'b0; hs_zero <= 1'b1; st_aa <= 1'b0; st_dv <= 1'b0; st_dd <= 1'b0; st_px32 <= 1'b0; vs_set <= 1'b0; vs_pal <= 1'b0; end
     else if (wr_s) case (a)
-    4'd0: begin st_gamma <= wd[3]; st_serr <= wd[6]; st_aa <= !wd[9]; st_dv <= wd[4]; st_dd <= wd[16]; end
-    4'd1: if (!row_up) org_b <= wd[22:0];
+    4'd0: begin st_gamma <= wd[3]; st_serr <= wd[6]; st_aa <= !wd[9]; st_dv <= wd[4]; st_dd <= wd[16]; st_px32 <= wd[1:0] == 2'd3; end
+    4'd1: if (org_f2) begin if (!row_up && org_d != 23'd0) org_b <= wd[22:0] - {9'd0, rowb}; end
+          else if (!row_up) org_b <= wd[22:0];
     4'd2: wid <= wd[11:0];
     4'd3: vint <= wd[9:1];
     4'd6: begin                                      // a value that names a TV system sets it; any other (0, noise) leaves it as it was
@@ -107,7 +123,9 @@ end
 
 // a register the window is computed from has changed (q is the register's old word)
 wire [31:0] dx = q ^ wd;
-wire        chg_now = wr_s && ((a == 4'd2 && |dx[11:0]) || (a == 4'd10 && |(dx & 32'h03FF_03FF)) || (a == 4'd13 && |dx[11:0]) || (a == 4'd12 && |dx[11:0]) || (a == 4'd9 && |dx[25:0]));
+wire        chg_now = wr_s && ((a == 4'd2 && |dx[11:0]) || (a == 4'd10 && |(dx & 32'h03FF_03FF)) || (a == 4'd13 && |dx[11:0]) || (a == 4'd12 && |dx[11:0]) || (a == 4'd9 && |dx[25:0])
+                               || (a == 4'd0 && dx[0]));         // (the pixel size, type 2 or 3: a 32-bit picture's pitch and row are the runtime's;
+                                                                 // type 0 to 2, a 16-bit game's start, is no change of it)
 always_ff @(posedge clk) chg <= !rst && chg_now;
 
 // ---------------------------------------------------------------- the half-line counter

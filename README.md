@@ -4,7 +4,7 @@
 
 MIRLO 64 is an N64 core made specifically to fit in the Analogue Pocket. It intends to replicate as best as possible the N64 architecture.
 
-It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and runs the games from their own ROMs. This is **version 0.2** and it is experimental: read [Status](#status) before expecting a particular game to work.
+It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and runs the games from their own ROMs. This is **version 0.3** and it is experimental: read [Status](#status) before expecting a particular game to work.
 
 ## What is in it
 
@@ -20,7 +20,7 @@ A small runtime, `n64rt.sys`, loads the game and does what is not in hardware. T
 
 ## Status
 
-MIRLO 64 is experimental and not every game works. What is known of v0.2:
+MIRLO 64 is experimental and not every game works. What is known of v0.3:
 
 * ROMs of up to 64 MiB (the first 32 MiB in the Pocket's PSRAM, the rest in its SDRAM).
 * Rumble Pak is not supported. This is currently a limitation in the Dock.
@@ -104,14 +104,18 @@ python3 tools/mips_inits.py                                 # the images the bit
 python3 tools/package_bitstream.py projects/output_files/mirlo.rbf mirlo.rev
 
 make -C lang/n64rt && cp lang/n64rt/build/n64rt.bin n64rt.sys      # the runtime
-python3 tools/make_release.py mirlo.rev n64rt.sys tortuga.Mirlo64_0.2.zip
+python3 tools/make_release.py mirlo.rev n64rt.sys tortuga.Mirlo64_0.3.zip
 ```
 
-**The fitter's seed matters.** The design fills about 90 % of the FPGA and its timing is tight, so whether a compile closes timing depends on the seed (`SEED` in `projects/mirlo.qsf`). `tools/area2/fit.sh <tag> <seed>` compiles a copy of the tree with a seed, and `tools/area2/closure.py` gives the worst slack: a bitstream is good only if no analysis is negative. The seeds that close for the hardware's sources as they are in the tree are recorded in `projects/fits.json`, best first (`tools/fits.py seed` prints the first; `tools/fits.py record <projects directory>...` writes the file after a sweep). A change to the hardware asks for a new sweep: `tools/fits.py check` tells whether the record is of these sources.
+**The fitter's seed matters.** The design fills about 97 % of the FPGA's logic (the ALMs of each recorded fit are in `projects/fits.json`) and its timing is tight, so whether a compile closes timing depends on the seed (`SEED` in `projects/mirlo.qsf`). `tools/area2/fit.sh <tag> <seed>` compiles a copy of the tree with a seed, and `tools/area2/closure.py` gives the worst slack: a bitstream is good only if no analysis is negative. The seeds that close for the hardware's sources as they are in the tree are recorded in `projects/fits.json`, best first (`tools/fits.py seed` prints the first; `tools/fits.py record <projects directory>...` writes the file after a sweep). A change to the hardware asks for a new sweep: `tools/fits.py check` tells whether the record is of these sources.
 
 ### Nightly builds
 
 Every night at 00:00 (Europe/Madrid) the default branch is built with the recorded seed and, if that compile closes timing, published as an artifact of the [Nightly workflow](https://github.com/tortugaveloz/MIRLO64/actions/workflows/nightly.yml), kept for two weeks: a zip to unpack onto the SD card's root, like a release. `tools/nightly.sh` is that build, and it can be run by hand. It can also be run by hand on any branch (Actions > Nightly > Run workflow), for instance to check that a pull request's `projects/fits.json` closes. A nightly is the tree of that day: it has not been tried on a Pocket the way a release has.
+
+### Simulation checks
+
+The [Simulation workflow](https://github.com/tortugaveloz/MIRLO64/actions/workflows/sim.yml) runs on every pull request and every push to `main` (and by hand, Actions > Simulation > Run workflow), on Ubuntu with Verilator 5.052, no Quartus and no hardware. It builds the C library, the boot ROM, the runtime and the SoC's test programs, runs the test programs on the whole SoC (`sim/mips_soc`) and fails if one of them prints `FAIL` or no `PASS` (`vi_test` and `pi2_test` are run but not gated: the first gives no verdict in its 30 Mcycles, the second has a known failure), runs the RSP against its model on a random program with every kind of instruction and the RSP's DMA bench, and runs `tools/area2/rdp_regress.sh`. The outputs are kept as an artifact when it fails. Changes to the docs alone do not run it. It is one job of about 15 runner minutes; about 25 when its caches (Verilator, built from source, and the C library) are cold.
 
 ## Repository layout
 

@@ -182,6 +182,7 @@ instantiates it with the boot ROM and these parameters:
 | `W64`, `W64_ALU`, `W64_SH`, `W64_MD` / `W64_DIV` | 1 / 0 | The 64-bit levels |
 | `FAST`, `XWB` | 1 | The shortened paths for the 93.75 MHz clock; the write buffer outside the core |
 | `IC_LOG2`, `DC_LOG2` | 10 | Cache lines as powers of two (`MIRLO_CPU_IC_LOG2`, `MIRLO_CPU_DC_LOG2`) |
+| `SNOOP` | 1 | The D-cache drops a line the RDP, the RSP's DMA or the bridge writes into ("Caches and memory") |
 
 Memory is word-native: a 32-bit word is its value, and byte *k* of a word is lane 3 - *k*.
 
@@ -193,11 +194,14 @@ exceptions) and W (write-back), with forwarding into E from M and W. With `FAST`
 - **F**: the I-cache's word enters D before its tag is compared. A word of another line is dropped in D a cycle later,
   the line is read and the instruction is fetched again. Instructions are decoded as they leave F.
 - **Branches** are decided at E on forwarded operands. The fetch follows a guess (a jump's target; a backward branch
-  taken, a forward one not; a register jump not), and a wrong guess costs two cycles. A delay slot costs nothing.
+  taken, a forward one not; a register jump not), and a wrong guess costs two cycles. A delay slot costs nothing. The
+  branch's two ways (its target and the instruction after its delay slot) are registered as it leaves E, with whether
+  it was taken, and the fetch chooses between them behind the registers.
 - **M**: a load takes the D-cache's word before its tag is compared. A load of the wrong line is not written back; the
   line is read and the instruction runs again from its fetch. A load in a delay slot waits one cycle for its tag
   instead.
-- E's forwarding selects, the ALU's result kind and M's kind of access are registers set one stage ahead.
+- E's forwarding selects, the ALU's result kind, whether a shift's amount is a register's and M's kind of access are
+  registers set one stage ahead.
 
 Nothing a cache tag says reaches the pipeline's advance. Multiplies and divides run in the background with HI and LO
 interlocked: `mult(u)` is one product of the DSP block, in HI and LO two cycles later; `div(u)` is a bit a cycle.
@@ -210,6 +214,21 @@ current for the other masters (the RSP's DMA, the RDP, the PI's engine, the scan
 overwritten is dropped with a cache instruction, which invalidates its line whatever the operation. Software that
 empties a cache walks the VR4300's 16 KiB and 8 KiB with index operations: an index operation drops every line that
 the VR4300's index stands for, one a cycle, so such code needs no change.
+
+The D-cache also drops by itself a line that another master writes into (`SNOOP`). Its lines are twice the VR4300's
+16 bytes, so a buffer that is 16-byte aligned shares a line with the 16 bytes beside it. Software drops a buffer's
+lines before a transfer into it, as on the console; but a load of the bytes beside it while the transfer is under way
+brings the whole line back from memory that does not have the transfer's words yet, and the line would stay. Ocarina
+of Time reads its controllers that way: its buffer is at 0x8012c4f0, and the message queue it reads at 0x8012c4e0
+while the SI's RD64B waits for the PIF refills the line with the request it sent, so every button reads held. The
+same can happen with the PI's engine and the RSP's DMA. `mirlo_mips.sv` takes from the arbiter the line of every
+write it grants the RDP, the RSP's DMA and the bridge (the PI's engine, the SI's DMA), across to the CPU's clock as
+`cpu_port.sv`'s read words go. The core looks each up in a copy of the tags (a valid bit and the nine tag bits above
+the index: one M10K, whose read port is the snoop's alone, so a lookup never waits), queues a hit and drops the line
+through the tags' write port in a cycle where the core writes no tag; a refill that such a write overtakes brings its
+line in invalid. While two or more lines wait, those masters' writes are held at the arbiter. A drop costs the CPU a
+refill and changes nothing else in its cycles; a write 16 MiB from a cached line (the nine bits do not tell them
+apart) drops it too, which is rare and costs the same.
 
 Uncached, device and mapped data accesses, and `ldc1` / `sdc1`, take the slow path: one word at a time. `ld` and `sd`
 to cached memory are two words in two cycles.
@@ -588,7 +607,10 @@ The registers at `0x00` - `0x34` are a block RAM of 16 words and read back what 
   a millisecond ahead of the latch, which is the time the game's retrace handler has to write VI_ORIGIN.
 - **VI_ORIGIN** is the scan-out's base, taken at the frame boundary. For a hi-res picture whose two fields' origins are
   one buffer row apart, a write of the base plus one row leaves the base as it is: a serrated picture is sent woven, its
-  rows in order from the lower origin ([resolution.md](resolution.md)).
+  rows in order from the lower origin ([resolution.md](resolution.md)). An origin a serrated hi-res picture's game
+  writes in the second field (VI_CURRENT's field bit, which libultra's retrace handler picks the field's origin by) is
+  that field's, and the base is the row before it: a game that swaps its buffer every field gives the two fields'
+  origins in different buffers, and the woven frame is the newest buffer's whole, at the same rows every field.
 - **VI_STATUS**: GAMMA, AA_MODE, DIVOT and the dither filter bit go to the scan-out at the latch.
 - **VI_H_START** written 0 (`osViBlack`) blanks the picture, and so does an origin beyond `MONITOR.VITHR`, the last
   origin at which a picture of the mode's size fits in the RDRAM.
@@ -815,11 +837,13 @@ between them is timed. The other clocks are asynchronous groups.
 
 ### Timing closure
 
-The device is a Cyclone V `5CEBA4F23C8` and the design fills about 95 % of its logic. The RDP, the CPU with its FPU and
-the RSP are the three largest blocks, followed by the scan-out and the register block. With the device this full,
-whether a compile closes timing depends on the fitter's seed (`SEED` in `projects/mirlo.qsf`); README.md names seeds
-that closed for the release. A bitstream is good only if no analysis is negative in any of the four corners (the slow
-and fast models at 85 and 0 degrees): setup, hold, recovery, removal and pulse width.
+The device is a Cyclone V `5CEBA4F23C8` and the design fills about 97 % of its logic (`projects/fits.json` is the
+record: each fit that closed, with its ALMs, 17,885 to 17,941 of 18,480 for today's sources). The RDP, the CPU with its
+FPU and the RSP are the three largest blocks, followed by the scan-out and the register block. With the device this
+full, whether a compile closes timing depends on the fitter's seed (`SEED` in `projects/mirlo.qsf`);
+`projects/fits.json` records the seeds that closed for the sources as they are. A bitstream is good only if no analysis
+is negative in any of the four corners (the slow and fast models at 85 and 0 degrees): setup, hold, recovery, removal
+and pulse width.
 
 The CPU's 93.75 MHz domain is the most demanding. The `FAST` structure of `mips_core` and `fpu_n64` exists for it:
 cache words used ahead of their tags, branches decided at E, decode and forwarding selects registered a stage ahead,
@@ -836,8 +860,9 @@ synthesis at its fast effort, and a placement effort multiplier of 10. The fitte
 - `fit.sh <tag> <seed> [extra.qsf|-] [map]` copies `rtl/`, `platform/`, `target/` and `projects/` into `s_<tag>/`, so
   that later edits cannot reach a run in progress, sets the seed, appends a list of Verilog macros and any extra
   assignments, and starts a full compile in the background (`quartus_map` only with `map`). The log is
-  `projects_a2_<tag>.compile.log`. `QUARTUS_BIN` names Quartus's `bin` directory. The macros it appends set the
-  configuration the bitstream is built with (the caches' sizes among them); `EXTRA_MACROS` adds others.
+  `projects_a2_<tag>.compile.log`. `QUARTUS_BIN` names Quartus's `bin` directory. The macros it appends are the ones
+  the RTL still reads with a value (the RSP's lanes, the caches' sizes), at the RTL's own defaults; `EXTRA_MACROS` adds
+  others.
 - `ooc.sh <tag> <unit>` synthesises one unit alone (the CPU, the RDP, the RSP, the scan-out or the registers) with the
   project's settings and the same macros: a minute or two, and the same count for the same source, where the whole
   design's synthesis can move a unit nobody touched from one run to the next.
@@ -900,6 +925,7 @@ C library (`make -C lang/mips -f lib.mk VARIANT=game`) and are run as
 | `tlbram_test`, `tlbmon_test`, `tlbgame_test`, `tlbpg_test` | The translation tables; the game's TLB instructions; TLB exceptions delivered to the game; the fetch page registers |
 | `mi_test`, `vi_test`, `ai_test`, `si_test`, `pi2_test` | Each RCP block: registers, interrupts, DMA, and that the game's accesses enter the monitor only where they should |
 | `rcpcpu_test` | The CPU's side of the SP and DPC registers: the semaphore, the DMA queue, DPC writes |
+| `dma_coh_test` | The D-cache against the PI's engine, the RSP's DMA and the SI's RD64B writing a buffer whose edge shares a 32-byte line with data loaded during the transfer |
 | `ram8_test` | Every block above the RDRAM's first 4 MiB; `sim/mips_soc/ram8_check.sh` runs it and checks the audio and the picture |
 | `hires_test`, `vwin_test`, `viaa_test` | The scan-out's sizes and windows, and the VI's filters (`sim/vi_filter/viaa_check.py` compares the frame) |
 | `rsp_replay` | One recorded RSP task on the whole SoC, timed |
@@ -942,3 +968,12 @@ SoC's levels) and `gen_rand_fpu_rom.py` random FPU programs.
 
 `pak_test` and `si_test` compile libultra's own sources, which are not in this repository: `ULTRALIB=<dir>` names a
 checkout. The commands to run each test are in the header of its makefile.
+
+### Boot sweep: `tools/sweep`
+
+`tools/sweep/sweep.py <rom folder> [--seconds 8] [-j n] [--pad spec]` runs every ROM in a folder through `tb_soc`
+with the runtime, several at a time, and judges each boot from its evidence: the runtime's entry and fatal lines, the
+scan-out's video (`VGA=1`), `RSPLOG`, `EXCSTAT` and the final summary line. Each game gets a verdict (`alive`,
+`frozen`, `black`, `crash`, `no-boot`, `timeout`), and the run a `report.md`, a `report.json` and a contact sheet of
+the last frames. `--status <out>` shows a sweep under way, `--compare <baseline> <candidate>` checks an RTL change
+frame by frame against an earlier sweep, and `tools/sweep/README.md` has the options and the rules.

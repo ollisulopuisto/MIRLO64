@@ -1,24 +1,25 @@
-// Mirlo's SoC on MIPS (docs/mips.md): what core_top.sv
-// instantiates under MIRLO_MIPS, as the SoC of the core. Its fabric is Mirlo-N64's (MIRLO64: rtl/soc/sdr_*, n64_bus,
-// n64_ports, n64_video); its three cores are MIPS:
+// Mirlo's SoC on MIPS (docs/mips.md): what core_top.sv instantiates as the
+// SoC of the core. Its fabric is Mirlo-N64's (MIRLO64: rtl/soc/sdr_*,
+// n64_ports, n64_video); the SDRAM's masters:
 //
 //   the game CPU (mips_sys: mips_core, big-endian) -----\
-//   MRDP -----------------------------------------------+-- sdr_arb -- sdr_ctrl -- sdr_phy -- SDRAM
+//   the RDP (rtl/rdp): its pixels, its commands --------+-- sdr_arb -- sdr_ctrl -- sdr_phy -- SDRAM
+//   the RSP's DMA (rtl/rsp) ----------------------------|
 //   the scan-out ---------------------------------------|
-//   n64_bus (the geom core + the audio core) -----------|
 //   the Pocket's bridge --------------------------------/
 //
 //   the bridge's port (a ROM's first 32 MiB) -- psram -- psram_phy -- the two PSRAMs
 //
-// The map is MIRLO's (lang/c keeps its addresses):
-//   0x2000_0000  the geom core's ROM (its own), 0x2000_8000 its RAM (the TCM;
-//                the game CPU reads and writes it through the TCM's port B)
+// The map (the game CPU's device port below has the details):
+//   0x0430_0000.. the RCP's MI, PI, VI, AI and SI registers, the cartridge's
+//                domain 2 and ROM, PIF RAM: the N64's addresses
+//   0x2000_0000  the RSP's and the DPC's registers
+//   0x3000_0000  the runtime's window on the ROM
 //   0x4000_0000  SDRAM, 64 MiB
-//   0x6000_0000  the audio core (IMEM, DMEM, CTRL: the game CPU loads it; its
-//                own view puts them at 0x8000_0000)
 //   0x8000_0000  KSEG0/KSEG1: an N64 game's RDRAM (8 MiB of SDRAM, mips_core's N64WIN)
 //   0xF000_0000  the registers (mirlo_regs, tools/mirlo_regs.py)
-//   0xBFC0_0000  the game CPU's boot ROM (lang/c/boot: waits for the Pocket
+//   0xFFFF_8000  the monitor level's memory (mon_ram)
+//   0xBFC0_0000  the game CPU's boot ROM (lang/mips/boot: waits for the Pocket
 //                to load the game into SDRAM, then jumps to 0x4000_0000)
 // The SDRAM initialises itself; boot_ready tells the Pocket it may load.
 `default_nettype none
@@ -165,7 +166,17 @@ logic [3:0]  rq_be;
 logic [2:0]  rq_tag, rd_tag;
 logic        la_valid;
 logic [23:0] la_addr;
-sdr_arb #(.N(NP)) arb (.clk, .rst, .p_valid, .p_we, .p_addr, .p_wdata, .p_be, .p_urgent, .p_ready, .p_rvalid, .p_rdata, .la_valid, .la_addr,
+// The other masters' writes, for the game CPU's D-cache (mips_core's SNOOP: it drops the line of each): sn_t turns over
+// when the arbiter grants the RDP, the RSP's DMA or the bridge (the PI's engine, the SI's DMA) a write, whose word is
+// then in its register stage (rq_addr). Both are taken across to the CPU's clock as cpu_port's read words are, a value
+// lasting one cycle of clk. While lines to drop wait in the CPU, sn_hold holds those ports' writes.
+localparam logic [NP-1:0] SN_PORTS = 6'b01_1100;
+logic        sn_t, sn_hold, sn_hold_s;
+always_ff @(posedge clk) begin
+    sn_hold_s <= !rst && sn_hold;
+    if (rst) sn_t <= 1'b0; else if (|(p_ready & p_we & SN_PORTS)) sn_t <= !sn_t;
+end
+sdr_arb #(.N(NP)) arb (.clk, .rst, .p_valid(p_valid & ~(p_we & SN_PORTS & {NP{sn_hold_s}})), .p_we, .p_addr, .p_wdata, .p_be, .p_urgent, .p_ready, .p_rvalid, .p_rdata, .la_valid, .la_addr,
     .req_valid(rq_valid), .req_we(rq_we), .req_addr(rq_addr), .req_wdata(rq_wdata), .req_be(rq_be), .req_tag(rq_tag),
     .req_ready(rq_ready), .rd_valid, .rd_data, .rd_tag);
 logic [1:0]  dfi_ras_n, dfi_cas_n, dfi_we_n;
@@ -214,7 +225,7 @@ mips_sys #(.BOOTROM(BOOTROM), .FAST(1'b1), .XWB(1'b1)) sys (.clk(clk_cpu), .rst(
     .s_req, .s_we, .s_addr, .s_wdata, .s_strb, .s_line, .s_wrun, .s_ack(1'b0), .s_rvalid, .s_rdata, .s_busy(1'b0),
     .x_req(c_x_req), .x_we(), .x_addr(c_x_addr), .x_wdata(), .x_strb(), .x_ack(c_x_ack), .x_rdata(c_x_rdata),
     .st_valid, .st_dev, .st_addr, .st_data, .st_strb, .st_full, .st_done,
-    .irq(c_irq), .irq_mon(c_irq_mon), .dbg_pc(dbg_cpu_pc), .dbg_cause, .dbg_epc);
+    .irq(c_irq), .irq_mon(c_irq_mon), .sn_t, .sn_line(rq_addr[23:3]), .sn_hold, .dbg_pc(dbg_cpu_pc), .dbg_cause, .dbg_epc);
 cpu_port #(.PORT(1)) pc (.clk_c(clk_cpu), .rst_c(rst_cpu),
     .st_valid, .st_dev, .st_addr, .st_data, .st_strb, .st_full, .st_done,
     .s_req, .s_line, .s_addr, .s_rvalid, .s_rdata,
@@ -326,35 +337,48 @@ always_ff @(posedge clk) begin
         else if (x_audio) xs <= X_AUDIO;
         else if (x_tcm) xs <= X_TCM;
         else if (x_mon) xs <= X_MON;
-        else if (x_mi || x_pi) begin x_rdata <= mi_w_rd; if (x_we) xs <= X_MIW1; else x_ack <= 1; end
+        else if (x_mi || x_pi) begin if (x_we) xs <= X_MIW1; else x_ack <= 1; end
         else if (x_vi) xs <= x_we ? X_VIW : X_VIR;
-        else if (x_ai) begin x_rdata <= ai_rd; if (x_we) xs <= X_MIW1; else x_ack <= 1; end
-        else if (x_si) begin x_rdata <= si_rd; if (x_we) xs <= X_MIW1; else x_ack <= 1; end
+        else if (x_ai) begin if (x_we) xs <= X_MIW1; else x_ack <= 1; end
+        else if (x_si) begin if (x_we) xs <= X_MIW1; else x_ack <= 1; end
         else if (x_pif) xs <= X_PIF;
-        else if (x_d2 || x_rom || x_psw) begin if (x_we && (x_rom || d2_flash || (x_psw && !io_ps))) begin x_rdata <= 0; x_ack <= 1; end else xs <= X_CART; end
-        else if (x_grom) begin x_rdata <= 0; x_ack <= 1; end
+        else if (x_d2 || x_rom || x_psw) begin if (x_we && (x_rom || d2_flash || (x_psw && !io_ps))) x_ack <= 1; else xs <= X_CART; end
+        else if (x_grom) x_ack <= 1;
         else if (x_rsp) begin rx_wdata <= x_wdata; rx_addr <= x_addr[6:2]; rx_we <= x_we; xs <= X_RSP; end
-        else begin x_rdata <= 0; x_ack <= 1; if (bus_errors != 16'hFFFF) bus_errors <= bus_errors + 16'd1; end
+        else begin x_ack <= 1; if (bus_errors != 16'hFFFF) bus_errors <= bus_errors + 16'd1; end
     end
     X_REGS: if (!bus_r_req) xs <= X_REGD;            // (the geom and audio cores' accesses go first)
-    X_REGD: begin x_rdata <= r_rdata; x_ack <= 1; xs <= X_IDLE; end
-    X_AUDIO: if (a_s_ack) begin x_rdata <= a_s_dat_r; x_ack <= 1; xs <= X_IDLE; end
+    X_REGD: begin x_ack <= 1; xs <= X_IDLE; end
+    X_AUDIO: if (a_s_ack) begin x_ack <= 1; xs <= X_IDLE; end
     X_MON:  xs <= X_MOND;
-    X_MOND: begin x_rdata <= mon_rd; x_ack <= 1; xs <= X_IDLE; end
+    X_MOND: begin x_ack <= 1; xs <= X_IDLE; end
     // (a store to the MI waits two cycles for its effect on the line to be in the CPU's clock: rcp_mi.sv)
-    X_VIR: begin x_rdata <= vi_rd; x_ack <= 1; xs <= X_IDLE; end
+    X_VIR: begin x_ack <= 1; xs <= X_IDLE; end
     X_PIF:  if (!si_busy) xs <= x_we ? X_MIW2 : X_PIFR;          // (the write is done in this cycle: rcp_si.sv's c_wr_s)
-    X_PIFR: begin x_rdata <= si_q; x_ack <= 1; xs <= X_IDLE; end
-    X_CART: if (io_ack) begin x_rdata <= pa_dat_r; x_ack <= 1; xs <= X_IDLE; end
+    X_PIFR: begin x_ack <= 1; xs <= X_IDLE; end
+    X_CART: if (io_ack) begin x_ack <= 1; xs <= X_IDLE; end
     X_VIW: xs <= X_MIW1;                            // (the write is done in this cycle: rcp_vi.sv's wr_s)
     X_MIW1: xs <= X_MIW2;
     X_MIW2: begin x_ack <= 1; xs <= X_IDLE; end
     X_TCM:  xs <= X_TCMD;
-    X_TCMD: begin x_rdata <= t_dat_r; x_ack <= 1; xs <= X_IDLE; end
-    X_RSP:  if (rsp_x_go) begin x_rdata <= rsp_x_rdata; x_ack <= 1; xs <= X_IDLE; end
+    X_TCMD: begin x_ack <= 1; xs <= X_IDLE; end
+    X_RSP:  if (rsp_x_go) begin x_ack <= 1; xs <= X_IDLE; end
     default: xs <= X_IDLE;
     endcase
 end
+// The read data, x_ack's: cpu_port takes it only with the ack, and only for a read (a store's ack carries nothing), so it is
+// loaded at every cycle with what the state answers -- the device's word in a read's last state, 0 where a read is answered
+// from X_IDLE with nothing -- and not held in between (a hold was one more input of each bit's select)
+always_ff @(posedge clk)
+    case (xs)
+    X_IDLE:  x_rdata <= (x_mi || x_pi) ? mi_w_rd : x_ai ? ai_rd : x_si ? si_rd : 32'd0;
+    X_MOND:  x_rdata <= mon_rd;
+    X_VIR:   x_rdata <= vi_rd;
+    X_PIFR:  x_rdata <= si_q;
+    X_CART:  x_rdata <= pa_dat_r;
+    X_RSP:   x_rdata <= rsp_x_rdata;
+    default: x_rdata <= r_rdata;                    // X_REGD's (X_AUDIO and X_TCMD are not reached: no audio core, no TCM)
+    endcase
 assign xr_go = xs == X_REGS && !bus_r_req;
 
 // ---------------------------------------------------------------- registers, bus
@@ -364,9 +388,9 @@ logic [31:0] br_wdata;
 logic        su_valid, su_ready;
 logic [31:0] su_data;
 logic        cmd_valid, cmd_ready;
-logic [31:0] cmd_data, mrdp_sync, mrdp_load;
-logic [15:0] mrdp_unknown;
-logic        mrdp_idle;
+logic [31:0] cmd_data, rdp_sync, rdp_load;
+logic [15:0] rdp_unknown;
+logic        rdp_idle;
 logic        r_uart_we, uart_rx_pop, uart_rxempty, uart_txfull;
 logic [7:0]  r_uart_byte, uart_rx_byte;
 logic [31:0] fb_base_csr, dbg_geom_msg;
@@ -402,7 +426,7 @@ mirlo_regs regs (.clk, .rst,
     .vblank, .fb_base(fb_base_csr), .fb_width, .fb_y0, .fb_rows, .fb_px0, .fb_pw, .fb_xs, .fb_ys, .fb_nw, .fb_tall, .fb_gamma, .fb_pal, .tv_pal, .fb_dma_enable, .fb_vtg_enable, .fb_mode,
     .bus_errors, .geom_irq, .game_irq, .geom_run, .dbg_geom_msg,
     .su_valid, .su_ready, .su_data, .cmd_valid, .cmd_ready, .cmd_data,
-    .mrdp_sync_count(mrdp_sync), .mrdp_load_count(mrdp_load), .mrdp_unknown_ops(mrdp_unknown), .mrdp_idle,
+    .rdp_sync_count(rdp_sync), .rdp_load_count(rdp_load), .rdp_unknown_ops(rdp_unknown), .rdp_idle,
     .uart_we(r_uart_we), .uart_byte(r_uart_byte), .uart_txfull, .uart_rx_pop, .uart_rx_byte, .uart_rxempty,
     .mon_sp, .mon_field, .mon_dp, .mon_own, .mon_rcp, .mon_irq,
     .mon_mi, .mi_line, .mi_w_mi(mi_op && x_mi), .mi_w_pi(mi_op && x_pi), .mi_w_we(x_we), .mi_w_a(x_addr[3:2]), .mi_w_wd(x_wdata), .mi_w_rd,
@@ -492,7 +516,7 @@ rcp_dpc_view dpc_view (.clk, .rst, .end_we(dpc_end_we), .status_we(dpc_status_we
     .st_raw(dpc_st_raw), .cur(dpc_current), .end_(dpc_end), .start_ok(dpc_start_ok), .st(dpc_status));
 rdp_dpc dpc (.clk, .rst, .start_we(dpc_start_we), .end_we(dpc_end_we), .status_we(dpc_status_we), .wdata(dpc_wdata),
     .start(dpc_start), .end_(dpc_end), .end_rd(dpc_end_rd), .current(dpc_current), .status(dpc_st_raw),
-    .rdp_busy(cmd_valid || !mrdp_idle),
+    .rdp_busy(cmd_valid || !rdp_idle),
     .m_valid(p_valid[5]), .m_addr(dpc_m_addr), .m_ready(p_ready[5]), .m_rvalid(p_rvalid[5]), .m_rdata(p_rdata),
     .dx_addr(dpc_dx_addr), .dx_data(dpc_dx_data),
     .c_valid(su_valid), .c_data(su_data), .c_ready(su_ready));
@@ -515,7 +539,7 @@ assign a_s_ack = 1'b0; assign a_s_dat_r = '0; assign t_dat_r = '0;
 logic [31:0] dbg_geom_pc, dbg_aud_state, dbg_aud_pc;
 assign dbg_geom_pc = '0; assign dbg_aud_state = {30'd0, rsp_unimpl, rsp_halted}; assign dbg_aud_pc = '0;
 
-// ---------------------------------------------------------------- MRDP
+// ---------------------------------------------------------------- RDP
 logic        m_cmd_valid, m_cmd_ready, m_cmd_we, m_wdata_valid, m_wdata_ready, m_rdata_valid;
 logic [31:0] m_cmd_addr, m_wdata, m_rdata;
 logic [3:0]  m_wdata_we;
@@ -527,10 +551,10 @@ rdp_top rdp (.clk, .rst,
     .m_cmd_valid, .m_cmd_ready, .m_cmd_we, .m_cmd_addr(rdp_addr),
     .m_wdata_valid, .m_wdata_ready, .m_wdata, .m_wdata_we,
     .m_rdata_valid, .m_rdata,
-    .sync_count(mrdp_sync), .sync_ev(mon_dp), .load_count(mrdp_load), .unknown_ops(mrdp_unknown), .idle(mrdp_idle));
-// (bit 23: the RDP's hidden-bit plane, 1 MiB below the RDRAM -- lang/c/mrdp/mrdp.h, layout.h)
+    .sync_count(rdp_sync), .sync_ev(mon_dp), .load_count(rdp_load), .unknown_ops(rdp_unknown), .idle(rdp_idle));
+// (bit 23: the RDP's hidden-bit plane, 1 MiB below the RDRAM -- lang/c/rdp/rdp.h, layout.h)
 assign m_cmd_addr = {6'd0, rdp_addr[23] ? 24'hDC_0000 + {6'd0, rdp_addr[19:2]} : 24'hE0_0000 + {3'd0, rdp_addr[22:2]}, 2'b00};
-port_mrdp pm (.clk, .rst, .m_cmd_valid, .m_cmd_we, .m_cmd_addr, .m_cmd_ready, .m_wdata_valid, .m_wdata, .m_wdata_we,
+port_rdp pm (.clk, .rst, .m_cmd_valid, .m_cmd_we, .m_cmd_addr, .m_cmd_ready, .m_wdata_valid, .m_wdata, .m_wdata_we,
     .m_wdata_ready, .m_rdata_valid, .m_rdata,
     .p_valid(p_valid[2]), .p_we(p_we[2]), .p_addr(p_addr[2]), .p_wdata(p_wdata[2]), .p_be(p_be[2]),
     .p_ready(p_ready[2]), .p_rvalid(p_rvalid[2]), .p_rdata);
@@ -658,7 +682,7 @@ wire        vi_gam  = mon_vi ? vi_gm : fb_gamma;
 localparam bit VIDEO_N64FB = 1'b1;  // the framebuffer is the game's: RGBA5551, the left pixel in the high half
 n64_video #(.ORIGIN_MASK(24'hFFFFFF), .N64FB(VIDEO_N64FB)) video (.clk, .rst, .clk_vid, .rst_vid,
     .enable(fb_en), .vi_origin(fb_base[25:0]), .vi_il(mon_vi && vi_il), .vblank,
-    .vi_width(fb_width), .vi_black(1'b0), .vi_pal(mon_vi ? vi_pal_rq : fb_pal), .tv_pal, .gamma(vi_gam), .vi_aa(mon_vi && vi_aa), .vi_divot(mon_vi && vi_dv), .vi_dedither(mon_vi && vi_dd), .crop_v(vid_crop_v), .crop_r(vid_crop_r), .vi_lines(9'd240), .vi_px0(fb_px0), .vi_pw(fb_pw), .vi_y0(fb_y0), .vi_rows(fb_rows), .vi_xs(fb_xs), .vi_ys(fb_ys), .vi_nw(fb_nw), .osd_en(1'b0), .fps_en(1'b0), .osd_val('0),
+    .vi_width(fb_width), .vi_px32(fb_tall), .vi_black(1'b0), .vi_pal(mon_vi ? vi_pal_rq : fb_pal), .tv_pal, .gamma(vi_gam), .vi_aa(mon_vi && vi_aa), .vi_divot(mon_vi && vi_dv), .vi_dedither(mon_vi && vi_dd), .crop_v(vid_crop_v), .crop_r(vid_crop_r), .vi_lines(9'd240), .vi_px0(fb_px0), .vi_pw(fb_pw), .vi_y0(fb_y0), .vi_rows(fb_rows), .vi_xs(fb_xs), .vi_ys(fb_ys), .vi_nw(fb_nw), .osd_en(1'b0), .fps_en(1'b0), .osd_val('0),
     .m_valid(p_valid[0]), .m_addr(p_addr[0]), .m_urgent(p_urgent[0]), .m_ready(p_ready[0]),
     .m_rvalid(p_rvalid[0]), .m_rdata(p_rdata),
     .vi_line(vi_line), .vi_frame(mon_field), .vi_latch,

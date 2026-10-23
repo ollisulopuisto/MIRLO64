@@ -7,7 +7,7 @@
  *   red    the game CPU busy: the share of the samples whose PC was not in the idle thread (a branch to itself, 0x1000FFFF, at the PC or
  *          the word before it: libultra's idle loop; a game with another idle loop reads as busy)
  *   green  the RSP running (SP_STATUS not halted)
- *   blue   the RDP drawing (the MRDP not idle)
+ *   blue   the RDP drawing (the RDP not idle)
  *   white  the game's frames (frame buffer swaps) in the window, two to a pixel: 60 fps is full height, 30 fps half
  * A bar grows from the bottom of its band; a full band is 100 %. */
 #ifndef N64RT_DBG_H

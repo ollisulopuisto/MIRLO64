@@ -58,7 +58,7 @@
 #define LAYOUT_CTRL_BYTES   64
 #define LAYOUT_FREE         0x43341100      /* nothing yet, up to the hidden plane */
 #define LAYOUT_HID          0x43700000      /* the RDP's hidden-bit plane: the N64's other two coverage bits of each
-                                             * 16-bit word of RDRAM, 1 MiB (lang/c/mrdp/mrdp.h; the scan-out reads it) */
+                                             * 16-bit word of RDRAM, 1 MiB (lang/c/rdp/rdp.h; the scan-out reads it) */
 #define LAYOUT_RDRAM        0x43800000
 
 #endif
