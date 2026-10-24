@@ -89,7 +89,8 @@ def main():
         for d in sys.argv[2:]:
             if not verify(d):
                 continue
-            qsf = open(os.path.join(os.path.dirname(outdir(d).rstrip("/")), "mirlo.qsf")).read()
+            qsf_file = os.path.join(d, "mirlo.qsf") if os.path.exists(os.path.join(d, "mirlo.qsf")) else os.path.join(os.path.dirname(outdir(d).rstrip("/")), "mirlo.qsf")
+            qsf = open(qsf_file).read()
             seed = int(re.search(r"^set_global_assignment -name SEED (\d+)", qsf, re.M).group(1))
             alms = re.search(r"Logic utilization \(in ALMs\)\s*:\s*([\d,]+)", open(os.path.join(outdir(d), "mirlo.fit.summary")).read())
             version = re.search(r"Quartus Prime Version\s*:\s*(.+)", open(os.path.join(outdir(d), "mirlo.fit.summary")).read())
