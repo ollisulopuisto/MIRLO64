@@ -9,10 +9,41 @@ sim/rsp/make_div_rom.py). Each seed fits in its own copy of rtl/ platform/ targe
 projects/mirlo.qsf), and the result goes to OUT/fit-<seed>-closed-<true|false>/ (closure.txt, the summaries, and for a closed seed mirlo.rbf and the
 packaged mirlo.rev). Several seeds run side by side (--jobs, default 4: a fit takes about 3-4 GB). The timing check is the CI's
 (tools/area2/closure.py: the worst slack of all the corners, closed when it is >= 0)."""
-import argparse, concurrent.futures, ctypes, os, re, shutil, subprocess, sys, time
+import argparse, concurrent.futures, ctypes, os, re, runpy, shutil, subprocess, sys, time
 
 R = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # (the tree to fit: --tree)
 PY = sys.executable
+REV_TABLE = bytes(int(f"{b:08b}"[::-1], 2) for b in range(256))
+
+
+def calc_closure(d):
+    f = os.path.join(d, "mirlo.sta.summary") if not d.endswith(".summary") else d
+    if not os.path.exists(f):
+        return ""
+    t = open(f).read().split("\n\n")
+    n = 0; w = {}
+    for b in t:
+        m = re.search(r"Type\s*:\s*(\S+ \S+ \S+ Model) (.*?) '(.*)'\nSlack\s*:\s*(\S+)", b)
+        if not m: continue
+        n += 1
+        model, kind, clk, sl = m.groups(); sl = float(sl)
+        c = re.search(r"general\[(\d)\]", clk)
+        c = "cpu" if c and c.group(1) == "5" else "sys" if c and c.group(1) == "0" else "sys2x" if c and c.group(1) == "1" else "vid" if c and c.group(1) == "3" else clk.split("|")[-1][:14]
+        k = (kind, c)
+        if k not in w or sl < w[k][0]: w[k] = (sl, model)
+    if not w:
+        return ""
+    worst = min(w.items(), key=lambda x: x[1][0])
+    su = " ".join(f"{c}:{v[0]:+.3f}" for (k, c), v in sorted(w.items()) if k == "Setup" and c in ("cpu", "sys", "sys2x"))
+    ho = " ".join(f"{c}:{v[0]:+.3f}" for (k, c), v in sorted(w.items()) if k == "Hold" and c in ("cpu", "sys", "sys2x"))
+    norm_d = d.replace("\\", "/")
+    return f"{norm_d.split('/')[-2] if '/' in norm_d else norm_d}: {n} entries; worst {worst[1][0]:+.3f} ({worst[0][0]} {worst[0][1]}, {worst[1][1]}); setup {su}; hold {ho}"
+
+
+def pack_bitstream(src, dst):
+    raw = open(src, "rb").read()
+    if raw:
+        open(dst, "wb").write(raw.translate(REV_TABLE))
 
 
 def run(cmd, cwd=None, log=None):
@@ -89,11 +120,17 @@ def prep(boot):
         shutil.copyfile(boot, dest)
     if not os.path.exists(dest):
         sys.exit("no boot ROM image: %s (the CI's artifact boot-rom, --boot)" % dest)
-    for cmd in ([PY, os.path.join(R, "sim", "rsp", "make_div_rom.py"), os.path.join(R, "rtl", "rsp", "rsp_div_rom.hex")],
-                [PY, os.path.join(R, "tools", "mips_inits.py")]):
-        p = subprocess.run(cmd, cwd=R, capture_output=True, text=True)
-        if p.returncode != 0:
-            sys.exit("failed: %s\ncode: %d\nstdout: %s\nstderr: %s" % (" ".join(cmd), p.returncode, p.stdout, p.stderr))
+    old_argv = list(sys.argv)
+    old_cwd = os.getcwd()
+    try:
+        sys.argv = ["make_div_rom.py", os.path.join(R, "rtl", "rsp", "rsp_div_rom.hex")]
+        runpy.run_path(os.path.join(R, "sim", "rsp", "make_div_rom.py"), run_name="__main__")
+        os.chdir(R)
+        sys.argv = ["mips_inits.py"]
+        runpy.run_path(os.path.join(R, "tools", "mips_inits.py"), run_name="__main__")
+    finally:
+        sys.argv = old_argv
+        os.chdir(old_cwd)
     svh = os.path.join(R, "rtl", "soc", "mirlo_mips_init.svh")      # (a tree's mips_inits.py may write the paths with backslashes: not in a Verilog string)
     t = open(svh).read()
     open(svh, "w").write(re.sub(r'(`define MIPS_INIT_\w+ ")([^"]*)"', lambda m: m.group(1) + m.group(2).replace("\\", "/") + '"', t))
@@ -123,7 +160,7 @@ def one(seed, out, quartus, locks=None):
     proj = os.path.join(work, "projects")
     rc = run([os.path.join(quartus, "quartus_sh"), "--flow", "compile", "mirlo"], cwd=proj, log=os.path.join(out, "compile_%d.log" % seed))
     outf = os.path.join(proj, "output_files")
-    res = subprocess.run([PY, os.path.join(R, "tools", "area2", "closure.py"), outf], capture_output=True, text=True).stdout
+    res = calc_closure(outf)
     m = re.search(r"worst ([-+][0-9.]+)", res)
     worst = float(m.group(1)) if m else None
     closed = rc == 0 and worst is not None and worst >= 0
@@ -140,7 +177,7 @@ def one(seed, out, quartus, locks=None):
     rbf = os.path.join(outf, "mirlo.rbf")
     if closed and os.path.exists(rbf):
         shutil.copy(rbf, dst)
-        run([PY, os.path.join(R, "tools", "package_bitstream.py"), os.path.join(dst, "mirlo.rbf"), os.path.join(dst, "mirlo.rev")], cwd=R)
+        pack_bitstream(os.path.join(dst, "mirlo.rbf"), os.path.join(dst, "mirlo.rev"))
     shutil.rmtree(work, ignore_errors=True) if closed is False and not os.environ.get("KEEP") else None
     if lockfile and os.path.exists(lockfile):
         os.remove(lockfile)
