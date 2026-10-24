@@ -131,6 +131,7 @@ def one(seed, out, quartus, locks=None):
     os.makedirs(dst)
     open(os.path.join(dst, "closure.txt"), "w").write(res)
     open(os.path.join(dst, "seed.txt"), "w").write("%d\n" % seed)
+    shutil.copy(qsf, dst)
     if os.path.isdir(outf):
         for fn in os.listdir(outf):
             if fn.endswith((".summary", ".fit.rpt", ".sta.rpt")):
