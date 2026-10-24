@@ -358,7 +358,7 @@ The loader then:
 5. Writes what the CIC's IPL3 leaves behind and the boot information words (below).
 6. Probes the CPU: an `ld` that runs or traps, the levels in COP0 register 7, the tables' mark in register 23. The
    runtime takes what the core has from these and from `MONITOR.ID`, not from its own build.
-7. Replaces the dividing 64-bit helpers in the boot segment (below).
+7. Replaces the dividing 64-bit helpers and the audio library's envelope rate in the boot segment (below).
 8. Reads the save slot's file size, looks the cartridge up in the save-type database, initialises the accessory and
    the audio FIFO, and loads DMEM with the ROM's boot code (ROM `0x40` - `0xFFF`, at the same offsets), as the
    console's boot leaves it -- or, for a boot code that wipes the RSP's memories, DMEM and IMEM as it leaves them (below).
@@ -525,7 +525,19 @@ or multiply are left as they are, since the CPU runs their instruction; the ones
 `__ll_div`, `__ll_rem`, `__ll_mod`, `__ull_divremi`) are replaced, and the unsigned division and remainder are done
 in 32 bits when both operands fit. A replacement runs with the game's interrupts off and restores Status in the delay
 slot of its return, because the CPU sends an interrupt to the game's handler only when the interrupted instruction is
-the game's. This is the only change the runtime makes to the game's code, and it is made in the RDRAM's copy.
+the game's.
+
+The audio library's envelope mixer has a function that turns a volume ramp into the rate the microcode applies every
+eight samples, `(target / volume)^(8 / samples)` in 16.16, which it takes as `(1 + ln(target / volume) / 2^30)` to the
+`2^30 / samples`, squared three times, in double precision. With this FPU's doubles (floats, above) `1 + ln(x) / 2^30` is
+1.0, so every rate was 1.0 and no volume moved: notes that start from silence stayed silent, the others never faded and
+stopped dead. `ul_patch` finds the function by its words (the ones a link relocates masked, through a hash) and puts the
+same jump over it. Three builds of the function are known: two take the O32 ABI's arguments, and one, from a compiler
+that allocates registers across a module, takes them in registers of its own (`$a0`, `$f16`, `$f14`, `$s1`) and is
+called with values live in what it leaves alone, so its wrapper keeps every register but the result. Each jumps to
+`ul_getrate`, which takes the same power as `2^y` in floats -- `y` the library's own logarithm
+of the ratio times `8 / 2^30` times its own `2^30 / samples` -- and gets the console's 16.16 rate, or one `2^-16` off. These
+two are the only changes the runtime makes to the game's code, and they are made in the RDRAM's copy.
 
 ### RCP registers the runtime emulates
 
@@ -545,6 +557,9 @@ the game's. This is the only change the runtime makes to the game's code, and it
   as on those consoles. The busy counters read 0.
 - **PI**: PI_DRAM_ADDR is 24 bits and PI_CART_ADDR 32, both even; a DMA leaves them past what it moved; PI_RD_LEN
   reads `0x7F`, and PI_WR_LEN `0x7F` after a DMA into the RDRAM. The other registers read back what was written.
+  A DMA into the RDRAM from where nothing answers (past the ROM's end, or outside the ROM and domain 2) gets the open
+  bus, each half word the low half of its own address (`0x1FFF_E000` reads `E000 E002 E004 ...`): the RDRAM is written,
+  not left as it was.
 - **RI**: eight registers that read back what was written.
 - **What the console does not have** reads as on the console, and a store there goes nowhere. The 64DD's registers
   and ROM (`0x0500_0000` - `0x07FF_FFFF`): nothing answers on the cartridge's bus, and a read gets the address's low
@@ -613,7 +628,8 @@ The registers at `0x00` - `0x34` are a block RAM of 16 words and read back what 
   origins in different buffers, and the woven frame is the newest buffer's whole, at the same rows every field.
 - **VI_STATUS**: GAMMA, AA_MODE, DIVOT and the dither filter bit go to the scan-out at the latch.
 - **VI_H_START** written 0 (`osViBlack`) blanks the picture, and so does an origin beyond `MONITOR.VITHR`, the last
-  origin at which a picture of the mode's size fits in the RDRAM.
+  origin at which a picture of the mode's size fits in the RDRAM: from the next frame boundary the scan-out reads
+  nothing and sends black, every line, whatever its line buffers held of the picture before.
 - **VI_V_SYNC** names the TV system once written: 512 - 575 is 525 lines (NTSC, MPAL and a PAL console's 60 Hz modes),
   576 - 703 is 625 lines (PAL, 50 Hz); another value changes nothing. The change is taken at a frame boundary.
 
