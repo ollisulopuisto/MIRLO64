@@ -91,8 +91,9 @@ def prep(boot):
         sys.exit("no boot ROM image: %s (the CI's artifact boot-rom, --boot)" % dest)
     for cmd in ([PY, os.path.join(R, "sim", "rsp", "make_div_rom.py"), os.path.join(R, "rtl", "rsp", "rsp_div_rom.hex")],
                 [PY, os.path.join(R, "tools", "mips_inits.py")]):
-        if run(cmd, cwd=R) != 0:
-            sys.exit("failed: " + " ".join(cmd))
+        p = subprocess.run(cmd, cwd=R, capture_output=True, text=True)
+        if p.returncode != 0:
+            sys.exit("failed: %s\ncode: %d\nstdout: %s\nstderr: %s" % (" ".join(cmd), p.returncode, p.stdout, p.stderr))
     svh = os.path.join(R, "rtl", "soc", "mirlo_mips_init.svh")      # (a tree's mips_inits.py may write the paths with backslashes: not in a Verilog string)
     t = open(svh).read()
     open(svh, "w").write(re.sub(r'(`define MIPS_INIT_\w+ ")([^"]*)"', lambda m: m.group(1) + m.group(2).replace("\\", "/") + '"', t))
