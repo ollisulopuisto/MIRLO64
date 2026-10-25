@@ -72,6 +72,7 @@ module rsp_su #(
     output logic        tr_e,
     output logic [11:0] tr_e_pc,        // (of a pair: the first)
     output logic        tr_e2,          // a pair: the next instruction (tr_e_pc + 4) leaves with it
+    output logic        tr_e_mem,       // E holds a load or store (scalar or vector): DMEM's port held by the DMA keeps it there
     output logic        tr_e_we,        // ... and it writes register tr_e_wr
     output logic [4:0]  tr_e_wr,
     output logic        tr_we,
@@ -359,6 +360,7 @@ end
 
 assign tr_e = e_go;
 assign tr_e2 = e_go && v_e;
+assign tr_e_mem = e_valid && (e_c.load || e_c.store || e_ins[31:26] == 6'h32 || e_ins[31:26] == 6'h3A);
 assign tr_e_pc = e_pc;
 assign tr_e_we = e_c.we;
 assign tr_e_wr = e_c.wr;

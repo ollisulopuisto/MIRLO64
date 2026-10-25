@@ -86,6 +86,7 @@ module rsp_top #(
     output logic        tr_we,
     output logic [4:0]  tr_wr,
     output logic [31:0] tr_val,
+    output logic        tr_mw,              // E waits for DMEM's port, which the DMA has
     output logic [3:0]  tr_v,               // vector-unit instructions whose effects are all in with this cycle
     output logic        tr_vp               // ... the registers' only: the accumulator and flags are a later one's already
 );
@@ -105,12 +106,13 @@ logic [31:0] c_ins, c_a, c_b, c_res, c_lins;
 logic        c_lv;
 logic [4:0]  c_ra_n, c_rb_n, c_rb;
 logic        dm_valid, dm_we;       logic [11:0] dm_addr; logic [31:0] dm_wdata;   // the DMA's (whole words): see the DMEM
+logic        tr_e_mem;
 
 rsp_su #(.LPAIR(LANES == 8)) su (.clk, .rst, .run(su_run), .pc_load, .pc_in(h_wdata[11:0]), .pc_next, .brk(su_brk), .idle(su_idle),
     .i_addr, .i_data, .i_data2, .i2_ok,
     .m_valid(sm_valid), .m_we(sm_we), .m_addr(sm_addr), .m_n(sm_n), .m_wdata(sm_wdata), .m_rdata, .m_stall(dm_valid),
     .c_valid, .c_ins, .c_a, .c_b, .c_lv, .c_lins, .c_done, .c_res, .c_ra_n, .c_rb_n, .c_rb,
-    .tr_e, .tr_e_pc, .tr_e2, .tr_e_we, .tr_e_wr, .tr_we, .tr_wr, .tr_val);
+    .tr_e, .tr_e_pc, .tr_e2, .tr_e_mem, .tr_e_we, .tr_e_wr, .tr_we, .tr_wr, .tr_val);
 
 // (what is not a computation -- COP0, a vector load, store or move -- is never a pair's computation: E's own instruction,
 // c_lins, which c_ins only adds a select to)
@@ -308,6 +310,7 @@ wire         sp_wr   = wq_v;                               // a word is written 
 // (IMEM is only ever written by a DMA)
 wire         dm_rd   = ds == D_OUT && !d_im && 2'(pf_n + 2'(pf_rd)) < 2'd2;   // out of DMEM: a pair read (from registers: m_stall's)
 assign dm_valid = (sp_wr && !d_im) || dm_rd;
+assign tr_mw    = dm_valid && tr_e_mem;
 assign dm_we    = sp_wr;
 assign dm_addr  = ds == D_OUT ? {np, 3'b000} : {sp_word, 2'b00};
 assign dm_wdata = wq_d;

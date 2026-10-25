@@ -416,7 +416,8 @@ Everything specific to the RSP is in `sim/rsp`.
 | File | What it is |
 |---|---|
 | `rsp.c`, `rsp.h` | the reference model in C: the scalar unit, COP0 with the DMA and the SP / DPC registers, the vector unit. `rsp_step` runs one instruction, `rsp_run` runs to BREAK. The RDP is not modelled: complete commands are passed to a callback. It also counts instructions by kind |
-| `rsp_task.c`, `Makefile` | `rsp_task`: runs task dumps on the model and reports instructions per kind, DMA traffic and RDP commands; `-o` writes the RDP command words, the RDRAM and DMEM after the task |
+| `rsp_task.c`, `Makefile` | `rsp_task`: runs task dumps on the model and reports instructions per kind, DMA traffic and RDP commands; `-o` writes the RDP command words, the RDRAM and DMEM after the task; `-t` the cycles the task takes on the console (`rsp_time.c`) and where they go |
+| `rsp_time.c`, `rsp_time.h` | the console's timing beside the model: in which cycle the N64 issues each instruction, by the pipeline's rules as the n64brew wiki gives them (pairs, latencies, the store after a load, the branch's bubble); the DMA on a timeline of the console's rate |
 | `tb_rsp.cpp`, `build_rtl.sh` | the RTL against the model in lockstep, in Verilator |
 | `gen_rand_task.py` | a random program as a task dump |
 | `tb_dma.cpp`, `build_dma.sh` | the host side of the DMA and the semaphore, on `rsp_top` alone |
@@ -452,11 +453,18 @@ It compares:
 * at the end, the whole RDRAM, the RDP's command words, and that the RTL has
   halted.
 
+`CYCLES=1` holds the RTL to the console's timing as well (`rsp_time.c`), cycle
+by cycle: a slot (an instruction, or a pair) that leaves E before the console's
+rules let it, a cycle in which E waits with nothing in those rules to wait for
+(a cycle the DMA holds DMEM's port excepted), and a slot paired where the
+console's is not or the other way round are counted by kind of instruction and
+the first few printed; the timing model then follows the RTL.
+
 `RAM_LAT` sets the latency of an RDRAM read and `RAM_STALL` the percentage of
 cycles in which the memory accepts no request. `KINDS=1` prints where the
 cycles go by kind of instruction and `PERF=<file>` writes every instruction's
 cycles. The summary line gives cycles per instruction and a time computed at
-62.832 MHz. The exit status is non-zero on any mismatch.
+62.5 MHz. The exit status is non-zero on any mismatch.
 
 The inputs are of two kinds:
 
