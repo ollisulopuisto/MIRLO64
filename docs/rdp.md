@@ -203,7 +203,8 @@ the same point, as for any primitive.
 
 A rectangle's pixels are whole: all eight samples. A texture rectangle in
 copy mode and a fill rectangle in fill mode take the corners' integer parts,
-the lower-right corner inclusive. Otherwise the corners' quarter pixels
+the lower-right corner inclusive, and reach the scissor's right edge itself:
+its column is written too, as the console's. Otherwise the corners' quarter pixels
 count, as for a triangle without AA_EN: a pixel is drawn where its top-left
 sample is inside, `XH <= 4x < XL` and `YH <= 4y < YL`, so a corner with a
 fraction leaves out the pixel it falls in at the upper left and takes it in

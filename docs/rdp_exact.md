@@ -267,7 +267,9 @@ mode), `sc_field` and `sc_odd` in `rdp_t`.
   about 5.
 * `rdp_top.v` S_AASPAN and S_PIX: the span to `lx` included and, in fill and
   copy mode, every pixel with a full mask (no cut at the scissor's last
-  column): about 10 ALUTs.
+  column): about 10 ALUTs. A rectangle in fill or copy mode already reaches
+  the scissor's last column (the model's and the RTL's own: `streams/`
+  `fill_scissor_edge.rdps`, `copy_scissor_edge.rdps`).
 * `rdp_top.v`, the rectangle path (S_ROW's fixed columns, S_SETUP's
   `rect_setup`, S_FILL, `kind_fillmode`): rectangles go through the AA walker
   as triangles with vertical edges and their S, T as two attributes through

@@ -2223,7 +2223,9 @@ static void draw_texrect(rdp_t *r, const uint32_t *w, int flip)
     int xa = (xh + up) >> 2, ya = (yh + up) >> 2;
     if (xa < sc_x0(r)) xa = sc_x0(r);
     if (ya < sc_y0(r)) ya = sc_y0(r);
-    int xb = x1 < sc_x1(r) ? x1 : sc_x1(r), yb = y1 < sc_y1(r) ? y1 : sc_y1(r);
+    /* (copy mode writes the scissor's last column too, as fill mode does) */
+    const int sx1 = sc_x1(r) + (cyc == 2 ? 1 : 0);
+    int xb = x1 < sx1 ? x1 : sx1, yb = y1 < sc_y1(r) ? y1 : sc_y1(r);
 #ifdef RDP_CVG
     const texrect_t g = { flip, q, dshift, xh, x0, y0, s, t, dsdx, dtdy };
 #endif
@@ -2258,7 +2260,10 @@ static void fill_rect(rdp_t *r, const uint32_t *w)
     int x1 = (cyc == 3) ? (xl >> 2) + 1 : (xl + up) >> 2;
     int y1 = (cyc == 3) ? (yl >> 2) + 1 : (yl + up) >> 2;
     prim_t pr = { .fillq = 1 };
-    int xa = x0 > sc_x0(r) ? x0 : sc_x0(r), xb = x1 < sc_x1(r) ? x1 : sc_x1(r);
+    /* (fill mode writes the scissor's last column too, as the console's: its span runs to the edge clamped to the
+     * scissor, that pixel included -- docs/rdp_exact.md, rule 6) */
+    const int sx1 = sc_x1(r) + (cyc == 3 ? 1 : 0);
+    int xa = x0 > sc_x0(r) ? x0 : sc_x0(r), xb = x1 < sx1 ? x1 : sx1;
     int ya = y0 > sc_y0(r) ? y0 : sc_y0(r), yb = y1 < sc_y1(r) ? y1 : sc_y1(r);
     int32_t at[NATTR] = { 0 };
     for (int y = ya; y < yb; y++)

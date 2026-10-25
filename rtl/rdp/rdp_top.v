@@ -835,11 +835,13 @@ module rdp_top (
                             y1c = incl ? {1'b0, w0[11:2]}  + 11'd1 : ({1'b0, w0[11:0]}  + 13'd3) >> 2;
                             xa_c = x0c > {1'b0, sc_x0} ? x0c : {1'b0, sc_x0};
                             ya_c = y0c > {1'b0, sc_y0} ? y0c : {1'b0, sc_y0};
+                            // (copy and fill mode write the scissor's last column too, as the console's: the span
+                            // runs to the edge clamped to the scissor, that pixel included)
                             xa <= xa_c[9:0];
-                            xb <= (x1c < {1'b0, sc_x1}) ? x1c[9:0] : sc_x1;
+                            xb <= (x1c < {1'b0, sc_x1} + {10'd0, incl}) ? x1c[9:0] : sc_x1 + {9'd0, incl};
                             y <= {1'b0, ya_c};
                             yb <= (y1c < {1'b0, sc_y1}) ? {1'b0, y1c} : {2'b00, sc_y1};
-                            if (((x1c < {1'b0, sc_x1}) ? x1c : {1'b0, sc_x1}) <= xa_c)
+                            if (((x1c < {1'b0, sc_x1} + {10'd0, incl}) ? x1c : {1'b0, sc_x1} + {10'd0, incl}) <= xa_c)
                                 yb <= {1'b0, ya_c};   // empty
                         end
                         mi <= 5'd0;
