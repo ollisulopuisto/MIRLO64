@@ -228,7 +228,8 @@ module rdp_pix (
                           cc_lo[2:0] == 3'd1;
     // (registered: the modes and the combiner are set many clocks before a primitive's first pixel)
     reg        two_pass_q;
-    always @(posedge clk) two_pass_q <= cyc == 2'd1 && p_tex && (cc0_t1 || cc1_t0);
+    // (a primitive without texture coefficients too: the next tile's texel at its S, T, as the console's)
+    always @(posedge clk) two_pass_q <= cyc == 2'd1 && (cc0_t1 || cc1_t0);
     assign two_pass = two_pass_q;
     wire       point    = other_h[13:12] == 2'd0;
     wire       a_cmp    = other_l[0];
@@ -489,8 +490,8 @@ module rdp_pix (
             dv17 = {mix && !top, mix && top, v};
         end
     endfunction
-    // S / W for the texel (n64_persp): the 17 bits saturated to 16, out of range to the end it went past (a primitive
-    // without texture coefficients: 0, as the model takes it, not the perspective divide's 0 / 0)
+    // S / W for the texel (n64_persp): the 17 bits saturated to 16, out of range to the end it went past (a triangle
+    // without texture coefficients too: its W is 0, out of range, so S and T are 0x7FFF -- the tile's far texel)
     function automatic [15:0] tx16;
         input [18:0] d;
         input        wle;
@@ -498,8 +499,8 @@ module rdp_pix (
     endfunction
     wire [18:0] dvs = dv17(ps3, rq3, rm3, rk3), dvt = dv17(pt3, rq3, rm3, rk3);
     // the coordinates P5 takes: without the LOD this pass's, from P3; with it a pass's from st_ram, D clocks on (below)
-    wire [15:0] s4n = (p_direct || !persp) ? s3r : tx16(dvs, wle3 && p_tex);
-    wire [15:0] t4n = (p_direct || !persp) ? t3r : tx16(dvt, wle3 && p_tex);
+    wire [15:0] s4n = (p_direct || !persp) ? s3r : tx16(dvs, wle3);
+    wire [15:0] t4n = (p_direct || !persp) ? t3r : tx16(dvt, wle3);
     // (the LOD's: the perspective divide, but a texture rectangle's S, T are its own s10.5, never out of range, as are an
     // affine triangle's S >> 16; a rectangle without texture is a triangle without coefficients: S = T = W = 0)
     wire        lod_pp = persp && !(p_direct && p_tex);

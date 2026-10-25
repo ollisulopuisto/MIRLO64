@@ -1253,7 +1253,10 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         if (h & RDP_H_PERSP) { s = n64_persp(at[AS], at[AW]); t = n64_persp(at[AT], at[AW]); }
         else { s = s105_noperp(at[AS] >> 5); t = s105_noperp(at[AT] >> 5); }
 #else
-        if (!pr->tex) { }
+        /* (a triangle without texture coefficients has S = T = W = 0, and with PERSP they go through the perspective
+         * divide all the same: W's integer half is 0, out of range, so S and T saturate to 0x7FFF -- TEXEL0 is the
+         * tile's texel there, its last (clamped), not its first: docs/rdp_exact.md, rule 5) */
+        if (!pr->tex) { if ((h & RDP_H_PERSP) && !pr->fillq) { s = n64_persp(at[AS], at[AW]); t = n64_persp(at[AT], at[AW]); } }
         else if (pr->texrect) { s = (int16_t)at[AS]; t = (int16_t)at[AT]; }
         else if (h & RDP_H_PERSP) { s = n64_persp(at[AS], at[AW]); t = n64_persp(at[AT], at[AW]); }
         else { s = s105_noperp(at[AS] >> 5); t = s105_noperp(at[AT] >> 5); }
@@ -1298,13 +1301,13 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         in.tex = texture_pass(r, tile0, s, t, 0, s_no_texel);
         /* TEXEL1 in the first cycle of a 2-cycle pixel: the next tile (tile + 1) at the same S, T -- the N64's
          * second texture (a skybox's day / night blend, a terrain's second layer). Its second cycle still
-         * takes TEXEL0 for both: one fetch more per pixel is all rtl/rdp has. (Without texture coefficients:
-         * TEXEL0 again, one pass.) */
+         * takes TEXEL0 for both: one fetch more per pixel is all rtl/rdp has. (Without texture coefficients too:
+         * the next tile's texel at the same S, T, as the console's.) */
         in.tex1 = in.tex;
 #ifdef RDP_EXACT
         if (cyc == 1 && (cc0_uses_texel1(r) || cc1_uses_texel0(r))) {      /* (the next tile's texel, coefficients or not) */
 #else
-        if (pr->tex && cyc == 1 && (cc0_uses_texel1(r) || cc1_uses_texel0(r))) {
+        if (cyc == 1 && (cc0_uses_texel1(r) || cc1_uses_texel0(r))) {
 #endif
             tex_next = texture_pass(r, tile1, s, t, 1, in.tex);
             if (cc0_uses_texel1(r)) in.tex1 = tex_next;

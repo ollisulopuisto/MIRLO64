@@ -203,9 +203,11 @@ tile's far corner on the console if it is drawn with PERSP.
 divide whether it has texture coefficients or not (theirs are 0), and the
 second pass too.
 
-**RTL**: `rdp_pix.v` P4: `tx16(dvs, wle3 && p_tex)` becomes `tx16(dvs,
-wle3)` (the comment there says it follows the model's 0); the two-pass test
-without `p_tex`. A few ALUTs.
+**RTL**: done. `rdp_pix.v` P4 saturates S and T when W is out of range
+whether the primitive has texture coefficients or not, and the two-pass test
+does not look at `p_tex`; the model does the same without the switch (a
+triangle's: a fill rectangle outside fill mode keeps S = T = 0 there until
+rule 6 makes rectangles primitives).
 
 ### 6. Edges, rows and rectangles
 
@@ -407,7 +409,7 @@ perspective divide with W = 0, as on the console; untested).
 | 2 rectangle next line | `rdp_top.v` `rect_setup`, `rdp_pix.v` L1 | 0 with rule 6, else 20 to 30 ALUTs |
 | 3 1-cycle and copy LOD | `rdp_pix.v` L1 to L3, `rdp_top.v` next row's start | 170 to 270 ALUTs, 100 FFs |
 | 4 attributes | `rdp_top.v` S_SETUP, `rdp_pix.v` P0, the dz code | 280 to 380 ALUTs, 80 FFs, 8 more multiplier clocks a row |
-| 5 untextured PERSP | `rdp_pix.v` P4 | a few |
+| 5 untextured PERSP | `rdp_pix.v` P4 | done |
 | 6 edges, rows, rectangles, copy | `rdp_top.v` AA walker, S_AASPAN, S_PIX, the rectangle path; `rdp_pix.v` P5b (the CVG_X_ALPHA write rule: done) | about even |
 | 7 TEXEL1 a pixel ahead | `rdp_pix.v` combiner input, `rdp_top.v` ghost pixel | 100 to 200 ALUTs, 80 to 120 FFs |
 | **total** | | **about 550 to 900 ALUTs (360 to 600 ALMs), 260 to 300 FFs, no DSP block** |

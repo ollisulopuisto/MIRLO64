@@ -194,7 +194,10 @@ AA_EN.
   depth's units. The depth test and the blender use it (below).
 
 A triangle whose command has no texture block has S = T = W = 0, and the
-texture stages run all the same: TEXEL0 is the tile's texel (0, 0).
+texture stages run all the same: TEXEL0 is the tile's texel (0, 0), or with
+PERSP, where W = 0 is out of range and S and T saturate to 0x7FFF, its last
+texel (the far corner, clamped). In 2-cycle mode TEXEL1 is the next tile's at
+the same point, as for any primitive.
 
 ### Rectangles
 
