@@ -15,7 +15,8 @@
 //   CYCLES=1 the cycles too, against the console's (rsp_time.c), cycle by cycle: an instruction that leaves E (a slot:
 //            one, or a pair) before the console's rules let it, a cycle E waits with nothing of those rules (nor the
 //            DMA's hold on DMEM) to wait for, a slot paired where the console's is not or the other way round -- counted
-//            by kind, the first few printed; the model then follows the RTL's slot
+//            by kind, the first few printed; the model then follows the RTL's slot. CYTRACE=<from>[,<to>]: each cycle of
+//            those (counted from the task's start), with the RTL's state
 #include "Vrsp_top.h"
 #include "Vrsp_top___024root.h"
 #include "verilated.h"
@@ -179,12 +180,12 @@ int main(int argc, char **argv)
         static const bool cyc_on = getenv("CYCLES") != nullptr;
         rsp_time_t ct;
         rsp_time_reset(&ct);
-        bool ct_go = false;
+        bool ct_go = false, ct_ok = false;           // (ct_ok: the slot the model is at has met the rules: it stays let go)
         auto &R = *t->rootp;
         for (long n = 0; n < 2000000000L && !bad; n++) {
             // the cycle's events are sampled before its edge
             t->eval();
-            bool e = t->tr_e, e2 = t->tr_e2, we = t->tr_we; int vdone = t->tr_v;
+            bool e = t->tr_e, e2 = t->tr_e2, we = t->tr_we, mw = t->tr_mw; int vdone = t->tr_v;
             // the microcode's DMA runs behind it, as the console's: what it reads of SP_DMA_FULL / SP_DMA_BUSY is the RTL's,
             // and DMEM is compared only with no DMA under way or queued (the model's was done at its length's write)
             const bool dma_full = R.rsp_top__DOT__p_full, dma_on = dma_full || R.rsp_top__DOT__ds != 0;
@@ -205,6 +206,17 @@ int main(int argc, char **argv)
                         bad = 1;
                     }
                 }
+            }
+            static long tr_a = getenv("CYTRACE") ? atol(getenv("CYTRACE")) : -1;
+            static long tr_b = getenv("CYTRACE") && strchr(getenv("CYTRACE"), ',') ? atol(strchr(getenv("CYTRACE"), ',') + 1) : getenv("CYTRACE") ? tr_a + 40 : -2;
+            if (cyc_on && tb.cyc - c0 >= tr_a && tb.cyc - c0 <= tr_b) {
+                const uint32_t ci0 = mword(m, m.pc), ci1 = mword(m, m.pc + 4u); const int nc = rsp_time_pair(&ct, ci0, ci1) ? 2 : 1;
+                printf("  [%ld] e%d%d epc %03x | model pc %03x %08x %08x pair %d ready %d | su ev %d hz %d dpc %03x dv %d | dm %d se %d smw %d | vu xv %d xw %d lw %d wp %d xdef %d\n",
+                       tb.cyc - c0, e, e2, epc, m.pc & 0xFFCu, ci0, ci1, nc, rsp_time_ready(&ct, ci0, ci1, nc),
+                       (int)R.rsp_top__DOT__su__DOT__e_valid, (int)R.rsp_top__DOT__su__DOT__hazard, (unsigned)R.rsp_top__DOT__su__DOT__d_pc,
+                       (int)R.rsp_top__DOT__su__DOT__d_valid, (int)R.rsp_top__DOT__dm_valid, (int)R.rsp_top__DOT__su__DOT__stall_e, (int)R.rsp_top__DOT__su__DOT__s_mwait,
+                       (int)R.rsp_top__DOT__vu__DOT__x_v, (int)R.rsp_top__DOT__vu__DOT__x_wait, (int)R.rsp_top__DOT__vu__DOT__lw_v,
+                       (int)R.rsp_top__DOT__vu__DOT__wp, (int)R.rsp_top__DOT__vu__DOT__x_defer);
             }
             tb.tick();
             if (dmem_late && !bad) {
@@ -232,10 +244,13 @@ int main(int argc, char **argv)
                         cy_pm[cnr == 2][kind_of(su)]++;
                         show(cnr == 2 ? "a pair the console does not make" : "no pair where the console makes one");
                     }
-                    if (!rsp_time_ready(&ct, ci0, ci1, cnr)) { cy_early[kind_of(ci0)]++; show("issued early"); }
+                    if (!ct_ok && !rsp_time_ready(&ct, ci0, ci1, cnr)) { cy_early[kind_of(ci0)]++; show("issued early"); }
+                    ct_ok = false;
                 } else if (ct_go) {
-                    if (t->tr_mw) cy_dmaw++;
-                    else if (rsp_time_ready(&ct, ci0, ci1, nc)) { cy_late[kind_of(ci0)]++; show("a cycle late"); }
+                    const bool rdy = ct_ok || rsp_time_ready(&ct, ci0, ci1, nc);
+                    if (mw) cy_dmaw++;
+                    else if (rdy) { cy_late[kind_of(ci0)]++; show("a cycle late"); }
+                    ct_ok = rdy && !ct.bubble;
                     rsp_time_idle(&ct);
                 }
             }

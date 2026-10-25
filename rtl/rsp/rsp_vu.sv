@@ -435,7 +435,7 @@ always_comb
     end
 
 // EX's registers: the pass, its operands and products, the instruction's fields
-logic               x_v, x_pass, x_last, x_wait, x_one, x_rcp;
+logic               x_v /* verilator public_flat_rd */, x_pass, x_last, x_wait /* verilator public_flat_rd */, x_one, x_rcp;
 logic               x_mw;                     // (MULW) a multiply: all eight lanes in this one pass
 logic [3:0]         fl_r [LANES];             // the adder's flags of the cycle EX waited (VCL, VCH, VCR with one pass)
 logic [3:0]         x_ve;
@@ -474,9 +474,9 @@ wire x_exec = x_v && !x_wait;                 // EX runs this cycle
 wire x_fin  = x_exec && x_last;               // ... its last pass
 // (two passes) the last pass under a load's write: the registers' one write
 // port is the load's, and vd is written a cycle on, whole, from `hold` (wp)
-logic        wp;
+logic        wp /* verilator public_flat_rd */;
 logic [4:0]  w_vdn;
-wire         x_defer, x_wr;                   // (below, with the load's write) ... and EX writes vd
+wire         x_defer /* verilator public_flat_rd */, x_wr;                   // (below, with the load's write) ... and EX writes vd
 
 // ---- the reciprocal unit: the input (a cycle), normalised to the ROM's
 // address (a cycle), the ROM's word shifted back (the EX of the last pass)
@@ -622,7 +622,7 @@ end
 // the bytes a load (or MTC2) brings, and where they go. A load's data comes
 // the cycle after its address -- by then the instruction may have left E, so
 // what the write needs is kept (lw_*)
-logic        lw_v, lw_last, lw_packed, lw_p6;
+logic        lw_v /* verilator public_flat_rd */, lw_last, lw_packed, lw_p6;
 // the write leaves half of a lane as it was (an odd byte at an end): a store
 // or MFC2 does not start under it (l_free)
 logic        lw_merge;
