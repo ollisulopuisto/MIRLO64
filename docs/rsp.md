@@ -190,11 +190,7 @@ The pipeline has five stages:
 
 Branches and jumps resolve in E. The delay slot, then in D, always runs; the
 instruction being fetched is squashed when the branch is taken -- the cycle of
-nothing after a taken branch's delay slot that the console has too. A J or JAL,
-and a branch that goes backwards (a loop's), are taken as they enter E: the
-fetch goes on at the target at once, and that cycle is saved; such a branch
-that is not taken after all redirects the fetch to the instruction after its
-delay slot, a cycle lost as a taken branch's was. A load or
+nothing after a taken branch's delay slot that the console has too. A load or
 store addresses 1, 2 or 4 bytes at any byte address in one DMEM access.
 
 ### Issue
