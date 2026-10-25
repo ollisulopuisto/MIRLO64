@@ -336,7 +336,10 @@ and depth tests, two blender cycles, the dither.
   the blender's first-cycle settings.
 * **2-cycle.** The two combiner cycles one after the other, then the two
   blender cycles; the first blender cycle always blends.
-* **Copy.** The pixel is the texel. The alpha compare's threshold is 128,
+* **Copy.** The pixel is the texel. A 16-bit texel, and a TLUT entry, is
+  copied as it is (an IA or I texel too: the console moves TMEM's words, it
+  does not decode them); a 4-, 8- or 32-bit texel is decoded and written as
+  RGBA 5551. The alpha compare's threshold is 128,
   the texel's alpha bit, not the blend colour's alpha. The depth image is
   neither read nor written, whatever the mode word says. No blender, no
   dither. The coverage written is 7 or 0 by the texel's alpha bit.

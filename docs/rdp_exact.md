@@ -395,9 +395,10 @@ and the noise (each side has its own generator), 32-bit colour images,
 the blender beyond passing the pixel in most streams, the alpha compare in
 2-cycle mode (the oracle's structure takes it from the next pixel's first
 cycle, and the blender's shade alpha likewise; no stream turns the compare on
-in 2-cycle mode), copy mode of a texture other than RGBA 16 (the console
-copies the texel's raw bits; the model decodes and re-encodes, the same for
-RGBA 16 and an RGBA TLUT, not for IA 16, an IA TLUT, or 4- and 8-bit texels),
+in 2-cycle mode), copy mode of a 4-, 8- or 32-bit texture without the TLUT (the console
+copies TMEM's raw bits, two 8-bit texels a pixel; the model and the RTL decode
+and re-encode; a 16-bit texel and a TLUT entry are copied raw, as the console's:
+`streams/copy_raw16.rdps`),
 and a texture rectangle drawn with PERSP (with the switch it goes through the
 perspective divide with W = 0, as on the console; untested).
 

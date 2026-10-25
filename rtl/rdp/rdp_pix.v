@@ -775,7 +775,11 @@ module rdp_pix (
         sl0_t <= sl0_8; sl1_t <= sl1_8; sl2_t <= sl2_8;
         fs8t <= fs8; ft8t <= ft8; up8t <= up8;
     end
-    wire [31:0] tx0 = tlut_on ? tex16(tlut_ia, tl_q0) : texel(u8t_fmt, u8t_size, q0t, h0t, sl0_t);
+    // (copy mode copies a 16-bit texel's or a TLUT entry's bits as they are: read as RGBA 5551 they are written back
+    // unchanged, an IA or I texel and an IA entry too -- the corner, the one texel copy mode takes)
+    wire        cp_raw = cyc == 2'd2;
+    wire [31:0] tx0 = tlut_on ? tex16(tlut_ia && !cp_raw, tl_q0)
+                              : texel((cp_raw && u8t_size == 2'd2 && u8t_fmt != 3'd1) ? 3'd0 : u8t_fmt, u8t_size, q0t, h0t, sl0_t);
     wire [31:0] tx1 = tlut_on ? tex16(tlut_ia, tl_q1) : texel(u8t_fmt, u8t_size, q1t, h1t, sl1_t);
     wire [31:0] tx2 = tlut_on ? tex16(tlut_ia, tl_q2) : texel(u8t_fmt, u8t_size, q2t, h2t, sl2_t);
 

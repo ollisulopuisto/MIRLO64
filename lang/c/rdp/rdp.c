@@ -253,7 +253,10 @@ static rdp_rgba_t tmem_fetch(const rdp_t *r, const rdp_tile_t *t, int s, int tt)
     uint32_t row = (uint32_t)t->tmem * 4u + (uint32_t)tt * (uint32_t)t->line * 4u;
     const uint32_t odd = (tt & 1) ? 2u : 0u;
     rdp_rgba_t c = { 0, 0, 0, 0 };
-    const unsigned tlut = (r->other_h & RDP_H_TLUT_EN) != 0, tlut_fmt = (r->other_h & RDP_H_TLUT_IA) ? 1 : 0;
+    /* (copy mode copies a 16-bit texel's or a TLUT entry's bits as they are -- the console's copy moves TMEM's words, it
+     * does not decode them: read as RGBA 5551 they are written back unchanged, an IA or I texel and an IA entry too) */
+    const int copy = ((r->other_h >> RDP_H_CYCLE_SHIFT) & 3) == 2;
+    const unsigned tlut = (r->other_h & RDP_H_TLUT_EN) != 0, tlut_fmt = ((r->other_h & RDP_H_TLUT_IA) && !copy) ? 1 : 0;
     if (t->size == 3) {
         uint32_t i = ((row + (uint32_t)s) ^ odd) & 0x3FF;
         if (tlut) return texel_expand(tlut_fmt, m[0x400 | ((unsigned)(m[i] >> 8) << 2)]);
@@ -276,8 +279,8 @@ static rdp_rgba_t tmem_fetch(const rdp_t *r, const rdp_tile_t *t, int s, int tt)
         return texel_expand(tlut_fmt, m[0x400 | (idx << 2)]);
     }
     if (t->size == 2) {
-        if (t->fmt == 3) return texel_expand(1, (uint16_t)v);     /* IA 8 8 */
-        if (t->fmt <= 2) return texel_expand(0, (uint16_t)v);     /* RGBA 5551 (CI 16 is read as RGBA, as the console does) */
+        if (t->fmt == 3 && !copy) return texel_expand(1, (uint16_t)v);     /* IA 8 8 */
+        if (t->fmt <= 2 || copy) return texel_expand(0, (uint16_t)v);     /* RGBA 5551 (CI 16 is read as RGBA, as the console does) */
         c.r = c.g = c.b = c.a = (uint8_t)(v >> 8);                /* I: the first byte */
     } else if (t->size == 1) {
         if (t->fmt == 3) { c.r = c.g = c.b = (uint8_t)((b >> 4) * 17u); c.a = (uint8_t)((b & 15u) * 17u); }   /* IA 4 4 */
