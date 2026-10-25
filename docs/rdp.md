@@ -109,7 +109,7 @@ change with pixels in flight.
 | 0x24, 0x25 | texture rectangle, flipped | |
 | 0x26-0x28 | sync load, pipe, tile | nothing to do: commands run in order |
 | 0x29 | sync full | completes when every earlier write has been accepted by the memory |
-| 0x2D | set scissor | the four coordinates; the interlace field bits are not read |
+| 0x2D | set scissor | the four coordinates and the field mode: with it only the rows of the field kept (the odd bit) are drawn, and the dither's row is the field's own, y / 2 |
 | 0x2E | set primitive depth | Z (15 bits) and its delta |
 | 0x2F | set other modes | what is read of them: below |
 | 0x30 | load TLUT | also sets the tile's size, as every load does |
@@ -552,7 +552,7 @@ the alpha byte's top three bits as its coverage, so the filters see what a
 ## Not implemented, or approximated
 
 The model built with `RDP_EXACT` follows the console on the LOD, TEXEL1,
-shade and scissor items below, and on edges, spans, rectangles and the
+and shade items below, and on edges, spans, rectangles and the
 attributes' arithmetic ([rdp_exact.md](rdp_exact.md), with the RTL change each
 needs); the RTL, and the model as its benches build it, do not.
 
@@ -575,7 +575,6 @@ needs); the RTL, and the model as its benches build it, do not.
   inputs of the combiner read 0. The noise is the RDP's own LFSR, not the
   console's sequence.
 * **Shade** is not corrected to the covered sample; only Z is.
-* **Scissor**: the interlace field bits are not read.
 * **Other modes**: the key enable is not read.
 
 ## How it is verified

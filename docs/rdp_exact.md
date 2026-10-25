@@ -263,8 +263,9 @@ mode), `sc_field` and `sc_odd` in `rdp_t`.
 * `rdp_top.v`, the AA walker (`aa_a8`, `aa_b8`, `aa_clamp`, `aa_cross`): the
   edges' bit tests and the 14-bit crossing compare in place of 19-bit signed
   compares and clamps, 28-bit X: narrower, about 20 ALUTs fewer; the rows'
-  limits and the all-over / all-under flags: about 20 ALUTs; the field mode:
-  about 5.
+  limits and the all-over / all-under flags: about 20 ALUTs; the field mode is done
+  (the model's and the RTL's own, with the dither's row: `streams/`
+  `scissor_field.rdps`).
 * `rdp_top.v` S_AASPAN and S_PIX: the span to `lx` included and, in fill and
   copy mode, every pixel with a full mask (no cut at the scissor's last
   column): about 10 ALUTs. A rectangle in fill or copy mode already reaches

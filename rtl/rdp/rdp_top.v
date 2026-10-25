@@ -61,6 +61,7 @@ module rdp_top (
     reg [35:0] cv_k03;              // SET CONVERT's K0..K3, 9 bits each (K0 at [35:27]): a YUV texel's conversion
     reg [15:0] prim_z, prim_dz;
     reg [11:0] sc_xh, sc_yh, sc_xl, sc_yl;
+    reg        sc_field, sc_odd;    // SET_SCISSOR's field mode: only the rows of the field kept (odd or even) are drawn
     reg [31:0] cimg, zimg, timg;
     reg [10:0] cimg_width, timg_width;
     reg [1:0]  timg_size;
@@ -314,7 +315,7 @@ module rdp_top (
         .t_uls(ts_uls), .t_ult(ts_ult), .t_lrs(ts_lrs), .t_lrt(ts_lrt),
         .tl_ra(tl_ra), .p_tile(p_tile), .yuv_vec(yuv_vec), .two_pass(two_pass),
         .lod_on(lod_on), .lod_lft(lod_lft), .lod_lvl(lod_lvl), .min_lvl(min_lvl), .in_ghost(pix_ghost),
-        .in_valid(pix_valid), .in_x(pix_x), .in_set(set_cur), .row_y(y[1:0]),
+        .in_valid(pix_valid), .in_x(pix_x), .in_set(set_cur), .row_y(sc_field ? y[2:1] : y[1:0]),
         .in_r(cur[0]), .in_g(cur[1]), .in_b(cur[2]), .in_a(cur[3]),
         .in_s(pr_s), .in_t(pr_t), .in_w(cur_w), .in_z(cur[7]), .in_mask(pix_mask),
         .tm_a0(tm_ra0), .tm_a1(tm_ra1), .tm_a2(tm_ra2),
@@ -496,6 +497,8 @@ module rdp_top (
     wire signed [13:0] yh_s = t_yh, ym_s = t_ym, yl_s = t_yl;
     // the last row + 1: every row a subscanline above YL reaches
     wire signed [13:0] yl_end_aa = ($signed(t_yl) + 14'sd3) >>> 2;
+    // the scissor's field mode: the row is not of the field kept
+    wire sc_skip = sc_field && (y[0] != sc_odd);
     wire signed [11:0] yb_aa = (yl_end_aa < $signed({2'b0, sc_y1})) ? yl_end_aa[11:0] : $signed({1'b0, sc_y1});
 
     // ---- AA_EN: the N64's walker (lang/c/rdp/rdp.c draw_triangle_aa). The
@@ -711,7 +714,7 @@ module rdp_top (
             sync_count <= 0; load_count <= 0; unknown_ops <= 0;
             other_h <= 0; other_l <= 0; cc_hi <= 0; cc_lo <= 0;
             fill <= 0; fog <= 0; blend <= 0; prim <= 0; env <= 0; prim_lod_frac <= 0; k4 <= 0; k5 <= 0; cv_k03 <= 0; prim_z <= 0;
-            sc_xh <= 0; sc_yh <= 0; sc_xl <= 12'd4092; sc_yl <= 12'd4092;
+            sc_xh <= 0; sc_yh <= 0; sc_xl <= 12'd4092; sc_yl <= 12'd4092; sc_field <= 1'b0; sc_odd <= 1'b0;
             cimg <= 0; zimg <= 0; timg <= 0; cimg_width <= 11'd1; timg_width <= 11'd1;
             timg_size <= 2'd0; cimg_ok <= 1'b0; cimg8 <= 1'b0; cimg32 <= 1'b0;
         end else begin
@@ -848,7 +851,11 @@ module rdp_top (
                         st <= S_RECT_INIT;
                     end
                     6'h2C: begin cv_k03 <= {w0[21:0], w1[31:18]}; k4 <= w1[17:9]; k5 <= w1[8:0]; busy_exec <= 1'b0; end
-                    6'h2D: begin sc_xh <= w0[23:12]; sc_yh <= w0[11:0]; sc_xl <= w1[23:12]; sc_yl <= w1[11:0]; busy_exec <= 1'b0; end
+                    6'h2D: begin
+                        sc_xh <= w0[23:12]; sc_yh <= w0[11:0]; sc_xl <= w1[23:12]; sc_yl <= w1[11:0];
+                        sc_field <= w1[25]; sc_odd <= w1[24];
+                        busy_exec <= 1'b0;
+                    end
                     6'h2E: begin prim_z <= {w1[30:16], 1'b0}; prim_dz <= w1[15:0]; busy_exec <= 1'b0; end      // the N64's: 15 bits, and its delta
                     6'h2F: begin other_h <= w0[23:0]; other_l <= w1; busy_exec <= 1'b0; end
                     6'h32: begin
@@ -991,6 +998,8 @@ module rdp_top (
                     aa_j <= 3'd0;
                     aa_lo <= $signed({y, 2'b00}) < ym_s;
                     st <= S_AASUB;
+                end else if (sc_skip) begin
+                    st <= S_NEXT;                   // (a row of the field not kept)
                 end else begin
                     // rectangles: columns fixed
                     xs <= xa;
@@ -1019,7 +1028,7 @@ module rdp_top (
                 if (aa_j == 3'd4) st <= S_AASPAN;
             end
             S_AASPAN: begin
-                if (!aa_any || {1'b0, aa_min} >= aa_xe) st <= S_NEXT;
+                if (!aa_any || {1'b0, aa_min} >= aa_xe || sc_skip) st <= S_NEXT;
                 else begin
                     xs <= aa_min;
                     xe <= a_cut ? aa_m512 : aa_xe;
