@@ -1351,7 +1351,18 @@ void n64rt_mi_init(void)
     __asm__ volatile("mfc0 %0, $7" : "=r"(m));
     /* (bit 10, written with bit 11: the game's RDRAM is 4 MiB -- the console without its Expansion Pak, the core's setting:
      * the game's accesses to the upper half come here, and are answered as RDRAM that is not there, n64rt_os.c emulate_hw) */
-    m = (m & 3u) | 0x300u | 0x800u | (n64rt_game->mem_size <= 0x400000u ? 0x400u : 0u);
+    /* (bit 12, written with bit 13: 0x2000_0000 - 0x4FFF_FFFF are the game's mapped addresses while it runs -- not the monitor
+     * level, not a helper of the runtime's with Status bit 4, n64rt_boot.c ll_patch --, as the rest of the VR4300's KUSEG: a game
+     * can map an overlay at 0x4000_0000 and run it there. A core without it reads the bit 0 and keeps them physical) */
+    /* (bit 14, written with bit 15: the game's word accesses to the SP's registers, SP_PC and the DPC's -- but its stores of
+     * DPC_STATUS, whose CLR_CLOCK_CTR keeps DPC_CLOCK here -- are the RSP's host port's, no trap: rcp_read_ / rcp_write_ pass
+     * them on as they are. A build that marks the game's tasks for the simulation (RSPDUMP) watches those writes, and keeps them) */
+#ifdef N64RT_RSPDUMP
+    const u32 sp_hw = 0x8000u;
+#else
+    const u32 sp_hw = 0xC000u;
+#endif
+    m = (m & 3u) | 0x300u | 0x800u | (n64rt_game->mem_size <= 0x400000u ? 0x400u : 0u) | 0x3000u | sp_hw;
     __asm__ volatile("mtc0 %0, $7" :: "r"(m));
     __asm__ volatile("mfc0 %0, $7" : "=r"(m));
     if (!(m & 0x100u)) return;
