@@ -58,7 +58,7 @@ static int kind_of(uint32_t in)
     return K_SCALAR;
 }
 // (CYCLES) the differences from the console's timing, over all tasks
-static double cy_late[K_N], cy_early[K_N], cy_pm[2][K_N], cy_dmaw, cy_slots, cy_con;
+static double cy_late[K_N], cy_early[K_N], cy_pm[2][K_N], cy_dmaw, cy_slots, cy_con, cy_why[K_N][5];
 static int cy_shown;
 static uint32_t mword(const rsp_t &m, uint32_t pc)
 {
@@ -207,6 +207,10 @@ int main(int argc, char **argv)
                     }
                 }
             }
+            // (CYCLES) the vector unit's state this cycle, for a late cycle's reason: an EX that waits a cycle, a register
+            // write put off (or to be), a load's write, an EX under way
+            const int vwhy = R.rsp_top__DOT__vu__DOT__x_wait ? 0 : (R.rsp_top__DOT__vu__DOT__x_defer || R.rsp_top__DOT__vu__DOT__wp) ? 1
+                           : R.rsp_top__DOT__vu__DOT__lw_v ? 2 : R.rsp_top__DOT__vu__DOT__x_v ? 3 : 4;
             static long tr_a = getenv("CYTRACE") ? atol(getenv("CYTRACE")) : -1;
             static long tr_b = getenv("CYTRACE") && strchr(getenv("CYTRACE"), ',') ? atol(strchr(getenv("CYTRACE"), ',') + 1) : getenv("CYTRACE") ? tr_a + 40 : -2;
             if (cyc_on && tb.cyc - c0 >= tr_a && tb.cyc - c0 <= tr_b) {
@@ -249,7 +253,7 @@ int main(int argc, char **argv)
                 } else if (ct_go) {
                     const bool rdy = ct_ok || rsp_time_ready(&ct, ci0, ci1, nc);
                     if (mw) cy_dmaw++;
-                    else if (rdy) { cy_late[kind_of(ci0)]++; show("a cycle late"); }
+                    else if (rdy) { cy_late[kind_of(ci0)]++; cy_why[kind_of(ci0)][vwhy]++; show("a cycle late"); }
                     ct_ok = rdy && !ct.bubble;
                     rsp_time_idle(&ct);
                 }
@@ -369,7 +373,8 @@ int main(int argc, char **argv)
                "%.0f pairs missing, %.0f pairs extra\n", cy_slots, l, ea, cy_dmaw, p0, p1);
         for (int k = 0; k < K_N; k++)
             if (cy_late[k] || cy_early[k] || cy_pm[0][k] || cy_pm[1][k])
-                printf("  %-22s late %8.0f  early %8.0f  pairs missing %8.0f  extra %8.0f\n", kname[k], cy_late[k], cy_early[k], cy_pm[0][k], cy_pm[1][k]);
+                printf("  %-22s late %8.0f  early %8.0f  pairs missing %8.0f  extra %8.0f   (late: EX waits %.0f, write put off %.0f, load write %.0f, EX %.0f, other %.0f)\n",
+                       kname[k], cy_late[k], cy_early[k], cy_pm[0][k], cy_pm[1][k], cy_why[k][0], cy_why[k][1], cy_why[k][2], cy_why[k][3], cy_why[k][4]);
     }
     if (tot_ins) printf("total: %.0f instructions, %.0f cycles (%.2f a instruction)%s\n", tot_ins, tot_cyc, tot_cyc / tot_ins, bad_tasks ? " -- MISMATCHES" : "");
     return bad_tasks ? 1 : 0;

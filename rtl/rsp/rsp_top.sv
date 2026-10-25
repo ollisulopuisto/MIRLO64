@@ -219,11 +219,16 @@ assign status = {17'd0, st_sig, st_intbrk, st_sstep, 1'b0, p_full, dma_bf, st_br
 assign halted = st_halt;
 assign su_run = !st_halt;
 
+// SP_RD_LEN / SP_WR_LEN as they read: of the running transfer, the rows left less one and the bytes left in the row,
+// less 8 (counted down as the words go); after one, a count of 0 and a length of 0xFF8; 0 after reset
+logic [7:0]  rd_cnt;
+logic [11:3] rd_len;
+logic        dma_any;                 // a transfer has run
 function automatic logic [31:0] cop0_rd(input logic [3:0] r);
     unique case (r)
     4'd0:  return {19'd0, sp_addr, 3'd0};
     4'd1:  return {8'd0, ram_addr, 3'd0};
-    4'd2, 4'd3: return {d_skip, 3'd0, 20'h00FF8};          // as a DMA leaves them: the skip, the count 0, the length run out
+    4'd2, 4'd3: return {d_skip, 3'd0, rd_cnt, rd_len, 3'd0};   // the running transfer's skip, rows and row bytes left
     4'd4:  return status;
     4'd5:  return {31'd0, p_full};
     4'd6:  return {31'd0, dma_bf};          // (games check for busy right after starting)
@@ -291,6 +296,8 @@ wire  [31:0] d_len   = p_len;
 wire         d_rd0   = p_rd0;
 wire  [9:0]  sp_word = {sp_addr[11:3], d_half};
 assign dma_busy = ds != D_IDLE;
+assign rd_cnt   = ds == D_IDLE ? 8'd0 : g_rows;
+assign rd_len   = ds == D_IDLE ? (dma_any ? 9'h1FF : 9'h000) : g_words[9:1] - 9'd1 + {8'd0, g_words[0]};
 
 assign r_valid  = (ds == D_IN && !q_done) || (ds == D_OUT && ob_n != 2'd0);
 assign r_we     = ds == D_OUT;
@@ -341,7 +348,7 @@ always_ff @(posedge clk) begin
         st_halt <= 1'b1; st_broke <= 1'b0; st_sstep <= 1'b0; st_intbrk <= 1'b0; st_sig <= 8'd0;
         p_full <= 1'b0; p_len <= '0; p_rd0 <= 1'b0;
         sem <= 1'b0; irq <= 1'b0; sp_addr <= '0; ram_addr <= '0; sp_addr_w <= '0; ram_addr_w <= '0; d_skip <= '0;
-        ds <= D_IDLE; d_half <= 1'b0; q_half <= 1'b0; q_done <= 1'b0;
+        ds <= D_IDLE; d_half <= 1'b0; q_half <= 1'b0; q_done <= 1'b0; dma_any <= 1'b0;
     end else begin
         // ---- register writes
         if (w_en) unique case (w_reg)
@@ -368,6 +375,8 @@ always_ff @(posedge clk) begin
         default: ;
         endcase
         if ((mfc0 && c0r == 4'd7) || (h_rd && h_addr == 4'd7)) sem <= 1'b1;   // the semaphore: read (the microcode's or the host's), then taken
+        // single step: halted again as an instruction (a slot) leaves E
+        if (st_sstep && tr_e) st_halt <= 1'b1;
         if (su_brk) begin
             st_halt <= 1'b1; st_broke <= 1'b1;
             if (st_intbrk) irq <= 1'b1;
@@ -404,7 +413,7 @@ always_ff @(posedge clk) begin
             d_half  <= 1'b0; q_half <= 1'b0; q_done <= 1'b0;
             sp_addr <= sp_addr_w; ram_addr <= ram_addr_w;      // from the addresses last written
             np <= sp_addr_w[11:3]; ob_n <= 2'd0; iq <= 2'd0; pf_h <= 1'b0; pf_n <= 2'd0; pf_rd <= 1'b0;
-            ds <= d_rd0 ? D_IN : D_OUT;
+            ds <= d_rd0 ? D_IN : D_OUT; dma_any <= 1'b1;
         end
         D_IN:    if (sp_wr && d_last) ds <= D_END;
         D_OUT: begin

@@ -240,6 +240,10 @@ function automatic logic [2:0] c_use(input logic [31:0] i);
     if (fn >= 6'h30 && fn <= 6'h36) return 3'b011;
     return 3'b000;
 endfunction
+function automatic logic c_resv(input logic [31:0] i);      // a reserved function
+    logic [5:0] f; f = i[5:0];
+    return f == 6'h12 || (f >= 6'h16 && f <= 6'h1C) || f == 6'h1E || f == 6'h1F || f == 6'h2E || f == 6'h2F || (f >= 6'h38 && f <= 6'h3E);
+endfunction
 // the scalar unit's register of the vector unit's: {reads it, writes it, the eight of its group} and which -- a store's
 // or MFC2's (read), a load's or MTC2's (written)
 function automatic logic [7:0] x_vreg(input logic [31:0] i);
@@ -273,8 +277,10 @@ endfunction
 function automatic logic pair_ok(input logic [31:0] f, input logic [31:0] n);
     logic [31:0] c, x; logic [2:0] cu_, cf_; logic [7:0] xr; logic [5:0] xf; logic one, nop;
     c = is_vc(f) ? f : n; x = is_vc(f) ? n : f;
-    cu_ = c_use(c); cf_ = c_flags(c); xr = x_vreg(x); xf = x_flags(x);
+    cu_ = c_use(c) | {3{c_resv(c)}}; cf_ = c_flags(c); xr = x_vreg(x); xf = x_flags(x);
     one = c[5:0] >= 6'h30 && c[5:0] <= 6'h36; nop = c[5:0] == 6'h37;
+    // (a reserved function reads vs and vt and writes vd -- 0 -- though the console's rule does not count it: no pair
+    // with what writes them or uses vd)
     if (is_vc(f)) return !(cu_[0] && (xr[7] || xr[6]) && xr[4:0] == c[10:6]) && !(cf_ & xf[2:0]);
     return !(xr[6] && ((cu_[2] && xr[4:0] == c[15:11]) || (cu_[1] && xr[4:0] == c[20:16]) || (cu_[0] && xr[4:0] == c[10:6])
                        || (one && xr[4:0] == c[15:11]) || (nop && x[31:26] == 6'h12 && xr[4:0] == c[10:6])))
