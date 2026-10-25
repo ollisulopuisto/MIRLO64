@@ -13,19 +13,17 @@
 //   W  register write
 // BREAK, as it leaves E, stops the unit (brk): what follows it is not executed
 // and pc_next names it.
-// Issue as the console's: E holds a slot -- an instruction, or a pair -- until
-// the console's rules let it go (sb, a scoreboard of the last three cycles):
-// a vector register written is read 4 cycles on at the soonest, a GPR a load,
-// MFC0, MFC2 or CFC2 writes 3 cycles on, a store does not go exactly 2 cycles
-// after a load (COP0 and COP2 moves count as both). A pair: a vector
-// computation and the scalar-unit instruction next to it, either first --
-// one that is not a branch, jump or BREAK (those only second), with no
-// coprocessor's register the first writes and the second uses (the console's
-// rule, the lane field of a one-lane op or VNOP taken for a register as on the
-// console), not in a delay slot nor at a taken branch's target at an odd word
-// (the console reads IMEM 8 bytes at a time) -- enters E together (IMEM's
-// second port gives the word after D's) and leaves it in the same cycle, the
-// scalar one through E as ever and the computation to the vector unit on c_*
+// A load followed by an instruction that reads its value stalls a cycle (and
+// one after CFC2, whose value comes in M too); every other value is
+// forwarded. Pairs, as many as the console makes and with no rule of its
+// timing beyond what the results need: a vector computation and the
+// scalar-unit instruction next to it, either first -- one that is not a
+// branch, jump or BREAK (those only second), with no coprocessor's register
+// the first writes and the second uses (the console's rule, the lane field of
+// a one-lane op or VNOP taken for a register as on the console), not in a
+// delay slot -- enter E together (IMEM's second port gives the word after
+// D's, at any word) and leave it in the same cycle, the scalar one through E
+// as ever and the computation to the vector unit on c_*
 // (c_pr). The fetch then goes on two words on. The scalar one may be an ALU
 // op, a scalar load or store, a branch, MFC0 / MTC0, and with LPAIR (a vector
 // unit of eight lanes) a vector load (LBV .. LUV) or store (SBV .. SUV, SHV,
@@ -200,37 +198,6 @@ endfunction
 function automatic logic is_c0(input logic [31:0] i);       // MFC0, MTC0
     return i[31:26] == 6'h10 && (i[25:21] == 5'd0 || i[25:21] == 5'd4);
 endfunction
-// the GPRs read: {rs, rt}
-function automatic logic [1:0] g_use(input logic [31:0] i);
-    logic [5:0] op, fn; logic [4:0] rs, rt, rd;
-    op = i[31:26]; fn = i[5:0]; rs = i[25:21]; rt = i[20:16]; rd = i[15:11];
-    unique case (op)
-    6'h00:   return (fn == 6'h00 || fn == 6'h02 || fn == 6'h03) ? 2'b01 : (fn == 6'h08 || fn == 6'h09) ? 2'b10
-                  : (fn == 6'h04 || fn == 6'h06 || fn == 6'h07 || (fn >= 6'h20 && fn <= 6'h27) || fn == 6'h2A || fn == 6'h2B) ? 2'b11 : 2'b00;
-    6'h01:   return {rt[3:1] == 3'd0, 1'b0};
-    6'h04, 6'h05, 6'h28, 6'h29, 6'h2B: return 2'b11;
-    6'h06, 6'h07, 6'h08, 6'h09, 6'h0A, 6'h0B, 6'h0C, 6'h0D, 6'h0E, 6'h20, 6'h21, 6'h23, 6'h24, 6'h25, 6'h27: return 2'b10;
-    6'h10:   return {1'b0, rs == 5'd4};
-    6'h12:   return {1'b0, !i[25] && (rs == 5'd4 || rs == 5'd6)};
-    6'h32:   return {rd <= 5'd9 || rd == 5'd11, 1'b0};
-    6'h3A:   return {rd <= 5'd11, 1'b0};
-    default: return 2'b00;
-    endcase
-endfunction
-// rt written late: a load, MFC0, MFC2, CFC2
-function automatic logic g_late(input logic [31:0] i);
-    logic [5:0] op; op = i[31:26];
-    return op == 6'h20 || op == 6'h21 || op == 6'h23 || op == 6'h24 || op == 6'h25 || op == 6'h27
-        || (op == 6'h10 && i[25:21] == 5'd0) || (op == 6'h12 && !i[25] && (i[25:21] == 5'd0 || i[25:21] == 5'd2));
-endfunction
-// {a load, a store}, for the store rule (COP0 and COP2 moves are both)
-function automatic logic [1:0] ldst(input logic [31:0] i);
-    logic [5:0] op; op = i[31:26];
-    if (is_c0(i) || (op == 6'h12 && !i[25] && !i[24] && !i[21])) return 2'b11;
-    return {op == 6'h20 || op == 6'h21 || op == 6'h23 || op == 6'h24 || op == 6'h25 || op == 6'h27
-                || (op == 6'h32 && (i[15:11] <= 5'd9 || i[15:11] == 5'd11)),
-            op == 6'h28 || op == 6'h29 || op == 6'h2B || (op == 6'h3A && i[15:11] <= 5'd11)};
-endfunction
 // a computation's vector registers: {reads vs, reads vt, writes vd}
 function automatic logic [2:0] c_use(input logic [31:0] i);
     logic [5:0] fn; fn = i[5:0];
@@ -292,10 +259,9 @@ function automatic logic pair_xc(input logic [31:0] x, input logic [31:0] c);
 endfunction
 wire  [31:0] ins_d = i_data;
 logic        stall_e /* verilator public_flat_rd */;
-logic        odd_tgt;                                           // D's next instruction is a taken branch's target at an odd word
 wire         v_first = is_vc(ins_d);
 // (not behind a branch or jump in E: D's instruction is its delay slot; a branch only second)
-wire         pair_d = d_valid && i2_ok && run && !(e_valid && (e_c.br || e_c.j || e_c.jr)) && !odd_tgt
+wire         pair_d = d_valid && i2_ok && run && !(e_valid && (e_c.br || e_c.j || e_c.jr))
                    && (v_first ? is_plain(i_data2) || is_br(i_data2) || is_c0(i_data2) || (x_ok(i_data2) && pair_cx(ins_d, i_data2))
                                : (is_plain(ins_d) || is_c0(ins_d) || (x_ok(ins_d) && pair_xc(ins_d, i_data2))) && is_vc(i_data2));
 wire  [31:0] s_ins_d = (pair_d && v_first) ? i_data2 : ins_d;   // the scalar unit's instruction entering E
@@ -327,32 +293,9 @@ always_comb begin
     if (w_we && w_wr == e_rt) eb = w_res;
     if (m_we_r && m_c.wr == e_rt) eb = m_res;
 end
-// ---- the console's issue rules: E's slot waits while it reads what the last cycles' slots write too late
-// (h_*: [0] the cycle before, a slot's or nothing; a vector register by a 32-bit mask, eight for LTV's group)
-logic [5:0]  h_g [2];                                       // a GPR written late ({valid, register})
-logic [31:0] h_v [3];                                       // vector registers written
-logic [1:0]  h_l;                                           // a load issued
-wire  [31:0] cmp_i  = v_e ? v_ins : e_ins;                  // E's computation, alone or a pair's
-wire         cmp_e  = v_e || is_vc(e_ins);
-wire  [2:0]  cu     = cmp_e ? c_use(cmp_i) : 3'b000;
-wire  [7:0]  xv     = x_vreg(e_ins);
-wire  [1:0]  gu     = g_use(e_ins);
-wire  [1:0]  e_ls   = ldst(e_ins);
-wire  [31:0] h_vor  = h_v[0] | h_v[1] | h_v[2];
-wire  [7:0]  h_vgrp = h_vor[{xv[4:3], 3'd0} +: 8];
-function automatic logic g_hit(input logic [4:0] r, input logic [5:0] h0, input logic [5:0] h1);
-    return r != 5'd0 && ((h0[5] && h0[4:0] == r) || (h1[5] && h1[4:0] == r));
-endfunction
-// (once the rules have let the slot go it stays let go: what keeps it in E then is a unit's, and a multi-cycle
-// instruction the vector unit has begun -- LTV, STV -- must not see it withdrawn; the store rule's two cycles would)
-logic        e_ok;
-wire hz_rule = e_valid && ((gu[1] && g_hit(e_rs, h_g[0], h_g[1])) || (gu[0] && g_hit(e_rt, h_g[0], h_g[1]))
-                       || (cu[2] && h_vor[cmp_i[15:11]]) || (cu[1] && h_vor[cmp_i[20:16]])
-                       || (xv[7] && (xv[5] ? |h_vgrp : h_vor[xv[4:0]]))
-                       || (e_ls[0] && h_l[1]));
-wire hazard /* verilator public_flat_rd */ = hz_rule && !e_ok;
-// what the slot writes late, kept as it leaves E
-wire  [31:0] e_vw = ({32{cu[0]}} & (32'd1 << cmp_i[10:6])) | ({32{xv[6]}} & (xv[5] ? 32'hFF << {xv[4:3], 3'd0} : 32'd1 << xv[4:0]));
+// ---- a load's value (and CFC2's) comes in M: the instruction behind it that reads it waits a cycle, then has it
+// from W. Every other value is forwarded; what the vector unit's own instructions wait for it keeps itself
+wire hazard /* verilator public_flat_rd */ = m_valid_r && m_we_r && (m_c.load || m_c.cf) && (m_c.wr == e_rs || m_c.wr == e_rt);
 
 wire [31:0] imm_sx = {{16{e_ins[15]}}, e_ins[15:0]};
 wire [31:0] op_b   = e_c.b_imm ? (e_c.imm_zx ? {16'h0, e_ins[15:0]} : imm_sx) : eb;
@@ -461,16 +404,7 @@ always_ff @(posedge clk) begin
         pc_f <= 12'd0;
         d_valid <= 1'b0; e_valid <= 1'b0; m_valid_r <= 1'b0; v_e <= 1'b0;
         m_we_r <= 1'b0; w_we <= 1'b0; x_we <= 1'b0;
-        h_g[0] <= 6'd0; h_g[1] <= 6'd0; h_v[0] <= 32'd0; h_v[1] <= 32'd0; h_v[2] <= 32'd0; h_l <= 2'b00; odd_tgt <= 1'b0; e_ok <= 1'b0;
     end else begin
-        // the scoreboard: a cycle on, the slot that left E or nothing
-        h_g[1] <= h_g[0]; h_g[0] <= {e_go && g_late(e_ins) && e_rt != 5'd0, e_rt};
-        h_v[2] <= h_v[1]; h_v[1] <= h_v[0]; h_v[0] <= e_go ? e_vw : 32'd0;
-        h_l <= {h_l[0], e_go && e_ls[1]};
-        e_ok <= stall_e && (e_ok || !hz_rule);
-        // (a taken branch's target at an odd word comes to D after its delay slot has left it: it issues alone)
-        if (d_valid && !stall_e) odd_tgt <= 1'b0;
-        if (redirect) odd_tgt <= redirect_pc[2];
         x_we <= w_we; x_wr <= w_wr; x_res <= w_res;
         w_we <= m_valid_r && m_we_r; w_wr <= m_c.wr; w_res <= m_out;
         m_valid_r <= e_go;
@@ -484,7 +418,7 @@ always_ff @(posedge clk) begin
         end
         if (!stall_e) c_rd <= vrb_d;
         if (pc_load) begin
-            pc_f <= {pc_in[11:2], 2'b00}; d_valid <= 1'b0; odd_tgt <= 1'b0;
+            pc_f <= {pc_in[11:2], 2'b00}; d_valid <= 1'b0;
         end else if (brk) begin
             // what follows the BREAK was not run: fetch it again when resumed
             pc_f <= redirect ? redirect_pc : d_valid ? d_pc : pc_f;
