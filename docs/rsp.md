@@ -190,27 +190,22 @@ The pipeline has five stages:
 
 Branches and jumps resolve in E. The delay slot, then in D, always runs; the
 instruction being fetched is squashed when the branch is taken -- the cycle of
-nothing after a taken branch's delay slot that the console has too. A load or
+nothing after a taken branch's delay slot that the console has too. A J or JAL,
+and a branch that goes backwards (a loop's), are taken as they enter E: the
+fetch goes on at the target at once, and that cycle is saved; such a branch
+that is not taken after all redirects the fetch to the instruction after its
+delay slot, a cycle lost as a taken branch's was. A load or
 store addresses 1, 2 or 4 bytes at any byte address in one DMEM access.
 
-### Issue as the console's
+### Issue
 
-E holds its slot (an instruction, or a pair) until the rules of the console's
-pipeline let it go, as the n64brew wiki documents them (Reality Signal
-Processor / CPU Pipeline). A scoreboard keeps what the last three cycles'
-slots wrote late:
-
-* a vector register written -- by a computation, a vector load, MTC2, LTV's
-  eight -- is read 4 cycles on at the soonest (an instruction right behind its
-  writer waits 3 cycles);
-* a GPR written by a load, MFC0, MFC2 or CFC2 is read 3 cycles on; any other
-  result the next cycle (forwarded);
-* a store does not go exactly 2 cycles after a load; MFC0, MTC0 and the COP2
-  moves count as both.
-
-Once the rules have let a slot go they stay so while a unit keeps it in E.
-`sim/rsp/rsp_time.c` has the same rules in C; `tb_rsp CYCLES=1` holds the RTL
-to them cycle by cycle.
+This is the fast RSP: it keeps no rule of the console's timing beyond what
+the results need. A load followed by an instruction that reads its value
+stalls one cycle (and one after CFC2, whose value comes in M too); every other
+result is forwarded. What the vector unit's instructions wait for it keeps
+itself (a register a computation, a load or MTC2 has yet to write). The
+console's own cycle counts, which `sim/rsp/rsp_time.c` models, are longer:
+`tb_rsp CYCLES=1` shows by how much (slots issued early).
 
 A coprocessor instruction goes out on `c_valid` / `c_ins` with the values of
 rs and rt and holds E until `c_done`. `rsp_top` answers MFC0 / MTC0 itself and
@@ -225,8 +220,8 @@ pair when the first writes a vector or control register the second reads or
 writes (a one-lane op's lane field, or VNOP's vd behind MTC2, is taken for a
 register, as on the console; a reserved function is taken to read vs and vt
 and write vd, which the console's rule does not count, so that a pair's result
-is the two in order). D's instruction must not be a delay slot, nor a taken
-branch's target at an odd word (the console reads IMEM 8 bytes at a time).
+is the two in order). D's instruction must not be a delay slot (a taken branch's target at an
+odd word pairs too, which the console's does not).
 IMEM's second port gives D the word after its own; the pair enters E
 together, the scalar instruction takes E's path as any other and the
 computation goes to the vector unit on `c_*` in the same cycle (`c_pr`; the
@@ -438,22 +433,14 @@ Several details of the RTL exist for this clock:
   select by them in the next, and their select reads only the kept flags, so
   the adder is not in front of the register write.
 
-The cycles an instruction takes are the console's (see "Issue as the
-console's"), but where the vector unit has fewer means than the console's:
-
-* its register file has one write port: a computation's write and a load's (or
-  MTC2's) in the same cycle put the computation's off a cycle (`wp`), and a
-  load or MTC2 does not start in a cycle the port is taken next -- a stream of
-  pairs that each write two registers runs at three cycles for two;
-* a clip (VCL, VCH, VCR) and a reciprocal's EX take a cycle more, and the next
-  computation waits for them;
-* LTV and STV move a byte a cycle (16 cycles; they are rare);
-* a DMA's beat holds DMEM's port (`m_stall`), and the DMA itself moves at most
-  4 bytes a cycle (the console's, some 5.5).
-
-Measured against `rsp_time.c` on task dumps of nine games, the RTL takes 2 % to
-15 % more cycles than the console would, by microcode (the DMA's speed
-included).
+In steady state the scalar unit completes one instruction per cycle, two in a
+pair. The cycles above that come from the load-use stall, taken branches
+(forward ones; and backward ones not taken), a register a computation reads
+before the one before has written it, the vector unit's one register write
+port (a computation's write and a load's in the same cycle put the
+computation's off a cycle, `wp`), a clip's or a reciprocal's EX that takes a
+cycle more, LTV and STV (a byte a cycle), an MTC0 that waits for its DMA, and
+`m_stall`.
 
 ## Verification
 
