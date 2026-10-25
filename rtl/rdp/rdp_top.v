@@ -46,7 +46,8 @@ module rdp_top (
     output reg         sync_ev,         // (a cycle) one has just completed: the DP interrupt
     output reg  [31:0] load_count,      // loads completed
     output reg  [15:0] unknown_ops,
-    output wire        idle             // no command in progress, nothing pending
+    output wire        idle,            // no command in progress, nothing pending
+    output wire        tmem_busy        // a texture load is running (DPC_STATUS' TMEM busy)
 );
     // ======================================================================
     // state (lang/c/rdp/rdp.h rdp_t)
@@ -1236,4 +1237,5 @@ module rdp_top (
 
 
     assign idle = !busy_exec && !exec_go && !collecting && all_quiet && !mem_wpend;
+    assign tmem_busy = st == S_LOAD_INIT || st == S_LOAD;
 endmodule

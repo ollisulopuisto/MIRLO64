@@ -68,9 +68,9 @@ from `rcp_dpc_view.sv`, which gives the console's layout:
 |---|---|---|
 | 0, 1, 2 | XBUS, FREEZE, FLUSH | as written |
 | 3 | START_GCLK | set by a write of END (not while frozen) and by an unfreeze; cleared when a SYNC FULL completes |
-| 4 | TMEM busy | always 0 |
+| 4 | TMEM busy | a texture load runs |
 | 5 | PIPE busy | as bit 3; also cleared by bit 7 of a STATUS write |
-| 6 | command busy | always 0 |
+| 6 | command busy | a command waits in the FIFO or is under way |
 | 7 | CBUF ready | always 1 |
 | 8 | DMA busy | CURRENT below END |
 | 9, 10 | END valid, START valid | a pair waiting; a START written and its END not yet |
