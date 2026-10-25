@@ -274,17 +274,21 @@ function automatic logic [5:0] x_flags(input logic [31:0] i);
 endfunction
 // the pairing rule: the first writes no vector or control register the second reads or writes. A one-lane op's
 // lane field (vs) or VNOP's vd is taken for a register, as on the console -- VNOP's only behind MTC2 or LTV
-function automatic logic pair_ok(input logic [31:0] f, input logic [31:0] n);
-    logic [31:0] c, x; logic [2:0] cu_, cf_; logic [7:0] xr; logic [5:0] xf; logic one, nop;
-    c = is_vc(f) ? f : n; x = is_vc(f) ? n : f;
-    cu_ = c_use(c) | {3{c_resv(c)}}; cf_ = c_flags(c); xr = x_vreg(x); xf = x_flags(x);
+// (a reserved function reads vs and vt and writes vd -- 0 -- though the console's rule does not count it: no pair
+// with what writes them or uses vd.) The computation c first, x second:
+function automatic logic pair_cx(input logic [31:0] c, input logic [31:0] x);
+    logic [2:0] cu_; logic [7:0] xr; logic [5:0] xf;
+    cu_ = c_use(c) | {3{c_resv(c)}}; xr = x_vreg(x); xf = x_flags(x);
+    return !(cu_[0] && (xr[7] || xr[6]) && xr[4:0] == c[10:6]) && !(c_flags(c) & xf[2:0]);
+endfunction
+// ... x first, the computation c second
+function automatic logic pair_xc(input logic [31:0] x, input logic [31:0] c);
+    logic [2:0] cu_; logic [7:0] xr; logic [5:0] xf; logic one, nop;
+    cu_ = c_use(c) | {3{c_resv(c)}}; xr = x_vreg(x); xf = x_flags(x);
     one = c[5:0] >= 6'h30 && c[5:0] <= 6'h36; nop = c[5:0] == 6'h37;
-    // (a reserved function reads vs and vt and writes vd -- 0 -- though the console's rule does not count it: no pair
-    // with what writes them or uses vd)
-    if (is_vc(f)) return !(cu_[0] && (xr[7] || xr[6]) && xr[4:0] == c[10:6]) && !(cf_ & xf[2:0]);
     return !(xr[6] && ((cu_[2] && xr[4:0] == c[15:11]) || (cu_[1] && xr[4:0] == c[20:16]) || (cu_[0] && xr[4:0] == c[10:6])
                        || (one && xr[4:0] == c[15:11]) || (nop && x[31:26] == 6'h12 && xr[4:0] == c[10:6])))
-        && !(xf[5:3] & cf_);
+        && !(xf[5:3] & c_flags(c));
 endfunction
 wire  [31:0] ins_d = i_data;
 logic        stall_e /* verilator public_flat_rd */;
@@ -292,8 +296,8 @@ logic        odd_tgt;                                           // D's next inst
 wire         v_first = is_vc(ins_d);
 // (not behind a branch or jump in E: D's instruction is its delay slot; a branch only second)
 wire         pair_d = d_valid && i2_ok && run && !(e_valid && (e_c.br || e_c.j || e_c.jr)) && !odd_tgt
-                   && (v_first ? is_plain(i_data2) || is_br(i_data2) || is_c0(i_data2) || (x_ok(i_data2) && pair_ok(ins_d, i_data2))
-                               : (is_plain(ins_d) || is_c0(ins_d) || (x_ok(ins_d) && pair_ok(ins_d, i_data2))) && is_vc(i_data2));
+                   && (v_first ? is_plain(i_data2) || is_br(i_data2) || is_c0(i_data2) || (x_ok(i_data2) && pair_cx(ins_d, i_data2))
+                               : (is_plain(ins_d) || is_c0(ins_d) || (x_ok(ins_d) && pair_xc(ins_d, i_data2))) && is_vc(i_data2));
 wire  [31:0] s_ins_d = (pair_d && v_first) ? i_data2 : ins_d;   // the scalar unit's instruction entering E
 wire  [31:0] v_ins_d = v_first ? ins_d : i_data2;               // a pair's computation
 wire  [31:0] c_ins_d = pair_d ? v_ins_d : ins_d;                // the coprocessors' instruction entering E
@@ -427,7 +431,10 @@ function automatic logic [4:0] vrb(input logic [31:0] i);      // MFC2, MTC2 (CO
 endfunction
 assign c_ra_n = stall_e ? c_ins[15:11] : c_ins_d[15:11];
 assign c_rb_n = stall_e ? c_ins[20:16] : c_ins_d[20:16];
-assign c_rd_n = stall_e ? c_rd : vrb(s_ins_d);
+// (the two candidates' fields first, then the pair's choice: the pairing rule is not in front of them)
+wire         s2_d   = pair_d && v_first;                        // E's scalar instruction is D's next word
+wire  [4:0]  vrb_d  = s2_d ? vrb(i_data2) : vrb(ins_d);
+assign c_rd_n = stall_e ? c_rd : vrb_d;
 
 wire [31:0] e_res = e_c.link ? {20'h0, e_spc + 12'd8} : e_c.cop ? c_res : alu;
 assign stall_e = e_valid && (hazard || ((e_c.cop || v_e) && !c_done) || s_mwait);
@@ -471,11 +478,11 @@ always_ff @(posedge clk) begin
         m_we_r <= e_go && e_c.we;
         if (!stall_e) begin
             e_valid <= d_valid && (run || redirect) && !brk;   // (a taken branch's delay slot always runs)
-            e_pc <= d_pc; e_ins <= s_ins_d; e_c <= decode(s_ins_d);
+            e_pc <= d_pc; e_ins <= s_ins_d; e_c <= s2_d ? decode(i_data2) : decode(ins_d);
             e_spc <= (pair_d && v_first) ? d_pc + 12'd4 : d_pc;
             v_e <= pair_d && !brk; v_ins <= v_ins_d;
         end
-        if (!stall_e) c_rd <= vrb(s_ins_d);
+        if (!stall_e) c_rd <= vrb_d;
         if (pc_load) begin
             pc_f <= {pc_in[11:2], 2'b00}; d_valid <= 1'b0; odd_tgt <= 1'b0;
         end else if (brk) begin
