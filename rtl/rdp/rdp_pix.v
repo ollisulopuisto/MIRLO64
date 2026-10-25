@@ -231,7 +231,7 @@ module rdp_pix (
     // (a primitive without texture coefficients too: the next tile's texel at its S, T, as the console's)
     always @(posedge clk) two_pass_q <= cyc == 2'd1 && (cc0_t1 || cc1_t0);
     assign two_pass = two_pass_q;
-    wire       point    = other_h[13:12] == 2'd0;
+    wire       point    = other_h[13:12] == 2'd0 || other_h[21:20] == 2'd2;    // (copy mode has no filter)
     wire       a_cmp    = other_l[0];
     wire       z_src_p  = other_l[2];
     wire       z_cmp    = other_l[4] && !cyc[1] && !c8;    // (copy and fill mode have no depth, nor an 8-bit image)

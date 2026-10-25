@@ -343,7 +343,8 @@ static rdp_rgba_t texture_sample(const rdp_t *r, int tilei, int32_t s105, int32_
     tc_axis(tt, t->ult, t->lrt, t->ct, t->mt, t->maskt, &t0, &t1, &ft);
 
     rdp_rgba_t a = tmem_fetch(r, t, s0, t0);
-    if (point || ((r->other_h >> RDP_H_FILT_SHIFT) & 3) == 0)   /* point */
+    /* (point sampled; copy mode always: it moves TMEM's words, it has no filter) */
+    if (point || ((r->other_h >> RDP_H_FILT_SHIFT) & 3) == 0 || ((r->other_h >> RDP_H_CYCLE_SHIFT) & 3) == 2)
         return a;
 
     /* N64 3-point filter: the triangle of the 2x2 the sample falls in */
