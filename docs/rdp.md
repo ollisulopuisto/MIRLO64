@@ -112,9 +112,9 @@ change with pixels in flight.
 | 0x2D | set scissor | the four coordinates; the interlace field bits are not read |
 | 0x2E | set primitive depth | Z (15 bits) and its delta |
 | 0x2F | set other modes | what is read of them: below |
-| 0x30 | load TLUT | |
+| 0x30 | load TLUT | also sets the tile's size, as every load does |
 | 0x32 | set tile size | |
-| 0x33 | load block | |
+| 0x33 | load block | also sets the tile's size (its lrt: the dxt) |
 | 0x34 | load tile | also sets the tile's size |
 | 0x35 | set tile | format, size, line, TMEM address, palette, clamp, mirror, mask, shift |
 | 0x36 | fill rectangle | |

@@ -2507,8 +2507,9 @@ static void execute(rdp_t *r, const uint32_t *w)
     case RDP_OP_SET_TILESIZE: set_tile_size(r, w); break;
 #ifdef RDP_N64
     case RDP_OP_LOAD_TILE: set_tile_size(r, w); load_tile_n64(r, w); r->load_count++; break;
-    case RDP_OP_LOAD_BLOCK: load_block(r, w); r->load_count++; break;
-    case RDP_OP_LOAD_TLUT: load_tlut(r, w); r->load_count++; break;
+    /* (every load sets its tile's size from its coordinates, as the console's: LOAD BLOCK's lrt is its dxt) */
+    case RDP_OP_LOAD_BLOCK: set_tile_size(r, w); load_block(r, w); r->load_count++; break;
+    case RDP_OP_LOAD_TLUT: set_tile_size(r, w); load_tlut(r, w); r->load_count++; break;
 #else
     case RDP_OP_LOAD_TILE: load_tile(r, w); r->load_count++; break;
 #endif

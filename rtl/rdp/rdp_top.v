@@ -855,7 +855,9 @@ module rdp_top (
                     end
                     // loads: the tile's TMEM address and format reach S_LOAD_INIT through ts_*
                     6'h30, 6'h33, 6'h34: begin
-                        if (op == 6'h34) tl_size[w1[26:24]] <= {w0[23:12], w0[11:0], w1[23:12], w1[11:0]};
+                        // (each load sets its tile's size from its coordinates, as the console's: LOAD BLOCK's lrt is
+                        // its dxt)
+                        tl_size[w1[26:24]] <= {w0[23:12], w0[11:0], w1[23:12], w1[11:0]};
                         p_tile <= w1[26:24];
                         l_kind <= (op == 6'h33) ? 2'd0 : (op == 6'h34) ? 2'd1 : 2'd2;
                         mi <= 5'd0;
