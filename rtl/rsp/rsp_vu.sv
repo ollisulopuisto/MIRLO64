@@ -394,7 +394,8 @@ endfunction
 // -- unless it reads the register being written, or is not a computational
 // instruction: those wait for the pipeline to empty. A reciprocal op waits
 // for the EX of any instruction before it (they are serial through the
-// divide registers), and with one pass its own EX takes a cycle more (the ROM).
+// divide registers -- with one pass it starts under one that runs, their
+// values forwarded), and with one pass its own EX takes a cycle more (the ROM).
 // vt's element broadcast, for every lane at once: lane i takes the register's lane
 // ve[2:0] (ve[3]), {i[2], ve[1:0]} (ve[2]), {i[2:1], ve[0]} (ve[1]) or i. The sources are shared between lanes: one eight-way choice for a
 // single lane broadcast (ve[3]), one four-way for each half (ve[2]), one two-way
@@ -671,7 +672,12 @@ wire dep      = (x_v && x_last && (x_vdn == vsn || x_vdn == vtn)) || (wp && (w_v
 // cycle on. Microcode loads a register and computes with others at once.)
 wire ldep     = lw_v && (lw_reg == vsn || lw_reg == vtn);
 // (one pass: a one-lane write, which is not kept, does not reach EX under a computation's late write -- x_defer now is wp then)
-wire sel0r    = cmp && st == V_IDLE && !ldep && !x_wait && !b1 && !(dep || (fn_rcp && x_v)) && !(NP == 1 && fn_one && x_defer);
+// (one pass: a reciprocal starts under an EX that runs, a reciprocal's too -- the divide registers it reads are that
+// EX's, forwarded: dph_s, dih_s; with two passes it waits for any EX)
+wire sel0r    = cmp && st == V_IDLE && !ldep && !x_wait && !b1 && !(dep || (fn_rcp && x_v && NP == 2)) && !(NP == 1 && fn_one && x_defer);
+wire x_rh     = x_exec && x_last && x_rcp;                  // a reciprocal's EX runs: the divide registers as it leaves them
+wire dph_s    = x_rh ? x_fn[1:0] == 2'd2 : dph;
+wire [15:0] dih_s = (x_rh && x_fn[1:0] == 2'd2) ? rin[15:0] : div_in_h;
 wire none_ok  = valid && vec && (fn_none || !fn_known);                       // (one that does nothing: done at once)
 wire sel1     = NP == 2 && b1;                // (nothing holds it: the first pass's EX never waits)
 wire sel_fire = sel0 || sel1;
@@ -855,7 +861,7 @@ always_ff @(posedge clk) begin
                     s_hi[l] <= qa[((LANES + l) & 7)]; t_hi[l] <= tv[((LANES + l) & 7)];
                 end
                 // the reciprocal's input: 16 bits, or with the high half a VRCPH / VRSQH left
-                rin <= (fn[1:0] == 2'd1 && dph) ? {div_in_h, qc[ve[2:0]]} : {{16{qc[ve[2:0]][15]}}, qc[ve[2:0]]};
+                rin <= (fn[1:0] == 2'd1 && dph_s) ? {dih_s, qc[ve[2:0]]} : {{16{qc[ve[2:0]][15]}}, qc[ve[2:0]]};
                 r_sqrt <= fn[2];
             end
         end
