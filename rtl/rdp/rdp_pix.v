@@ -1037,7 +1037,8 @@ module rdp_pix (
             end
             // (C's two fractions, the colour's 13 and 14, the alpha's 0 and 6, are one input of each C select: which of the
             // two is chosen here, once for the three channels)
-            lfx = lod_on ? {lf[8], lf} : 10'd0;
+            // (1-cycle mode: a level count of 0, without sharpen and detail, gives all ones whatever the steps)
+            lfx = lod_on ? {lf[8], lf} : (cyc == 2'd0 && lod_lvl == 3'd0 && !sharpen && !detail) ? 10'h0FF : 10'd0;
             fr_c = mul_r[0] ? lfx : {2'b00, prim_lod_frac};
             fr_a = mul_a[1] ? {2'b00, prim_lod_frac} : lfx;
             cc_sel = {

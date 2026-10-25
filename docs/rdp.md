@@ -365,6 +365,8 @@ Colour and alpha are `((A - B) * C + D * 256 + 0x80) >> 8`, kept to 9 bits.
 * SHADE is saturated to a byte, 0..255, when it enters the pipeline.
 * The primitive LOD fraction is an input, and the LOD fraction (a signed
   9-bit number, as K5) in a 2-cycle primitive with the LOD ([lod.md](lod.md));
+  in 1-cycle mode all ones for a primitive with a level count of 0 (without
+  sharpen and detail: the console's fraction there whatever the steps);
   elsewhere it reads 0. The key inputs read 0.
 * **NOISE** (A 7 of a colour) is `(n << 6) | 0x20` for three random bits n, a
   new n each pixel: the alpha dither's noise bits, as the console's one random
@@ -564,7 +566,8 @@ needs); the RTL, and the model as its benches build it, do not.
   room for, and the blender's coverage weight does not use it.
 * **LOD**: in 2-cycle mode only. The console computes it in 1-cycle and
   copy mode too, from the next two pixels of the walk; here a 1-cycle pixel
-  samples its primitive's tile and the LOD fraction reads 0 there. A texture
+  samples its primitive's tile and the LOD fraction is the console's only at a
+  level count of 0 (all ones), 0 otherwise. A texture
   rectangle's next line is its exact next row, where the console keeps 17
   bits of it ([lod.md](lod.md), "Choices").
 * **TEXEL1** is the next tile at the same coordinates. In the second cycle

@@ -1274,6 +1274,10 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         /* the tiles of TEXEL0 and TEXEL1: the primitive's and the next, or with the LOD the level's */
         int tile0 = pr->tile;
         int tile1 = (pr->tile + 1) & 7;
+        /* 1-cycle mode: the console's LOD fraction of a primitive with a level count of 0 is all ones whatever its
+         * steps (the level after it is never blended: rdp_lod), without sharpen and detail -- what a 1-cycle combiner
+         * that reads LOD_FRACTION gets there (docs/rdp_exact.md, rule 3; other level counts read 0 here) */
+        if (cyc == 0 && pr->level == 0 && !(h & (RDP_H_SHARPEN | RDP_H_DETAIL))) in.lodf = 0xFF;
         if (cyc == 1 && lod_wanted(r)) {
             const rdp_lod_t L = lod_pixel(r, pr, at);
             in.lodf = L.frac;
