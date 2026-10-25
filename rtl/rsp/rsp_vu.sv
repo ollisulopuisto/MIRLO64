@@ -697,13 +697,17 @@ wire sel_fire = sel0 || sel1;
 // (CFC2 reads the flags the cycle after, with what an older EX writes then;
 // CTC2 writes them the cycle after, over what one writes then). (Two passes:
 // MTC2, CFC2 and CTC2 when nothing is under way.)
-wire x_free   = (!x_v || (!x_wait && x_vdn != rb_live)) && !(wp && w_vdn == rb_live);
+// (one pass: under an EX that waits too, if of another register -- what it completes is counted behind that EX)
+wire x_free   = (!x_v || ((NP == 1 || !x_wait) && x_vdn != rb_live)) && !(wp && w_vdn == rb_live);
 wire l_free   = !lw_v || (!lw_merge && lw_reg != rb_live);
 // (a load under the second pass's SEL: its write would meet that pass's, a
 // cycle on -- a load into another register goes ahead, and vd is written the
 // cycle after it; LTV waits for the SEL. And none starts under that late
 // write's EX: the next cycle's port is taken.)
-wire ld_ok    = !x_wait && !x_defer && (!b1 || (ls_known && !ls_tv && ltn != x_vdn));
+// (one pass: a load or MTC2 starts under a clip's EX that waits, whose write then goes a cycle late -- not into its
+// register, nor under a one-lane one)
+wire [4:0] l_reg = mtc2 ? li[15:11] : ltn;
+wire ld_ok    = !(x_wait && (NP == 2 || x_one || l_reg == x_vdn)) && !x_defer && (!b1 || (ls_known && !ls_tv && ltn != x_vdn));
 wire ls_go    = (lwc2 || swc2) && ls_known && !ls_tv;
 wire start_r  = (lp || (valid && !vec)) && st == V_IDLE
               && (ls_tv ? idle : (lwc2 || (mtc2 && NP == 1)) ? ld_ok : (swc2 || mfc2) ? (l_free && x_free)
