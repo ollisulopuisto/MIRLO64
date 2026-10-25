@@ -7,7 +7,7 @@
 typedef struct {
     uint32_t gr, gw;                    /* GPRs read; GPRs written late (loads, MFC0, MFC2, CFC2) */
     uint32_t vr, vw, vf;                /* vector registers read, written; vf: a lane field the pairing check takes for a register */
-    uint8_t  cr, cw;                    /* control registers read, written (VCO 1, VCC 2, VCE 4; 8: none, CFC2 / CTC2 of 3) */
+    uint8_t  cr, cw;                    /* control registers read, written (VCO 1, VCC 2, VCE 4) */
     uint8_t  vec, ld, st, br, grp;      /* a computation; a load; a store; a branch, jump or BREAK; MTC2, LTV or VNOP */
 } ins_t;
 
@@ -36,7 +36,7 @@ static ins_t decode(uint32_t in)
         break;
     case 0x12:
         if (!(in & (1u << 25))) {
-            uint8_t c = (uint8_t)(1u << (rd & 3u));
+            uint8_t c = (uint8_t)(1u << ((rd & 3u) == 3u ? 2u : (rd & 3u)));   /* (rd & 3 of 3: VCE, as it moves) */
             if (rs == 0) { d.gw = 1u << rt; d.vr = 1u << vs; d.ld = d.st = 1; }
             else if (rs == 2) { d.gw = 1u << rt; d.cr = c; d.ld = d.st = 1; }
             else if (rs == 4) { d.gr = 1u << rt; d.vw = 1u << vs; d.ld = d.st = 1; d.grp = 1; }
