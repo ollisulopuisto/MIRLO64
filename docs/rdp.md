@@ -364,7 +364,10 @@ Colour and alpha are `((A - B) * C + D * 256 + 0x80) >> 8`, kept to 9 bits.
 * SHADE is saturated to a byte, 0..255, when it enters the pipeline.
 * The primitive LOD fraction is an input, and the LOD fraction (a signed
   9-bit number, as K5) in a 2-cycle primitive with the LOD ([lod.md](lod.md));
-  elsewhere it reads 0. NOISE and the key inputs read 0.
+  elsewhere it reads 0. The key inputs read 0.
+* **NOISE** (A 7 of a colour) is `(n << 6) | 0x20` for three random bits n, a
+  new n each pixel: the alpha dither's noise bits, as the console's one random
+  number serves both. Read as COMBINED is there (from 0x180 negative).
 * **K4** (as B) and **K5** (as C) are SET CONVERT's, 9 bits each, read as
   COMBINED is in those places: K4 is negative from 0x180, K5 a signed 9-bit
   number. With them `(TEXEL0 - K4) * K5 + TEXEL0` finishes a YUV texel's
@@ -567,8 +570,9 @@ needs); the RTL, and the model as its benches build it, do not.
   of a 2-cycle pixel it is the tile's own sample, not the next pixel's.
 * **YUV** textures are converted only from 16-bit YUV tiles, each channel
   clamped to a byte (the console keeps 9 bits); a pass that converts takes
-  the texel at the coordinates, unfiltered. SET_KEY is skipped; the key and
-  noise inputs of the combiner read 0.
+  the texel at the coordinates, unfiltered. SET_KEY is skipped; the key
+  inputs of the combiner read 0. The noise is the RDP's own LFSR, not the
+  console's sequence.
 * **Shade** is not corrected to the covered sample; only Z is.
 * **Scissor**: the interlace field bits are not read.
 * **Other modes**: the key enable is not read.

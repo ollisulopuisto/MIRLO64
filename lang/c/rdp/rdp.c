@@ -437,6 +437,7 @@ typedef struct {
     int cm9[4];                    /* COMBINED (the first cycle's result): r, g, b, a as the 9 raw bits (below) */
     int sh9[4];                    /* SHADE: r, g, b, a saturated to a byte, 0..255 (below; 9 bits wide as the RTL's) */
     int lodf;                      /* LOD_FRACTION: the pixel's, 9 bits (rdp_lod; read as a signed 9-bit, as K5 is) */
+    int noise;                     /* NOISE (the colour's A 7): (three random bits << 6) | 0x20, 9 bits read as COMBINED is */
 #endif
 } cc_in_t;
 #define CC_TEX1(in) ((in)->tex1)
@@ -477,7 +478,10 @@ static int cc_rgb_a(const rdp_t *r, const cc_in_t *in, unsigned sel, int ch)
     case 4: return CC_SH(in, ch);
     case 5: return en[ch];
     case 6: return CC_ONE;
-    default: return 0;           /* 7 noise, 8+ zero */
+#ifdef RDP_CVG
+    case 7: return in->noise;
+#endif
+    default: return 0;           /* 8+ zero (7 noise without RDP_CVG) */
     }
 }
 static int cc_rgb_b(const rdp_t *r, const cc_in_t *in, unsigned sel, int ch)
@@ -626,7 +630,7 @@ static cc_out_t combine_raw(const rdp_t *r, const cc_in_t *in, int cyc)
      * multiplier has to 1: a game's (TEXEL0 - TEXEL1) * K5 + TEXEL1 is TEXEL0, and TEXEL1 with K5 at 0.) */
     for (int ch = 0; ch < 3; ch++) {
         int a = cc_rgb_a(r, in, sa_r, ch), b = cc_rgb_b(r, in, sb_r, ch), c = cc_rgb_c(r, in, mul_r, ch);
-        if (sa_r == 0) a = cc_ext9(a);
+        if (sa_r == 0 || sa_r == 7) a = cc_ext9(a);                       /* (7: NOISE) */
         if (sb_r == 0 || sb_r == 7) b = cc_ext9(b);                       /* (7: K4) */
         if (mul_r == 0 || mul_r == 7 || mul_r == 15) c = cc_sgn9(c);      /* (15: K5) */
         if (mul_r == 13) c = cc_sgn9(c);                                  /* the LOD fraction: sharpen's is negative */
@@ -1218,6 +1222,8 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
     /* inputs */
     cc_in_t in;
     memset(&in, 0, sizeof in);
+    /* NOISE: the alpha dither's three random bits (dither_a), as the console's one random number a pixel serves both */
+    in.noise = (int)(((rnd >> 8) & 7u) << 6 | 0x20u);
     rdp_rgba_t tex_next = { 0, 0, 0, 0 };   /* the next tile's sample (TEXEL1 of the first cycle) */
     int have_next = 0;
 #ifdef RDP_EXACT

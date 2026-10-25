@@ -1022,6 +1022,7 @@ module rdp_pix (
         input [35:0] sh;                  // SHADE: 9 bits a channel
         input [35:0] cm;
         input [8:0]  lf;                  // the LOD fraction (a signed 9-bit as C, as K5; 0 without the LOD)
+        input [8:0]  nz;                  // NOISE (the colour's A 7), read as COMBINED is there
         reg [3:0] sa_r, sb_r;
         reg [4:0] mul_r;
         reg [2:0] sa_a, mul_a, sb_a, add_a, add_r;
@@ -1040,7 +1041,8 @@ module rdp_pix (
             fr_c = mul_r[0] ? lfx : {2'b00, prim_lod_frac};
             fr_a = mul_a[1] ? {2'b00, prim_lod_frac} : lfx;
             cc_sel = {
-                rgb_a(sa_r, 2'd0, tex, tex1, sh, cm), rgb_a(sa_r, 2'd1, tex, tex1, sh, cm), rgb_a(sa_r, 2'd2, tex, tex1, sh, cm), al_abd(sa_a, tex, tex1, sh, cm),
+                (sa_r == 4'd7) ? cc_xab(nz) : rgb_a(sa_r, 2'd0, tex, tex1, sh, cm), (sa_r == 4'd7) ? cc_xab(nz) : rgb_a(sa_r, 2'd1, tex, tex1, sh, cm),
+                (sa_r == 4'd7) ? cc_xab(nz) : rgb_a(sa_r, 2'd2, tex, tex1, sh, cm), al_abd(sa_a, tex, tex1, sh, cm),
                 rgb_b(sb_r, 2'd0, tex, tex1, sh, cm), rgb_b(sb_r, 2'd1, tex, tex1, sh, cm), rgb_b(sb_r, 2'd2, tex, tex1, sh, cm), al_abd(sb_a, tex, tex1, sh, cm),
                 rgb_c(mul_r, 2'd0, tex, tex1, sh, cm, fr_c), rgb_c(mul_r, 2'd1, tex, tex1, sh, cm, fr_c), rgb_c(mul_r, 2'd2, tex, tex1, sh, cm, fr_c), al_c(mul_a, tex, tex1, sh, fr_a),
                 rgb_d(add_r, 2'd0, tex, tex1, sh, cm), rgb_d(add_r, 2'd1, tex, tex1, sh, cm), rgb_d(add_r, 2'd2, tex, tex1, sh, cm), al_d(add_a, tex, tex1, sh, cm) };
@@ -1068,7 +1070,19 @@ module rdp_pix (
     // 2-cycle, 0 in 1-cycle); copy mode takes the texel. The line-buffer
     // words addressed at P9 are captured at P10b.
     // ======================================================================
-    wire [155:0] o0_w = cc_sel(1'b0, tex9, tex19, shade9, 36'd0, lf9);
+    // NOISE, the colour combiner's A 7: ((three random bits) << 6) | 0x20 for each pixel, the bits the alpha dither's
+    // noise takes (as the console's, Angrylion's get_dither_noise: the one random number serves both). From a second
+    // copy of the LFSR, stepped here at P9 for the same pixels as the first at P11, so that a pixel's value is the one
+    // the model takes for it (the state before its own step); the second cycle's a stage on.
+    reg  [22:0] nlfsr;
+    reg  [8:0]  nz10;
+    wire [8:0]  nz9 = {nlfsr[10:8], 6'h20};
+    always @(posedge clk) begin
+        if (rst) nlfsr <= 23'd0;
+        else if (v9 && cv9 != 4'd0 && cyc != 2'd3) nlfsr <= {nlfsr[21:0], ~(nlfsr[22] ^ nlfsr[18])};
+        nz10 <= nz9;
+    end
+    wire [155:0] o0_w = cc_sel(1'b0, tex9, tex19, shade9, 36'd0, lf9, nz9);
     reg         v10a;
     reg [9:0]   x10a;
     reg [155:0] o10a;
@@ -1102,7 +1116,7 @@ module rdp_pix (
         hid10 <= c32 ? clb_rdata[6:5] : hl_rdata[{hk10a, 1'b0} +: 2];
     end
     wire [35:0]  cm10 = (cyc == 2'd1) ? c010 : 36'd0;   // COMBINED for cycle 1
-    wire [155:0] o1_w = cc_sel(1'b1, tex1_10, tex10, shade10, cm10, lf10);   // (the second cycle: TEXEL0 the next tile's sample, TEXEL1 the tile's)
+    wire [155:0] o1_w = cc_sel(1'b1, tex1_10, tex10, shade10, cm10, lf10, nz10);   // (the second cycle: TEXEL0 the next tile's sample, TEXEL1 the tile's)
     reg         v11a;
     reg [9:0]   x11a;
     reg [155:0] o11a;
