@@ -4,7 +4,7 @@
 
 MIRLO 64 is an N64 core made specifically to fit in the Analogue Pocket. It intends to replicate as best as possible the N64 architecture.
 
-It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and runs the games from their own ROMs. This is **version 0.5** and it is experimental: read [Status](#status) before expecting a particular game to work.
+It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and runs the games from their own ROMs. This is **version 0.5-patched.1** (based on upstream v0.5) and it is experimental: read [Status](#status) before expecting a particular game to work.
 
 ## What is in it
 
@@ -20,7 +20,7 @@ A small runtime, `n64rt.sys`, loads the game and does what is not in hardware. T
 
 ## Status
 
-MIRLO 64 is experimental and not every game works. What is known of v0.5:
+MIRLO 64 is experimental and not every game works. What is known of v0.5-patched.1:
 
 * ROMs of up to 64 MiB (the first 32 MiB in the Pocket's PSRAM, the rest in its SDRAM).
 * Rumble Pak is not supported. This is currently a limitation in the Dock.
