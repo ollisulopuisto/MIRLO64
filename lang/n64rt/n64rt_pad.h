@@ -12,7 +12,7 @@
  *          [9:5]    n=3  "Crop Vertical" (the video: rtl/soc/mirlo_regs.sv)
  *          [14:10]  n=4  "Modifier": which Pocket key (a button code, below; 0 none) selects the Held layer of the remap table while
  *                        it is held; that key never reaches the game (so not as any mapped button either)
- *          [19:15]  n=5  "Crop Right" (the video; a list: 0 none, 1 pixel)
+ *          [19:15]  n=5  "Crop Horizontal" (the video: [16:15] columns at the right, [18:17] at the left, 0..3 each)
  *          [24:20]  n=6  "Stick dead zone" (n64rt_pad_deadzone)
  *          [29:25]  n=7  "Stick range" (n64rt_pad_range)
  *          [14:10]  n=10 "C buttons": 0 none, 1 also the right stick (as C buttons)

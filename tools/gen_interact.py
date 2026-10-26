@@ -36,7 +36,9 @@ def build():
   entries = [
  {"name":"Crop Vertical","id":235,"type":"slider_u32","enabled":True,"persist":True,"address":"0x1000010C","defaultval":8,"graphical":{"signed":False,"min":0,"max":30,"adjust_small":1,"adjust_large":4},"writeonly":True},   # (fork only: a slider, lines blanked at the picture's top and bottom; 5 bits, the video code takes any 0-31)
  lst("Screen Size", 237, "0x10000158", [(0, "Original"), (2, "Fit (keep aspect)"), (1, "Fill (stretch)"), (4, "Hybrid"), (3, "Fill (overscale)")]),   # (PR #30's, at word 22: the SoC's words 0-21 are the settings, the lists and the actions)
- lst("Crop Right", 236, "0x10000114", [(0, "None"), (1, "1 column")], 1),
+ lst("Crop Horizontal", 236, "0x10000114", [(0, "None"), (5, "1 column"), (10, "2 columns"), (15, "3 columns"),
+                                           (4, "1 column left"), (8, "2 columns left"), (12, "3 columns left"),
+                                           (1, "1 column right"), (2, "2 columns right"), (3, "3 columns right")], 7),
  {"name":"Expansion Pak","id":238,"type":"check","enabled":True,"persist":True,"address":"0x10000138","defaultval":1,"value":0,"value_off":1,"writeonly":True},   # (upstream's: checked writes 0 = the Pak in)
  lst("Controller 1 pak", 214, "0x10000108", [(0, "None"), (1, "Controller Pak"), (2, "Transfer Pak")]),
  lst("Shift key", 228, "0x10000110", [(0, "None"), (1, "L"), (2, "R"), (3, "ZL"), (4, "ZR"), (6, "Select")]),
