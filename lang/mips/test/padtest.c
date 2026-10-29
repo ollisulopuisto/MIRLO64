@@ -56,17 +56,29 @@ int main(void)
         const uint64_t t = now();
         int n = snprintf(text, sizeof text, "PADTEST          T %05lu\nS0 %08lX S1 %08lX\n", (unsigned long)(t / CONFIG_CLOCK_FREQUENCY),
                          (unsigned long)s0, (unsigned long)s1);
+        if (n < 0) n = 0;                              /* snprintf reports < 0 on an encoding error */
         int changed = 0;
         for (int i = 0; i < 4; i++) {
             uint32_t k, j;
             uint16_t b; int8_t x, y;
             read_pad(i, &k, &j);
             n64rt_pad_map(k, j, s0, s1, map, &b, &x, &y);
-            n += snprintf(text + n, sizeof text - (size_t)n, "P%d K %08lX BTN %04X\n  J %02X %02X %02X %02X  S%+03d%+03d\n", i + 1, (unsigned long)k, b,
-                          (unsigned)(j & 255u), (unsigned)((j >> 8) & 255u), (unsigned)((j >> 16) & 255u), (unsigned)(j >> 24), x, y);
+            /* clamp offset and remaining size: a negative n (or one past the
+             * buffer) must not make the size argument wrap around */
+            size_t off = (size_t)n < sizeof text ? (size_t)n : sizeof text;
+            size_t rem = sizeof text - off;
+            int m = snprintf(text + off, rem, "P%d K %08lX BTN %04X\n  J %02X %02X %02X %02X  S%+03d%+03d\n", i + 1, (unsigned long)k, b,
+                             (unsigned)(j & 255u), (unsigned)((j >> 8) & 255u), (unsigned)((j >> 16) & 255u), (unsigned)(j >> 24), x, y);
+            if (m < 0) break;                          /* encoding error: stop writing pads */
+            n += (int)m;
             if (k != lk[i] || j != lj[i]) changed = 1;
         }
-        n += snprintf(text + n, sizeof text - (size_t)n, "TYPE: 0 NONE 1 POCKET\n2 DOCK 3 DOCK WITH STICK\n");
+        {
+            size_t off = (size_t)n < sizeof text ? (size_t)n : sizeof text;
+            size_t rem = sizeof text - off;
+            int m = snprintf(text + off, rem, "TYPE: 0 NONE 1 POCKET\n2 DOCK 3 DOCK WITH STICK\n");
+            if (m >= 0) n += (int)m;
+        }
         if (changed && t - t_log > CONFIG_CLOCK_FREQUENCY / 10u) {
             t_log = t;
             for (int i = 0; i < 4; i++) {

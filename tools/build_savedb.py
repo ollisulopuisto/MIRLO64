@@ -25,7 +25,7 @@ characters at ROM 0x3B..0x3E), no ROM data. Sources, all public:
 Usage:  tools/build_savedb.py [--fetch] [--dir <cache dir>] [-o <out>] [--ares] [--micro64]
   --fetch downloads the files into the cache dir (default /tmp/n64savedb_src) first (urllib, or curl if that fails).
 """
-import argparse, html, os, re, subprocess, sys, time, urllib.request
+import argparse, html, html.parser, os, re, subprocess, sys, time, urllib.request
 
 URLS = {
     'mupen64plus.ini': 'https://raw.githubusercontent.com/mupen64plus/mupen64plus-core/master/data/mupen64plus.ini',
@@ -94,14 +94,43 @@ def norm(t):
     t = html.unescape(t).lower().replace('&', ' and ').replace("'", '')
     return ' '.join(w for w in re.sub(r'[^a-z0-9]+', ' ', t).split() if w != 'the')
 
+class _Micro64Text(html.parser.HTMLParser):
+    """the visible text of a micro-64 page, parsed with a real HTML parser:
+    regexp tag filters (such as `<[^>]+>`) can be bypassed by malformed markup
+    and they also eat text that merely looks like a tag"""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.skip = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ('script', 'style'):
+            self.skip = True
+        elif tag == 'br':
+            self.parts.append('\n')
+
+    def handle_endtag(self, tag):
+        if tag in ('script', 'style'):
+            self.skip = False
+        elif tag in ('td', 'tr', 'p', 'div', 'li', 'th') or (len(tag) == 2 and tag[0] == 'h' and tag[1].isdigit()):
+            self.parts.append('\n')
+
+    def handle_data(self, d):
+        if not self.skip:
+            self.parts.append(d)
+
+    def text(self):
+        return ''.join(self.parts)
+
+
 def micro64_entries(path):
     """the page's (type, title), in its order (the section headings give the type)"""
     s = open(path, encoding='latin-1').read()
-    s = re.sub(r'<script.*?</script>', '', s, flags=re.S | re.I)
-    s = re.sub(r'<br\s*/?>', '\n', s, flags=re.I)
-    s = re.sub(r'</(td|tr|p|h\d|div|li|th)>', '\n', s, flags=re.I)
+    p = _Micro64Text()
+    p.feed(s)
+    p.close()
     cur, out = None, []
-    for l in html.unescape(re.sub(r'<[^>]+>', '', s)).split('\n'):
+    for l in p.text().split('\n'):
         l = l.strip()
         if l in MICRO64_SECTIONS: cur = MICRO64_SECTIONS[l]; continue
         if l.startswith('Credit for a lot'): cur = None
