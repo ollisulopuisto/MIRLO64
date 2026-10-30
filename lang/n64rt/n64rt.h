@@ -11,7 +11,7 @@
  *
  *   - threads, message queues, events, timers: a priority-preemptive
  *     scheduler of the game's threads (n64rt_os.c, n64rt_exc.S)
- *   - VI, PI (the ROM is in SDRAM), SI (the Pocket's controllers), AI and
+ *   - VI, PI (the ROM is split between SDRAM and PSRAM), SI (the Pocket's controllers), AI and
  *     the RSP's tasks (n64rt_io.c)
  *
  * A game supplies an n64rt_game_t: where its ROM is, how it boots, and the
@@ -208,7 +208,7 @@ int n64rt_hook_break(u32 epc);
 
 typedef struct {
     const char  *name;
-    u32          rom_sdram;         /* where the ROM sits in SDRAM (its words as the N64's) */
+    u32          rom_sdram;         /* ROM's bridge address (legacy field name; the ROM can span both memories) */
     u32          rom_size;
     u32          boot_rom, boot_vram, boot_len;   /* what IPL3 copies (ROM offset -> RDRAM) */
     u32          entry;             /* where IPL3 jumps */
@@ -245,13 +245,13 @@ void n64rt_run(const n64rt_game_t *g) __attribute__((noreturn));
  * bridge's place of it, 0x4000_0000 + its offset in the file) and rom_size,
  * then n64rt_run(g); the port fills in the rest of g.
  * The ROM is read where the Pocket's load leaves it and never moved
- * (lang/mips/include/layout.h): its first 32 MiB in the PSRAM, the rest in
- * the SDRAM (MONITOR.ID bit 7), both through the core's window at
+ * (lang/mips/include/layout.h): its first 30 MiB in PSRAM, the rest in
+ * SDRAM, both through the core's window at
  * N64RT_ROM_WIN, whose byte o is the file's at 1 MiB + o -- the cartridge's
  * reads of the ROM, decoded as the game's are. n64rt_rom_word() and
  * n64rt_rom_copy() read it. */
 #define N64RT_ROM_FILE_OFF 0x00100000u
-#define N64RT_ROM_PSRAM_MAX 0x02000000u    /* the ROM's part in the PSRAM */
+#define N64RT_ROM_SPLIT 0x01E00000u    /* ROM offsets below this are in PSRAM */
 #define N64RT_ROM_WIN      0x30000000u
 u32  n64rt_rom_word(u32 off);
 void n64rt_rom_copy(void *dst, u32 off, u32 size);
@@ -287,11 +287,21 @@ extern u32 n64rt_cpu64, n64rt_cpu_alu, n64rt_cpu_sh, n64rt_cpu_md;   /* what the
 extern u32 n64rt_yield_wait_ms;            /* a port's: a graphics task's yield held back this long (n64rt_rsp.c) */
 /* controller 1's accessory (n64rt_pak.c): the game's own osPfs* and osGbpak*
  * run on these blocks */
-enum { N64RT_PAK_NONE, N64RT_PAK_CONTROLLER, N64RT_PAK_TRANSFER };   /* (the "Controller 1 pak" setting's values: n64rt_pak.c) */
+enum { N64RT_PAK_NONE, N64RT_PAK_CONTROLLER, N64RT_PAK_TRANSFER, N64RT_PAK_VIRTUAL };   /* (the "Controller 1 pak" setting's values: n64rt_pak.c) */
 void n64rt_pak_init(void);
 int  n64rt_pak_kind(int ch);
 int  n64rt_pak_rw(int ch, u32 addr, u8 *block, int write);
 u8   n64rt_pak_crc(const u8 *block);
+/* the GameShark codes (n64rt_cheat.c): read once, when the game starts, and run in every field */
+void n64rt_cheat_init(void);
+void n64rt_cheat_field(void);
+u32  n64rt_slot_size(u32 slot, u32 want);  /* a data slot's file size in the core's table (0: no file); want != 0 sets it (n64rt_pak.c) */
+/* the virtual Transfer Pak's Game Boy cartridge, made of data.json's slots 5 and 6 (n64rt_gbvirt.c) */
+int  n64rt_gbv_look(void);                 /* 1: a cartridge is in its slot (a ROM with a header checksum and logo right, of a mapper it has) */
+u32  n64rt_gbv_id(void);                   /* its header's CRC */
+void n64rt_gbv_power(int on);              /* the cartridge's power: on is its reset */
+u8   n64rt_gbv_read(u32 addr);             /* its bus, 0x0000 - 0xBFFF */
+void n64rt_gbv_write(u32 addr, u8 value);
 void *n64rt_rdram_alloc(u32 size);         /* zeroed RDRAM the game can reach (above its mem_size) */
 /* a task of another microcode (not graphics or audio): a game port may
  * provide it (weak; 1 = done) */

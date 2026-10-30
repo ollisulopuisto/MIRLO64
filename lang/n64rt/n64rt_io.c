@@ -312,6 +312,7 @@ static void vi_field_common(void)
         n64rt_dump_threads();
     }
 #endif
+    n64rt_cheat_field();
 }
 
 /* (n64rt_tick, interrupts off) */
@@ -346,7 +347,7 @@ void n64rt_vi_after_boundary(void)
     if (s_vi_gamma != s_vi_gamma_cur) { s_vi_gamma_cur = s_vi_gamma; vi_width_gamma(); }
 }
 
-/* ---- PI: the ROM is in SDRAM; domain 2 is the cartridge's save ------------------
+/* ---- PI: the ROM spans PSRAM and SDRAM; domain 2 is the cartridge's save ---------
  *
  * Domain 2 (PI 0x0800_0000) is the cartridge's save memory: a battery-backed SRAM (32 KiB: Ocarina of Time) reached by
  * DMA at an offset -- PI_WR_LEN reads it into the RDRAM, PI_RD_LEN writes the RDRAM into it -- or a FlashRAM (128 KiB:
@@ -990,8 +991,8 @@ static int si_write(u32 pa, u32 v)
 #define PFS_ERR_NOPACK 1
 /* ---- EEPROM: the Pocket's save slot ------------------------------------------
  * A 4-Kbit EEPROM (64 blocks of 8 bytes) on data.json's slot 1 ("Save":
- * nonvolatile, 0x200 bytes at bridge 0x07320000 = SDRAM 0x43320000, in the
- * saves' part of the SDRAM -- lang/mips/include/layout.h; 0xFF when there is
+ * nonvolatile, 0x200 bytes at bridge 0x07320000 = PSRAM window 0x34140000, in the
+ * saves' part of PSRAM -- lang/mips/include/layout.h; 0xFF when there is
  * no file yet, an erased EEPROM). The Pocket writes the .sav there before the
  * core starts and reads it back into the file when the core quits or the
  * Pocket sleeps, so the game just uses that memory (as Super Mirlo 64's
@@ -1278,6 +1279,7 @@ void n64rt_io_init(void)
     n64rt_eeprom_init();
     eep_db_init();
     ctrl_init();
+    n64rt_cheat_init();
     n64rt_pak_init();
     extern void n64rt_audio_init(void), n64rt_gfx_init(void);
     n64rt_audio_init();
@@ -1386,13 +1388,14 @@ u32 n64rt_si_hw(void) { return s_si_hw; }
  * joybus commands on the copy (pif_run, as the software SI's) or answer the challenge, write back the words that changed, and say
  * the PIF is done: IO busy clears, and an RD64B that waited goes on once the console's time for those commands is over (SIDONE's
  * value: a game whose controller thread polls in a loop must leave its other threads that time; a challenge, 0). */
+u32 n64rt_si_joy;                       /* the PIF has run a block's commands: rcp_si.sv's `joy` is set (a save state keeps it) */
 void n64rt_si_hw_event(void)
 {
     u32 orig[16];
     for (int i = 0; i < 16; i++) orig[i] = s_pif_w[i] = hw_rd(PIF_RAM + 4u * (u32)i);
     u32 t = 0;
     if (s_pif[63] & 2u) pif_challenge();             /* (the status byte keeps that bit: a challenge, not commands) */
-    else t = pif_run();
+    else { t = pif_run(); n64rt_si_joy = 1; }
     for (int i = 0; i < 16; i++) if (s_pif_w[i] != orig[i]) hw_wr(PIF_RAM + 4u * (u32)i, s_pif_w[i]);
     monitor_sidone_write(t < 0x3FFFFu ? t : 0x3FFFFu);
 }
@@ -1459,6 +1462,8 @@ static inline u32 rsp_rd(u32 off) { return *(volatile u32 *)(uintptr_t)(0x200000
  * view of it, from the SoC's uptime counter. */
 static u32 s_dpc_clk0;
 static u32 s_pi_wr_len;                 /* PI_WR_LEN as a read gives it (pi_advance, below) */
+/* (n64rt_state.c) a save state put back: the SoC's clock is that much further on than the state's runtime had it */
+void n64rt_io_rebase(u32 cycles) { s_dpc_clk0 += cycles; }
 static u32 dpc_clock(void)
 {
     if (n64rt_game && n64rt_game->cic == 6105u) return 0u;
@@ -1570,6 +1575,8 @@ static inline void dbg_tick(void) { }
 void n64rt_vi_hw_event(void);
 void n64rt_ai_hw_event(void);
 void n64rt_si_hw_event(void);
+void n64rt_state_event(void);
+void n64rt_state_poll(void);
 void n64rt_rcp_events(void)
 {
     u32 pend = monitor_pend_read();
@@ -1616,6 +1623,8 @@ void n64rt_rcp_events(void)
         if (s_ai_hw) n64rt_ai_hw_event();             /* (the AI in hardware: bit 3 is a write of AI_DACRATE, not a SYNC FULL) */
         else if (!s_mi_hw) s_mi_sw |= MI_DP;          /* SYNC FULL */
     }
+    if (pend & 4u) n64rt_state_poll();                /* (whether the Pocket may ask for a save state) */
+    if (pend & 32u) n64rt_state_event();              /* the Pocket asks for a save state, or for its load (n64rt_state.c) */
 }
 static u32 vi_current(void)
 {
@@ -1771,8 +1780,8 @@ static u32 pi_wr_bytes(u32 pa, u32 len)
     const u32 n = (len & 0x00FFFFFFu) + 1u;
     return n <= 126u && n <= 0x800u - (pa & 0x7FFu) ? n : (n + 1u) & ~1u;
 }
-/* A cartridge DMA by the engine, if it can do it (1): words of the SDRAM to words of the SDRAM. Into the RDRAM from the ROM
- * (MONITOR.ID bit 7: its first 32 MiB from the PSRAM, PISRC bit 25) and, with PI2 (MONITOR.ID bit 6), from a cartridge address 2 mod 4,
+/* A cartridge DMA by the engine, if it can do it (1): words between SDRAM and PSRAM. Into RDRAM from the ROM
+ * (the first 30 MiB from PSRAM, PISRC bit 25) and, with PI2 (MONITOR.ID bit 6), from a cartridge address 2 mod 4,
  * of any length, and from domain 2 (the save's memory; a FlashRAM's array, or its status words); from the RDRAM into
  * domain 2 (an SRAM, a FlashRAM's page buffer). Without PI2 only whole words, word-aligned at both ends, from the ROM. It
  * ends in the PI interrupt, the engine's. The game's D-cache lines over an RDRAM destination go first: the engine writes
@@ -1780,22 +1789,24 @@ static u32 pi_wr_bytes(u32 pa, u32 len)
 static int pi_hw_dma(int rd, u32 dev, u32 pa, u32 size)
 {
     const u32 cpa = dev & 0x1FFFFFFFu, rdram = N64RT_RDRAM_SDRAM + pa;
-    u32 src = 0, dst = 0, ps = 0;
+    u32 src = 0, dst = 0, ps = 0, ps_dst = 0;
     if (size == 0u || (pa & 3u) || pa + size > 0x800000u || (size >> 2) >= (1u << 21) - 1u) goto soft;
     if (cpa >= 0x08000000u && cpa < 0x10000000u) {                   /* domain 2: the save */
         if (!s_pi2_hw) goto soft;
         if (s_d2 == D2_NONE) d2_use(D2_SRAM);
         const u32 a = d2_engine_addr(rd, (cpa - 0x08000000u) & (D2_WINDOW - 1u), size);
         if (!a) goto soft;
-        if (rd) dst = a; else src = a;
+        /* Domain 2's backing memory is the raw PSRAM window. */
+        if (rd) { dst = 0x40000000u + (a - 0x34000000u); ps_dst = 1u; }
+        else { src = 0x40000000u + (a - 0x34000000u); ps = 1u; }
     } else if (!rd && cpa >= 0x10000000u && cpa < 0x1FC00000u) {    /* the ROM */
         u32 off = cpa - 0x10000000u;
         if (size > n64rt_game->rom_size || off > n64rt_game->rom_size - size) goto soft;
-        /* (the core's own placement, the ROM at 1 MiB: its first 32 MiB in the PSRAM -- the word the SDRAM's would be, its 23
-         * low bits --, the rest in the SDRAM from 1 MiB; a copy across 32 MiB stays the runtime's) */
+        /* ROM offsets below 30 MiB are in PSRAM; offsets thereafter are in SDRAM.
+         * A DMA crossing the split uses the runtime's copy path. */
         if (!s_rom64_hw || n64rt_game->rom_sdram != 0x40100000u) goto soft;
-        if (off + size <= N64RT_ROM_PSRAM_MAX) { ps = 1u; src = 0x40100000u + off; }
-        else if (off >= N64RT_ROM_PSRAM_MAX) src = 0x40100000u + (off - N64RT_ROM_PSRAM_MAX);
+        if (off + size <= N64RT_ROM_SPLIT) { ps = 1u; src = 0x40200000u + off; }
+        else if (off >= N64RT_ROM_SPLIT) src = 0x40000000u + off - 0x01D00000u;
         else goto soft;
     } else goto soft;
     if (rd) src = rdram; else dst = rdram;
@@ -1805,7 +1816,7 @@ static int pi_hw_dma(int rd, u32 dev, u32 pa, u32 size)
         if (n64rt_gfx_quiesce && fb_overlaps(pa, size)) n64rt_gfx_quiesce();
         flush_cpu_dcache_range(K0P(pa), size);
     }
-    monitor_pidst_write((dst - 0x40000000u) >> 2);                    /* (an RDRAM word: 0xE0_0000 + its word, which a core without
+    monitor_pidst_write(((dst - 0x40000000u) >> 2) | (ps_dst << 25));                    /* (an RDRAM word: 0xE0_0000 + its word, which a core without
                                                                        * PI2 takes as its 21 bits) */
     monitor_pisrc_write((((src - 0x40000000u) >> 2) & 0x00FFFFFFu) | ((src >> 1) & 1u) << 24 | ps << 25);
     monitor_pilen_write(s_pi2_hw ? ((size + 3u) >> 2) | (size & 3u) << 22 : size >> 2);

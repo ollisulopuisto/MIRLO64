@@ -31,10 +31,20 @@
 // rest -- the slots' files -- goes through the bridge's port, a word at a
 // time. BRIDGE_ALL=1: all of it through the port, as the Pocket does it
 // (some 6 clocks a word).
+//   BRIDGE_ROM_PROBES=1  exercise selected ROM boundary words through the bridge
 //   VERIFY=1         when the load is over, and again at the end (then less
 //                    the program's megabyte and the saves), the chips'
 //                    models are compared with the files, each byte where
 //                    docs/mips.md says it is
+// The Pocket's save states (Sleep, Memories: target/pocket/core_top.sv, lang/n64rt/n64rt_state.c):
+//   SS_SAVE=<field>  the Pocket asks for a state at that field; when the core
+//                    answers, the state's block is read out into SS_OUT
+//                    (default <-o dir>/state.bin). SS_EXIT=1: the run ends then
+//   SS_LOAD=<file>   a state the Pocket copies in at the field SS_LOAD_AT
+//                    (default 60) and then asks the core to load
+//   SS_BRIDGE=1      the state read out and copied in through the bridge's
+//                    port, a word at a time, as the Pocket does (else straight
+//                    to and from the chip model)
 #include "Vsoc_sim_top.h"
 #include "Vsoc_sim_top___024root.h"
 #include "verilated.h"
@@ -178,7 +188,7 @@ static void chip_step()
 }
 
 // ---- the PSRAMs (AS1C8M16PL-70: two chips side by side as 32 bits, each two
-// dies of 4 M words; rtl/soc/psram.sv: die 0 the scan-out's woven picture, die 1 a 64 MiB ROM's last 16 MiB). What the chips see is what the PHY's
+// dies of 4 M words; rtl/soc/psram.sv selects them for the current layout). What the chips see is what the PHY's
 // registers hold, stepped twice a sys cycle (h: half cycles, 7.96 ns): after
 // clk's rising edge, and after its falling edge -- which is the chips' rising
 // clock edge when the PHY has the clock on. The checks are the datasheet's,
@@ -315,9 +325,14 @@ static uint32_t o_rcp_ilo, o_rcp_ihi;
 static bool ck_run;                     // this is a run from a checkpoint
 static bool o_pad_load = true;          // PAD.., PAD_MASH are to be read (at the start, and again by a run from a checkpoint)
 static FILE *o_ailog; static bool o_ailog_load = true;   // AILOG likewise (a run from a checkpoint: its own file, or none)
+static long o_ss_save, o_ss_load_at;    // SS_SAVE, SS_LOAD_AT (SS_LOAD, SS_OUT, SS_EXIT are read at their use): a run from a checkpoint's too
+static bool ss_bridge;
 static void opts_load()
 {
     o_cmodel = getenv("CONMODEL") != nullptr;
+    o_ss_save = getenv("SS_SAVE") ? atol(getenv("SS_SAVE")) : -1;
+    o_ss_load_at = getenv("SS_LOAD_AT") ? atol(getenv("SS_LOAD_AT")) : 60;
+    ss_bridge = getenv("SS_BRIDGE") != nullptr;
     o_cstat = getenv("CPUSTAT") != nullptr; o_ctrace = getenv("CPUTRACE") != nullptr; o_excstat = getenv("EXCSTAT") != nullptr;
     ct_from = -1; ct_n = 0;
     o_exc_per = o_excstat && atoi(getenv("EXCSTAT")) > 1 ? atoi(getenv("EXCSTAT")) : 60;
@@ -429,7 +444,7 @@ static void cpu_stat_step(long sys)
 struct Slot { uint32_t addr = 0, size = 0; bool there = false, nv = false; std::vector<uint8_t> data, back; };
 static Slot slots[8];
 static std::vector<uint8_t> &img = slots[0].data;   // slot 0: the program / the game file (with ROM=: the ROM)
-static const uint32_t FILE_PSRAM_END = 33u << 20;   // (lang/mips/include/layout.h's LAYOUT_FILE_PSRAM
+static const uint32_t FILE_PSRAM_END = 31u << 20;   // (lang/mips/include/layout.h's LAYOUT_FILE_PSRAM
 static const uint32_t FILE_ROM_END = 65u << 20;     // and LAYOUT_FILE_MAX)
 static const int PROG_SLOT = 3;                     // with ROM=: the program's (data.json's "Runtime")
 static bool read_file(const char *path, std::vector<uint8_t> &d)
@@ -470,19 +485,23 @@ static bool read_data_json(const std::string &path)
 struct BrJob { int slot; bool write; uint32_t addr; size_t off, len; };
 static std::deque<BrJob> br_jobs;
 static size_t br_pos;
-// Where the bridge's map puts a word the Pocket writes (rtl/soc/mirlo_mips.sv): the SDRAM below 1 MiB, the PSRAM from there to
-// 33 MiB (at the address mod 32 MiB: its word's bit 22 the die), the SDRAM at the address less 32 MiB up to 65 MiB, else the
-// SDRAM at the address's low 26 bits
+// ROM file bytes 1..31 MiB go to PSRAM at 2..32 MiB; 31..65 MiB go to SDRAM at 1..35 MiB.
 static void place(uint32_t a, uint32_t w)
 {
-    if (a >= (1u << 20) && a < FILE_PSRAM_END) { uint32_t x = (a / 4) & 0x7FFFFFu; psm[x >> 22][0][x & 0x3FFFFFu] = (uint16_t)(w >> 16); psm[x >> 22][1][x & 0x3FFFFFu] = (uint16_t)w; }
-    else if (a >= FILE_PSRAM_END && a < FILE_ROM_END) wr_word((a - (32u << 20)) / 4, w);
+    if (a >= (1u << 20) && a < FILE_PSRAM_END) { uint32_t x = (a + (1u << 20)) / 4; psm[x >> 22][0][x & 0x3FFFFFu] = (uint16_t)(w >> 16); psm[x >> 22][1][x & 0x3FFFFFu] = (uint16_t)w; }
+    else if (a >= FILE_PSRAM_END && a < FILE_ROM_END) wr_word((a - (30u << 20)) / 4, w);
     else wr_word((a & 0x3FFFFFFu) / 4, w);
 }
 static uint32_t placed(uint32_t a)
 {
-    if (a >= (1u << 20) && a < FILE_PSRAM_END) { uint32_t x = (a / 4) & 0x7FFFFFu; return (uint32_t)psm[x >> 22][0][x & 0x3FFFFFu] << 16 | psm[x >> 22][1][x & 0x3FFFFFu]; }
-    if (a >= FILE_PSRAM_END && a < FILE_ROM_END) return rd_word((a - (32u << 20)) / 4);
+    if (a >= (1u << 20) && a < FILE_PSRAM_END) { uint32_t x = (a + (1u << 20)) / 4; return (uint32_t)psm[x >> 22][0][x & 0x3FFFFFu] << 16 | psm[x >> 22][1][x & 0x3FFFFFu]; }
+    if (a >= FILE_PSRAM_END && a < FILE_ROM_END) return rd_word((a - (30u << 20)) / 4);
+    if ((a >> 20) == 0x73) {
+        uint32_t off = a & 0xfffffu;
+        if ((off >> 17) == 1) off += 0x20000u;
+        uint32_t x = (0x100000u + off) / 4;
+        return (uint32_t)psm[x >> 22][0][x & 0x3FFFFFu] << 16 | psm[x >> 22][1][x & 0x3FFFFFu];
+    }
     return rd_word((a & 0x3FFFFFFu) / 4);
 }
 // The chips' models against the files, each byte where the bridge's map puts its address. `end`: less what a program
@@ -606,6 +625,21 @@ static void dump_frame(const std::string &dir, long n)
     fclose(f);
 }
 
+// the save state's block (lang/mips/include/layout.h LAYOUT_STATE; target/pocket/core_top.sv SS_ADDR, SS_SIZE)
+static const uint32_t SS_SDRAM = 0x02300000u, SS_BRIDGE_ADDR = 0x06300000u, SS_BYTES = 0x00A00000u;
+static int ss_req;                  // 1 a save asked, 2 a load asked, 3 a load's copy under way, 4 a save's read-out under way
+static long ss_req_sys;
+static bool ss_done_was;
+static std::string ss_out;
+static void ss_write(const std::string &path, const std::vector<uint8_t> &d)
+{
+    FILE *f = fopen(path.c_str(), "wb");
+    if (!f || fwrite(d.data(), 1, d.size(), f) != d.size()) printf("[state: cannot write %s]\n", path.c_str());
+    else printf("[state: %zu bytes into %s]\n", d.size(), path.c_str());
+    if (f) fclose(f);
+    fflush(stdout);
+}
+
 int main(int argc, char **argv)
 {
     Verilated::commandArgs(argc, argv);
@@ -657,16 +691,25 @@ int main(int argc, char **argv)
             if (d.empty() || ((k == 0 || k == prog) != (pass == (slots_first ? 1 : 0)))) continue;
             slots[k].size = (uint32_t)d.size();
             size_t len = (d.size() + 3) & ~(size_t)3, direct = 0;
-            if (!bridge_all && slots[k].addr < FILE_ROM_END) {
+            if (!bridge_all && !(getenv("BRIDGE_SLOT") && k == atoi(getenv("BRIDGE_SLOT"))) && slots[k].addr < FILE_ROM_END) {
                 direct = len < FILE_ROM_END - slots[k].addr ? len : FILE_ROM_END - slots[k].addr;
                 for (size_t i = 0; i < direct; i += 4) {
                     const uint32_t a = slots[k].addr + (uint32_t)i;
-                    if (a >= (56u << 20) && a < (64u << 20)) wr_word(a / 4, be32(d, i));   // (56 MiB to 64: the SDRAM's own write first)
                     place(a, be32(d, i));
                 }
             }
             if (direct < len) br_jobs.push_back({k, true, slots[k].addr + (uint32_t)direct, direct, len - direct});
         }
+    // Exercise the real bridge decoder at the ends of both ROM regions without
+    // sending the entire 64 MiB image through the simulated bus.
+    if (getenv("BRIDGE_ROM_PROBES") && slots[0].data.size() == (64u << 20)) {
+        const uint32_t offsets[] = {0, 0x00dffffc, 0x00e00000, 0x01dffffc, 0x01e00000, 0x02000000, 0x03000000, 0x03700000, 0x03fffffc};
+        for (uint32_t off : offsets) {
+            uint32_t a = slots[0].addr + off;
+            place(a, 0);
+            br_jobs.push_back({0, true, a, off, 4});
+        }
+    }
     const std::vector<uint8_t> &program = slots[prog].data;
     printf("program: %zu bytes at 0x40000000%s\n", program.size(), noload ? " (NOLOAD: not given)" : "");
     // PRELOAD=file@0xADDR[@0xMARK]: a file's big-endian words straight into SDRAM
@@ -702,6 +745,7 @@ int main(int argc, char **argv)
     std::vector<std::pair<int, uint32_t>> ia_list;
     if (const char *e = getenv("INTERACT")) for (const char *q = e; *q; ) { int a = (int)strtol(q, (char **)&q, 0); if (*q == ':') q++; uint32_t v = (uint32_t)strtoul(q, (char **)&q, 0); ia_list.push_back({a, v}); if (*q == ',') q++; }
     t->file_size = slots[0].size; t->br_complete = 0;
+    t->ss_save_t = 0; t->ss_load_t = 0;
     long br_done_at = -1;                           // the bridge's read completes then (sys cycles)
     t->reset = 1;
     t->wbm_cyc = 0; t->wbm_we = 0; t->wbm_adr = 0; t->wbm_dat_w = 0;
@@ -776,6 +820,32 @@ int main(int argc, char **argv)
                     t->host_reset_n = 1; t->host_loaded = !noload;
                 }
             }
+            // the save states: a load asked for once its copy through the bridge is done; the core's answer, and a state read out
+            if (ss_req == 3 && br_jobs.empty() && !t->wbm_cyc) { ss_req = 2; ss_req_sys = sys; t->ss_load_t = !t->ss_load_t; }
+            if (t->ss_done_t != ss_done_was) {
+                ss_done_was = t->ss_done_t;
+                printf("[state: the core answers the %s at field %ld: %s, %.1f ms after the request]\n", ss_req == 1 ? "save" : "load", frames,
+                       t->ss_err ? "FAILED" : "done", (sys - ss_req_sys) / TB_SYS_KHZ);
+                fflush(stdout);
+                if (o_ailog) fprintf(o_ailog, "M %s\n", ss_req == 1 ? "save" : "load");     // (state_compare.py --audio: where it was)
+                if (ss_req == 1 && !t->ss_err) {
+                    ss_out = getenv("SS_OUT") ? getenv("SS_OUT") : (outdir.empty() ? std::string(".") : outdir) + "/state.bin";
+                    const uint32_t n = ((uint32_t)t->br_length >> 20 & 0xFu) << 20;          // (what the core says it wrote: the Pocket reads that much)
+                    printf("[state: %u bytes of %u]\n", n, SS_BYTES);
+                    if (ss_bridge) {
+                        slots[7].back.assign(n, 0); slots[7].size = n;
+                        br_jobs.push_back({7, false, SS_BRIDGE_ADDR, 0, n});
+                        ss_req = 4;
+                    } else {
+                        std::vector<uint8_t> d(n);
+                        for (uint32_t i = 0; i < n; i += 4) { uint32_t v = rd_word((SS_SDRAM + i) / 4); d[i] = v >> 24; d[i + 1] = v >> 16; d[i + 2] = v >> 8; d[i + 3] = v; }
+                        ss_write(ss_out, d);
+                        ss_req = 0;
+                        if (getenv("SS_EXIT")) done = true;
+                    }
+                } else ss_req = 0;
+            }
+            if (ss_req == 4 && br_jobs.empty() && !t->wbm_cyc) { ss_write(ss_out, slots[7].back); ss_req = 0; if (getenv("SS_EXIT")) done = true; }
             // PAD="from-to:keys[/joy],...": controller 1's keys (hex, the Pocket's: 0010 A, 0020 B,
             // 8000 Start, 0001/2/4/8 the D-pad; KEY_TYPE in the top nibble: 30000000 a dock pad with
             // analog) held over those fields, and optionally its four stick bytes (hex: LX, LY, RX, RY from
@@ -1100,6 +1170,26 @@ int main(int argc, char **argv)
                            (t->vi_dbg0 >> 28) & 1 ? "PAL" : "NTSC", (t->vi_dbg0 >> 27) & 1 ? ((t->vi_dbg0 >> 26) & 1 ? "625" : "525") : "-");
                 if (!outdir.empty() && frames % every == 0) dump_frame(outdir, frames);
                 frames++;
+                // SS_SAVE / SS_LOAD (the header): the Pocket's request, at its field -- a load once the state is in
+                {
+                    if (frames == o_ss_save) {
+                        printf("[state: the Pocket asks for a save state at field %ld, sys %ld]\n", frames, sys); fflush(stdout);
+                        ss_req = 1; ss_req_sys = sys; t->ss_save_t = !t->ss_save_t;
+                    }
+                    if (frames == o_ss_load_at && getenv("SS_LOAD")) {
+                        std::vector<uint8_t> d;
+                        if (!read_file(getenv("SS_LOAD"), d) || d.size() > SS_BYTES || d.empty()) { printf("[state: %s is no state]\n", getenv("SS_LOAD")); return 2; }
+                        printf("[state: the Pocket copies a state in at field %ld, sys %ld]\n", frames, sys); fflush(stdout);
+                        if (ss_bridge) {
+                            slots[7].data = d; slots[7].size = (uint32_t)d.size();
+                            br_jobs.push_back({7, true, SS_BRIDGE_ADDR, 0, d.size()});
+                            ss_req = 3;             // (the load is asked for when the bridge is done)
+                        } else {
+                            for (size_t i = 0; i < d.size(); i += 4) wr_word((SS_SDRAM + (uint32_t)i) / 4, be32(d, i));
+                            ss_req = 2; ss_req_sys = sys; t->ss_load_t = !t->ss_load_t;
+                        }
+                    }
+                }
                 // CKPT=<dir>,<n>: every n fields a copy of the run is left waiting (a process forked from it, asleep). A file
                 // <dir>/go_<field> starts a run from that copy, as many times as wanted: its lines are NAME=value -- LOG (its
                 // output), OUT and EVERY (-o, -e), MCYCLES (how many more million cycles), and any of the options read again
@@ -1185,6 +1275,17 @@ int main(int argc, char **argv)
             if (gpcprof && sys >= pcprof_from && (sys & 255) == 0) {
                 if (t->geom_msg == 0xB0000040u) gpc_idle++; else gpc_hist[t->geom_pc]++;
             }
+            if (getenv("TBLINETRACE") && (t->diag_line & 0x80000000u)) {
+                static unsigned lastline=~0u;
+                unsigned line=(t->diag_line >> 4) & 1023u;
+                if (line!=lastline) { lastline=line; printf("[line %ld %u diag=%08x flow=%08x]\n",sys,line,t->diag_line,t->diag_flow); }
+            }
+            if (getenv("TBVIDTRACE") && (t->diag_vid_flags & 0x80)) {
+                static long nv=0;
+                unsigned f=t->diag_vid_flags;
+                if (((f & 0x30)==0x30 || (f & 8)) && nv++ < 20000)
+                    printf("[vid %ld f=%02x addr=%06x data=%08x tag=%02x]\n",sys,f,t->diag_vid_addr,t->diag_vid_data,t->diag_vid_tag);
+            }
             // MEMSTAT=1: the SDRAM's use -- the words each port had, the rows
             // opened (and of them, those in a bank nothing had used for 8
             // cycles: a row another request could have had opened behind the
@@ -1195,7 +1296,8 @@ int main(int argc, char **argv)
             static const bool mstat = getenv("MEMSTAT") != nullptr;
             if (mstat) {
                 static long mp[6], mact, mact_idle, mwords, mwait, mrow, mturn, rdp, mrsp, mn, last_use[4], last_dir = -1, mswitch;
-                static bool marks;
+                static bool marks; static long hidden[6], saves[6];
+                for (int i=0;i<6;i++) { if (t->mem_hidden & (1u<<i)) hidden[i]++; if (t->mem_save & (1u<<i)) saves[i]++; }
                 unsigned m = t->mem_stat;
                 unsigned c = (m >> 6) & 7, ba = (m >> 9) & 3;
                 bool mark0 = t->x_ack && t->x_we && t->x_addr == 0xF0000504u && (t->x_wdata >> 24) == 0xA5u;
@@ -1215,9 +1317,10 @@ int main(int argc, char **argv)
                            "a word moved %.0f %% of the cycles, the controller on a row %.0f %%, on the bus's turn %.0f %% (%ld turns), a port asking %.0f %%; "
                            "RDP at work %.1f ms, RSP running %.1f ms]\n", mn / TB_SYS_KHZ, mp[0], mp[1], mp[2], mp[3], mp[4], mp[5],
                            mact, mact_idle, 100.0 * mwords / mn, 100.0 * mrow / mn, 100.0 * mturn / mn, mswitch, 100.0 * mwait / mn, rdp / TB_SYS_KHZ, mrsp / TB_SYS_KHZ);
+                    printf("[memdetail hidden scan %ld cpu %ld rdp %ld rsp %ld bridge %ld dpc %ld; save scan %ld cpu %ld rdp %ld rsp %ld bridge %ld dpc %ld]\n", hidden[0], hidden[1], hidden[2], hidden[3], hidden[4], hidden[5], saves[0], saves[1], saves[2], saves[3], saves[4], saves[5]);
                     fflush(stdout);
                 }
-                if (out || mark0) { for (int i = 0; i < 6; i++) mp[i] = 0; mact = mact_idle = mwords = mwait = mrow = mturn = rdp = mrsp = mn = mswitch = 0; }
+                if (out || mark0) { for (int i = 0; i < 6; i++) { hidden[i] = 0; saves[i] = 0; } for (int i = 0; i < 6; i++) mp[i] = 0; mact = mact_idle = mwords = mwait = mrow = mturn = rdp = mrsp = mn = mswitch = 0; }
             }
             // CPUSTAT=1 [CPUSTAT_IDLE=lo,hi]: where the game CPU's cycles go, a
             // line a second or between a program's marks (as MEMSTAT's): the
@@ -1317,6 +1420,7 @@ int main(int argc, char **argv)
     fflush(stdout);
     printf("\n%ld sys cycles, %ld frames, %ld SDRAM protocol errors; cpu pc %08x cause %08x epc %08x\n",
            sys, frames, errors, t->cpu_pc, t->cpu_cause, t->cpu_epc);
+    printf("VI diagnostic: %08x\n", t->diag_vi);
     printf("PSRAM: %ld asynchronous accesses, %ld register writes%s%s\n", ps.n_async, ps.n_cfg, t->ps_ready ? "" : "; NOT set up",
            ps.n_burst ? "; bursts too (there should be none)" : "");
     if (const char *so = getenv("SLOTS_OUT"))

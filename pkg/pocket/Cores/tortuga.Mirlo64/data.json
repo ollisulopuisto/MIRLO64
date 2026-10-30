@@ -56,8 +56,40 @@
         "address": "0x07100000"
       },
       {
-        "name": "Controls",
+        "name": "Game Boy ROM",
         "id": 5,
+        "required": false,
+        "parameters": "0x1",
+        "extensions": [
+          "gb",
+          "gbc"
+        ],
+        "size_maximum": "0x300000",
+        "address": "0x07400000"
+      },
+      {
+        "name": "Game Boy Save",
+        "id": 6,
+        "required": false,
+        "parameters": "0x24",
+        "nonvolatile": true,
+        "extensions": [
+          "gbsav"
+        ],
+        "size_maximum": "0x21000",
+        "address": "0x06D00000"
+      },
+      {
+        "name": "Gameshark codes",
+        "id": 7,
+        "required": false,
+        "parameters": "0x08",
+        "size_maximum": "0x10000",
+        "address": "0x06D40000"
+      },
+      {
+        "name": "Controls",
+        "id": 8,
         "required": false,
         "parameters": "0x24",
         "nonvolatile": true,
@@ -65,7 +97,7 @@
           "ctl"
         ],
         "size_maximum": "0x100",
-        "address": "0x07341000"
+        "address": "0x07361000"
       }
     ]
   }

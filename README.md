@@ -4,7 +4,7 @@
 
 MIRLO 64 is an N64 core made specifically to fit in the Analogue Pocket. It intends to replicate as best as possible the N64 architecture.
 
-It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and runs the games from their own ROMs. This is **version 0.5-patched.1** (based on upstream v0.5) and it is experimental: read [Status](#status) before expecting a particular game to work.
+It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and runs the games from their own ROMs. This tree includes upstream v0.6.1 and the fork's patches; it is experimental: read [Status](#status) before expecting a particular game to work.
 
 ## What is in it
 
@@ -14,15 +14,15 @@ It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and 
 * **Audio**: the game's own audio, at the Pocket's 48 kHz.
 * **Memory**: 8 MiB of RAM, as a console with the Expansion Pak, or 4 MiB with the Pak taken out in the core's settings.
 * **Controllers**: up to four through the Dock, controls are customizable.
-* **Accessories and saves**: Controller Pak, Transfer Pak compatible with physical GB cartridges in the Pocket GB slot, and EEPROM, SRAM and FlashRAM saves.
+* **Accessories and saves**: Controller Pak, Transfer Pak compatible with physical GB cartridges in the Pocket GB slot, a Virtual Transfer Pak that runs a Game Boy ROM and its save from the SD card, and EEPROM, SRAM and FlashRAM saves.
 
 A small runtime, `n64rt.sys`, loads the game and does what is not in hardware. The game runs with its own code, unmodified. No game is included, and games must be in `.z64` format (see [The games' format](#the-games-format)).
 
 ## Status
 
-MIRLO 64 is experimental and not every game works. What is known of v0.5-patched.1:
+MIRLO 64 is experimental and not every game works. This tree is based on v0.6.1:
 
-* ROMs of up to 64 MiB (the first 32 MiB in the Pocket's PSRAM, the rest in its SDRAM).
+* ROMs of up to 64 MiB (the first 30 MiB in the Pocket's PSRAM, the rest in its SDRAM).
 * Rumble Pak is not supported. This is currently a limitation in the Dock.
 * Only controller 1 can have a pak.
 * The size of a cartridge's EEPROM comes from a list on the SD card (`n64savedb.txt`). A game that is not in it gets a 4 Kbit one.
@@ -64,7 +64,8 @@ The core's own menu on the Pocket. The default of each is in bold.
 | Crop Vertical | None, **8 lines**, 12 lines | Blanks that many lines at the top and the bottom of the picture |
 | Crop Right | None, **1 column** | Blanks the picture's last column |
 | Expansion Pak | **On**, off | With it the console has 8 MiB of RAM, without it 4 MiB; takes effect when the game is started again |
-| Controller 1 pak | **None**, Controller Pak, Transfer Pak | The accessory in controller 1 |
+| Controller 1 pak | **None**, Controller Pak, Transfer Pak, Virtual Transfer Pak | The accessory in controller 1; the Virtual Transfer Pak uses a Game Boy ROM and `.gbsav` save |
+| Enable GameShark codes | **Off**, on | Runs codes from `Assets/n64/common/gameshark/` when the game's code file exists |
 | Stick | **D-pad**, L stick, R stick | What moves the N64's analog stick |
 | C buttons | **None**, Right stick | The right stick as the C buttons, besides the face buttons |
 | Shift key | **None**, L, R, ZL, ZR, Select | Held, it switches to the second layer of the controls below; the key never reaches the game |
@@ -77,6 +78,9 @@ The core's own menu on the Pocket. The default of each is in bold.
 **Auto** in a layout list takes the layout you saved for the game, else the game's family (Platformer, Shooter, Skate, Racing or
 Fighter, from the cartridge's ID), else the standard one. The four lists start on Auto at every launch; a list that names a layout
 puts it over what Auto would give. The Pocket's menu does not mark the chosen option of a list.
+The Virtual Transfer Pak loads a `.gb` or `.gbc` file through the core's **Load Game Boy ROM** setting. Copy its existing Game Boy
+save to `Saves/n64/common/<N64 game>.gbsav` before using it. GameShark files go in `Assets/n64/common/gameshark/` and are named
+with the game's cartridge ID and `.txt` extension.
 
 ### Saves
 
@@ -86,6 +90,18 @@ The Pocket writes them to `Saves/n64/common/` when you quit the core. A file app
 |---|---|
 | `<game>.sav` | The cartridge's save: EEPROM, SRAM or FlashRAM, whichever the game uses |
 | `<game>.mpk` | The Controller Pak, when that setting is on |
+| `<game>.gbsav` | The Game Boy game of the Virtual Transfer Pak: the cartridge's RAM, as a Game Boy core keeps it (one file for each N64 game) |
+
+The Game Boy save is named after the N64 game, not after the Game Boy game. **Before using a Game Boy game in the Virtual Transfer Pak, copy its `.sav` (the Game Boy core's, from `Saves/gbc/common/` or `Saves/gb/common/`) to `Saves/n64/common/<N64 game>.gbsav`**: without that file the game starts with an empty save and writes a new one, so a save you already have is not used. To play that game again on a Game Boy core, copy the `.gbsav` back to `Saves/gbc/common/` (or `Saves/gb/common/`) with the name that core uses (`<Game Boy game>.sav`). Keep a copy of the save the first time.
+
+### GameShark codes
+
+With "Enable Gameshark codes" on, the core looks in `Assets/n64/common/gameshark/` for a text file named after the game, `<ID>.txt`, where `<ID>`
+is the four characters of the ROM's header that say its game and its region (for example `NSME`), and runs every code in it, in every video
+field, as a GameShark does. `<ID>.<version>.txt` (the header's version byte, in decimal) is used first, for a revision whose codes differ. There is no
+choosing among the codes: put in the file the ones to run. A code is a line of `80123456 0063`, with anything after it as its description; the
+types are `80` and `81` (writes), `A0` and `A1`, `D0` to `D3` (conditions on the next line), `50` (the repeater) and `F0` and `F1`. The codes are read when the
+game starts. The file `PUT_CODES_HERE.txt` in that folder says it too.
 
 ## Building from source
 
@@ -104,7 +120,7 @@ python3 tools/mips_inits.py                                 # the images the bit
 python3 tools/package_bitstream.py projects/output_files/mirlo.rbf mirlo.rev
 
 make -C lang/n64rt && cp lang/n64rt/build/n64rt.bin n64rt.sys      # the runtime
-python3 tools/make_release.py mirlo.rev n64rt.sys tortuga.Mirlo64_0.5.zip
+python3 tools/make_release.py mirlo.rev n64rt.sys tortuga.Mirlo64_0.6.1.zip
 ```
 
 **The fitter's seed matters.** The design fills about 97 % of the FPGA's logic (the ALMs of each recorded fit are in `projects/fits.json`) and its timing is tight, so whether a compile closes timing depends on the seed (`SEED` in `projects/mirlo.qsf`). `tools/area2/fit.sh <tag> <seed>` compiles a copy of the tree with a seed, and `tools/area2/closure.py` gives the worst slack: a bitstream is good only if no analysis is negative. The seeds that close for the hardware's sources as they are in the tree are recorded in `projects/fits.json`, best first (`tools/fits.py seed` prints the first; `tools/fits.py record <projects directory>...` writes the file after a sweep). A change to the hardware asks for a new sweep: `tools/fits.py check` tells whether the record is of these sources.
