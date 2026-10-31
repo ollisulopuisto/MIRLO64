@@ -56,28 +56,20 @@
         "address": "0x07100000"
       },
       {
-        "name": "Game Boy ROM",
+        "name": "Game Boy save file 1",
         "id": 5,
         "required": false,
-        "parameters": "0x1",
-        "extensions": [
-          "gb",
-          "gbc"
-        ],
-        "size_maximum": "0x300000",
-        "address": "0x07400000"
-      },
-      {
-        "name": "Game Boy Save",
-        "id": 6,
-        "required": false,
-        "parameters": "0x24",
-        "nonvolatile": true,
-        "extensions": [
-          "gbsav"
-        ],
+        "parameters": "0x0",
         "size_maximum": "0x21000",
         "address": "0x06D00000"
+      },
+      {
+        "name": "Game Boy save file 2",
+        "id": 6,
+        "required": false,
+        "parameters": "0x0",
+        "size_maximum": "0x21000",
+        "address": "0x06D50000"
       },
       {
         "name": "Gameshark codes",
@@ -88,16 +80,28 @@
         "address": "0x06D40000"
       },
       {
-        "name": "Controls",
+        "name": "Virtual Transfer Pak 1",
         "id": 8,
         "required": false,
-        "parameters": "0x24",
-        "nonvolatile": true,
+        "parameters": "0x1",
         "extensions": [
-          "ctl"
+          "gb",
+          "gbc"
         ],
-        "size_maximum": "0x100",
-        "address": "0x07361000"
+        "size_maximum": "0x300000",
+        "address": "0x07400000"
+      },
+      {
+        "name": "Virtual Transfer Pak 2",
+        "id": 9,
+        "required": false,
+        "parameters": "0x1",
+        "extensions": [
+          "gb",
+          "gbc"
+        ],
+        "size_maximum": "0x300000",
+        "address": "0x06E00000"
       }
     ]
   }

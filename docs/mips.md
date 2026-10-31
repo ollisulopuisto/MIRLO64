@@ -38,10 +38,10 @@ controllers, the clocks and the fit, and the simulations. The RSP and the RDP ha
 | Monitor RAM | `rtl/soc/mon_ram.sv` | 2 KiB of block RAM for the monitor's entry |
 | Cartridge slot | `rtl/soc/gb_cart.sv` | A Game Boy cartridge in the Pocket's slot, a byte at a time |
 | SDRAM | `rtl/soc/sdr_arb.sv`, `sdr_ctrl.sv`, `sdr_phy.sv` | The arbiter, the controller and the PHY of the Pocket's 64 MiB SDRAM |
-| PSRAM | `rtl/soc/psram.sv` | The controller and the PHY of the Pocket's two PSRAMs, 32 MiB: a ROM's first 32 MiB |
+| PSRAM | `rtl/soc/psram.sv` | The controller and the PHY of the Pocket's two PSRAMs, 32 MiB: saves, Controller Paks and a ROM's first 30 MiB |
 
-The SDRAM holds the runtime, the saves, the N64's RDRAM and what a ROM has past its first 32 MiB; the Pocket's two PSRAMs
-hold the ROM's first 32 MiB -- all of most games' -- so the game's reads of its ROM take nothing of the SDRAM's time (see
+The SDRAM holds the runtime, coverage, the N64's RDRAM and what a ROM has past its first 30 MiB; the Pocket's two PSRAMs
+hold saves and the ROM's first 30 MiB, so reads from that part take nothing of the SDRAM's time (see
 [The ROM](#the-rom)). The arbiter has six ports: the scan-out, the CPU, the RDP, the RSP's DMA, the Pocket's bridge (which
 the PI's engine, the AI's reader and the SI's DMA share while the bridge is idle) and the RDP's command fetch. The CPU
 and the RSP's DMA go first: each waits for the words it asks for (a cache line, a transfer the microcode waits on),
@@ -52,8 +52,11 @@ not used: its pads are tied off in `core_top.sv`.
 
 A game runs from its own ROM, unmodified, with its own libultra: its exception handler, threads, timers and interrupts
 are the game's. The CPU maps KSEG0 and KSEG1 onto the RDRAM, so the game's instructions, data and pointers are the
-N64's. What the game reaches of the RCP is either a hardware block (the table above) or a trap into the **monitor
-level**, a privilege level of the CPU in which the runtime does the access on the game's behalf.
+N64's. Every instruction the game runs, the 64-bit integer ones and the TLB's included, is done by the CPU: the runtime
+emulates none. What the game reaches of the RCP is either a hardware block (the table above) or a trap into the **monitor
+level**, a privilege level of the CPU in which the runtime does the access on the game's behalf (the RCP registers that
+are not a block, the PIF), and takes the events the console's hardware would raise (the video and audio interrupts, a
+save state's request).
 
 ## Memory map
 
@@ -69,7 +72,7 @@ level**, a privilege level of the CPU in which the runtime does the access on th
 | `0x2000_0000` | The RSP's host port: SP_MEM_ADDR `+00`, SP_DRAM_ADDR `+04`, SP_RD_LEN `+08`, SP_WR_LEN `+0C`, SP_STATUS `+10`, SP_DMA_FULL `+14`, SP_DMA_BUSY `+18`, SP_SEMAPHORE `+1C`, SP_PC `+20`; DPC_START `+40`, DPC_END `+44`, DPC_CURRENT `+48`, DPC_STATUS `+4C` |
 | `0xF000_0000` | The registers ([control.md](control.md)) |
 | `0xFFFF_8000`, 2 KiB | The monitor RAM: a store with `$zero` as its base reaches it |
-| `0x0000_0000` - `0x1FFF_FFFF`, `0x5000_0000` - `0x7FFF_FFFF`, `0xC000_0000` - `0xEFFF_FFFF` | Mapped addresses: translated by the tables the runtime fills from the game's TLB entries |
+| `0x0000_0000` - `0x1FFF_FFFF`, `0x5000_0000` - `0x7FFF_FFFF`, `0xC000_0000` - `0xEFFF_FFFF` | Mapped addresses: translated by the CPU's TLB, the game's own 32 entries |
 | `0x2000_0000` - `0x4FFF_FFFF`, in the game's view | Mapped addresses too (below) |
 
 The caches are physically tagged, so the runtime at `0x438x_xxxx` and the game through KSEG0 see one copy of the RDRAM.
@@ -100,11 +103,15 @@ The layout is the same for every game (`lang/mips/include/layout.h`):
 | SDRAM (CPU address) | Size | Contents |
 |---|---|---|
 | `0x4000_0000` | 1 MiB | The runtime, `n64rt.sys`, and its boot stack |
-| `0x4010_0000` | 32 MiB | A ROM's bytes from 32 MiB on (its first 32 MiB are in the PSRAM: [The ROM](#the-rom)). It is never moved |
+| `0x4010_0000` | 34 MiB | A ROM's bytes from 30 MiB on (its first 30 MiB are in PSRAM: [The ROM](#the-rom)) |
+| `0x4230_0000` | up to 10 MiB | A save state ([Save states](#save-states)) |
+| `0x42D0_0000` | up to 132 KiB | The virtual Transfer Pak 1's cartridge RAM, read from and written to the Game Boy game's own `.sav` ([The virtual Transfer Pak](#the-virtual-transfer-pak)) |
+| `0x42D5_0000` | up to 132 KiB | The same for the virtual Transfer Pak 2 (controller 2's) |
+| `0x42E0_0000` | up to 3 MiB | The virtual Transfer Pak 2's Game Boy ROM |
+| `0x42D3_0000` | 4 KiB | The parameter struct of the runtime's open command ([GameShark codes](#gameshark-codes)) |
+| `0x42D4_0000` | up to 64 KiB | The game's GameShark codes, a text file |
 | `0x4310_0000` | 64 KiB | The save-type database, `n64savedb.txt` |
-| `0x4330_8000` | 32 KiB | The Controller Pak |
-| `0x4332_0000` | 128 KiB | The cartridge's save: EEPROM, SRAM or FlashRAM |
-| `0x4334_0000` | | A FlashRAM's page buffer (128 bytes) and, at `+0x100`, its status words |
+| `0x4340_0000` | up to 3 MiB | The virtual Transfer Pak 1's Game Boy ROM |
 | `0x4370_0000` | 1 MiB | The RDP's hidden coverage plane: the other two coverage bits of each 16-bit word of RDRAM ([rdp.md](rdp.md)) |
 | `0x4380_0000` | 8 MiB | The N64's RDRAM |
 
@@ -117,16 +124,13 @@ game's RDRAM.
 
 A ROM of up to 64 MiB is loaded as it is, at the bridge's 1 MiB (data slot 0), and read where the load leaves it:
 
-* **its first 32 MiB in the PSRAMs** (`rtl/soc/psram.sv`): the two chips side by side as one 32-bit memory, a word at a
-  time and asynchronously -- the chips' power-up mode, their clock never started. The bridge writes each word at its
-  address mod 32 MiB, so the PSRAM's word for the ROM's offset *o* is ((1 MiB + *o*) / 4) mod 8 M: the word the SDRAM's
-  would be, its 23 low bits. No adder is needed anywhere.
-* **the rest in the SDRAM**, from `0x4010_0000`: the bridge writes 33 MiB to 65 MiB at the address less 32 MiB.
+* **its first 30 MiB in the PSRAMs** (`rtl/soc/psram.sv`): the two chips work as one 32-bit memory. ROM offset *o* is stored at PSRAM byte address `0x0020_0000 + o`.
+* **the rest in the SDRAM**, from `0x4010_0000`: the bridge writes 31 MiB to 65 MiB at the address less 30 MiB.
 * **the bridge's port** (`port_apf`, `n64_ports.sv`) is the PSRAM's only master: an access with `x_sel` goes to the
   PSRAM instead of the arbiter, and its read data lands where the SDRAM's does -- so the PI's engine, the game CPU's reads
   and the Pocket's writes all take the same path.
 * **the PI's engine** (`rcp_mi.sv`): `PISRC` bit 25 says the copy's source is the PSRAM's. The runtime sets it for a copy
-  in the first 32 MiB; one from 32 MiB on is the SDRAM's, and one across 32 MiB is the runtime's own (`n64rt_rom_copy`).
+  in the first 30 MiB; one from 30 MiB on is the SDRAM's, and one across the boundary is the runtime's own (`n64rt_rom_copy`). `PIDST` bit 25 selects a PSRAM destination for save writes.
 * **the game CPU's reads** (`0x1000_0000` - `0x13FF_FFFF`) and **the runtime's window** (`0x3000_0000`) are decoded the
   same way, by the ROM's offset.
 * `MONITOR.ID` bit 7 says the core places the ROM so, bit 8 that the chips are set up (their configuration registers
@@ -142,48 +146,54 @@ The bridge's address 0 is the SDRAM's first byte. `mirlo_mips.sv` decodes a brid
 | Bridge address | A write goes to |
 |---|---|
 | below `0x0010_0000` (1 MiB) | the SDRAM, at that address |
-| `0x0010_0000` - `0x020F_FFFF` (1 - 33 MiB) | the PSRAM, at the address mod 32 MiB: a ROM's first 32 MiB |
-| `0x0210_0000` - `0x040F_FFFF` (33 - 65 MiB) | the SDRAM, at the address less 32 MiB: the rest of a ROM. (The megabytes `0x38` - `0x3F` reach the SDRAM at their own address too, first -- the RDRAM's place, which the runtime clears when it starts a game.) |
+| `0x0010_0000` - `0x01EF_FFFF` (1 - 31 MiB) | PSRAM, at the bridge address plus 1 MiB: a ROM's first 30 MiB |
+| `0x01F0_0000` - `0x040F_FFFF` (31 - 65 MiB) | SDRAM, at the bridge address less 30 MiB: the rest of a ROM |
+| `0x0730_0000` - `0x073F_FFFF` | PSRAM save and accessory storage, with the cartridge save remapped to byte offset `0x0014_0000` |
 | anything else | the SDRAM, at the address's low 26 bits |
 
-A read is always the SDRAM's, at the address's low 26 bits. A slot that lies in the saves' part of the SDRAM therefore
-has, as its address, its SDRAM offset with bit 26 set (`LAYOUT_SLOT_BRIDGE`), where no ROM's bytes arrive. The slots
+A read of a save or Controller Pak slot is routed to PSRAM. The slots
 (`pkg/pocket/Cores/tortuga.Mirlo64/data.json`):
 
 | Slot | Name | File | Bridge address | CPU address |
 |---|---|---|---|---|
-| 0 | Game | `.z64` (or `.bin`), required | `0x0010_0000` | `0x4010_0000` |
-| 1 | Save | `.sav`, nonvolatile, at most 128 KiB | `0x0732_0000` | `0x4332_0000` |
-| 2 | Controller Pak | `.mpk`, nonvolatile, 32 KiB | `0x0730_8000` | `0x4330_8000` |
+| 0 | Game | `.z64` (or `.bin`), required | `0x0010_0000` | `0x3000_0000` ROM window |
+| 1 | Save | `.sav`, nonvolatile, at most 128 KiB | `0x0732_0000` | `0x3414_0000` |
+| 2 | Controller Pak | `.mpk`, nonvolatile, 32 KiB | `0x0730_8000` | `0x3410_8000` |
 | 3 | Runtime | `n64rt.sys`, required | `0x0000_0000` | `0x4000_0000` |
 | 4 | Save-type database | `n64savedb.txt`, optional, at most 64 KiB | `0x0710_0000` | `0x4310_0000` |
+| 5 | Game Boy save file 1 | no file: the runtime opens the Game Boy game's `.sav` by path, writable (the file is at most 128 KiB + 48 bytes) | `0x06D0_0000` | `0x42D0_0000` |
+| 6 | Game Boy save file 2 | the same, for controller 2's pak | `0x06D5_0000` | `0x42D5_0000` |
+| 7 | Gameshark codes | no file at the start: the runtime opens one by path, read-only, at most 64 KiB | `0x06D4_0000` | `0x42D4_0000` |
+| 8 | Virtual Transfer Pak 1 | `.gb`, `.gbc`, optional, user-reloadable, at most 3 MiB | `0x0740_0000` | `0x4340_0000` |
+| 9 | Virtual Transfer Pak 2 | the same, for controller 2's pak | `0x06E0_0000` | `0x42E0_0000` |
 
 The Pocket loads the slots while the core waits, and reads the nonvolatile ones back into their files when the core
 quits: as many bytes as the slot's file size in the core's table. The runtime sets that size (`APF_BRIDGE.FILE_SIZE`)
-when the game first uses the memory, so a game that never saves leaves no file. The slots are numbered 0 to 4 with no
+when the game first uses the memory, so a game that never saves leaves no file. The slots are numbered 0 to 9 with no
 gap: the table of file sizes is indexed by a slot's place in `data.json`.
 
-A core and a program each carry the word `0x4D4C0003` (`LAYOUT_MARK`) 8 bytes from their start, at `0xBFC0_0008` and
+A core and a program each carry the word `0x4D4C0007` (`LAYOUT_MARK`) 8 bytes from their start, at `0xBFC0_0008` and
 `0x4000_0008`. The boot ROM starts only a program that has it, and the runtime starts a game only on a core that has
-it; otherwise a notice is shown on the screen and the SDRAM is left as the Pocket loaded it, so the saves are written
-back unchanged.
+it; otherwise a notice is shown on the screen and memory is left as the Pocket loaded it, so the saves are written
+back unchanged. The same notice, with its own text, refuses a core whose CPU lacks any of the 64-bit levels (below).
 
 ## The CPU
 
 `rtl/mips/mips_core.sv` executes the VR4300's instructions with 32-bit addresses: MIPS II, the 64-bit integers by
 levels (below), `eret`, `ll` / `sc`, the trap instructions, the cache instruction and COP1. `rtl/soc/mips_sys.sv`
-instantiates it with the boot ROM and these parameters:
+instantiates it with the boot ROM and these parameters. The CPU does the instructions a game uses, the 64-bit
+integer ones included (but `lld`, `scd` and the traps on a 64-bit operand, below); the runtime does none of them on its behalf.
 
 | Parameter | Value | Meaning |
 |---|---|---|
 | `FLAT`, `BIG`, `N64WIN` | 1 | The map above; big-endian; the RDRAM window, and the address error for the game's other accesses |
 | `EXC_BASE` | `0x4000_0000` | The runtime's vector is `EXC_BASE + 0x180` |
-| `TLB_EN` / `TLB_RAM` / `FPG` | 0 / 1 / 1 | No VR4300 TLB; translation tables in block RAM; fetch page registers |
+| `TLB_EN` / `TLB_RAM` | 1 / 0 | The VR4300's TLB, 32 entries in block RAM; no translation tables (`MIRLO_TLB_TABLES`: the tables) |
 | `MON`, `MI`, `PIW`, `VIW`, `AIW`, `SIW`, `PI2W` | 1 | The monitor level and the pass-through windows |
-| `W64`, `W64_ALU`, `W64_SH`, `W64_MD` / `W64_DIV` | 1 / 0 | The 64-bit levels |
+| `W64`, `W64_ALU`, `W64_SH`, `W64_MD`, `W64_UA` / `W64_DIV` | 1 / 1 | The 64-bit levels (the SoC has all of them) |
 | `FAST`, `XWB` | 1 | The shortened paths for the 93.75 MHz clock; the write buffer outside the core |
-| `IC_LOG2`, `DC_LOG2` | 10 | Cache lines as powers of two (`MIRLO_CPU_IC_LOG2`, `MIRLO_CPU_DC_LOG2`) |
-| `SNOOP` | 1 | The D-cache drops a line the RDP, the RSP's DMA or the bridge writes into ("Caches and memory") |
+| `IC_LOG2`, `DC_LOG2` | 9, 9 | Cache lines as powers of two (`MIRLO_CPU_IC_LOG2`, `MIRLO_CPU_DC_LOG2`) |
+| `SNOOP` | 0 | Experimental software-managed D-cache coherence; see `dcache-no-snoop-design.md` |
 
 Memory is word-native: a 32-bit word is its value, and byte *k* of a word is lane 3 - *k*.
 
@@ -206,24 +216,25 @@ exceptions) and W (write-back), with forwarding into E from M and W. With `FAST`
   registers set one stage ahead.
 
 Nothing a cache tag says reaches the pipeline's advance. Multiplies and divides run in the background with HI and LO
-interlocked: `mult(u)` is one product of the DSP block, in HI and LO two cycles later; `div(u)` is a bit a cycle.
+interlocked: `mult(u)` is one product of the DSP block, in HI and LO two cycles later; `div(u)` and `ddiv(u)` are a bit a cycle
+(32 and 64 steps, from the cycle after M completes the instruction: `div(u)` is done as it always was, `ddiv(u)` a little over two
+times that; the dividend's magnitude is what the multiplier's registers take from M). HI and LO keep the
+upper words of their 64-bit values as they are (`hi_up`, `lo_up`), and `hx` is made as `mfhi` / `mflo` read them; which words of HI and LO are 32-bit values is a flag set as they are written.
 
 ### Caches and memory
 
-Both caches are direct mapped with 32-byte lines and physical tags, and each is 32 KiB (1,024 lines) of block RAM. They
-hold the SDRAM only: the runtime's memory and the RDRAM through KSEG0. The D-cache writes through, so memory is always
-current for the other masters (the RSP's DMA, the RDP, the PI's engine, the scan-out); a line another master has
-overwritten is dropped with a cache instruction, which invalidates its line whatever the operation. Software that
-empties a cache walks the VR4300's 16 KiB and 8 KiB with index operations: an index operation drops every line that
-the VR4300's index stands for, one a cycle, so such code needs no change.
+Both caches are direct mapped with physical tags. The I-cache has 512 lines of 32 bytes (16 KiB); the
+D-cache has 512 lines of 16 bytes (8 KiB). They
+hold the SDRAM only: the runtime's memory and the RDRAM through KSEG0. The D-cache writes through the CPU store FIFO;
+the FIFO orders earlier stores before the device accesses that start DMA. External writes do not snoop the D-cache in
+the default build: software manages buffer ownership and invalidates stale destination lines with cache instructions.
+Index invalidation covers every line represented by the VR4300's 8 KiB index. A mapped hit invalidation drops every
+possible physical page colour. Hit writeback is a no-op because lines are clean; index load tag reports an invalid tag
+to writeback-walking software, rather than exposing actual cache tags. Code that uses tags for other purposes is not
+fully emulated.
 
-The D-cache also drops by itself a line that another master writes into (`SNOOP`). Its lines are twice the VR4300's
-16 bytes, so a buffer that is 16-byte aligned shares a line with the 16 bytes beside it. Software drops a buffer's
-lines before a transfer into it, as on the console; but a load of the bytes beside it while the transfer is under way
-brings the whole line back from memory that does not have the transfer's words yet, and the line would stay. Ocarina
-of Time reads its controllers that way: its buffer is at 0x8012c4f0, and the message queue it reads at 0x8012c4e0
-while the SI's RD64B waits for the PIF refills the line with the request it sent, so every button reads held. The
-same can happen with the PI's engine and the RSP's DMA. `mirlo_mips.sv` takes from the arbiter the line of every
+When enabled, the D-cache also drops by itself a line that another master writes into (`SNOOP`). Each 16-byte line is independent of
+its neighbours. `mirlo_mips.sv` takes from the arbiter the line of every
 write it grants the RDP, the RSP's DMA and the bridge (the PI's engine, the SI's DMA), across to the CPU's clock as
 `cpu_port.sv`'s read words go. The core looks each up in a copy of the tags (a valid bit and the nine tag bits above
 the index: one M10K, whose read port is the snoop's alone, so a lookup never waits), queues a hit and drops the line
@@ -232,7 +243,7 @@ line in invalid. While two or more lines wait, those masters' writes are held at
 refill and changes nothing else in its cycles; a write 16 MiB from a cached line (the nine bits do not tell them
 apart) drops it too, which is rare and costs the same.
 
-Uncached, device and mapped data accesses (but a mapped load from a cacheable page: "Address translation"), and `ldc1` / `sdc1`, take the slow path: one word at a time. `ld` and `sd`
+Uncached, device and mapped data accesses (but, with the tables, a mapped load from a cacheable page: "Address translation"), and `ldc1` / `sdc1`, take the slow path: one word at a time. `ld` and `sd`
 to cached memory are two words in two cycles.
 
 Stores leave the core as they are done (`XWB`) and go through a 16-entry FIFO in `cpu_port.sv`, written on the CPU's
@@ -255,11 +266,15 @@ in D while a register it reads is on its way from a 64-bit result. E computes 32
 | `W64_ALU` | yes | `dadd(i)(u)`, `dsub(u)`, and `and` / `or` / `xor` / `nor` / `slt(u)` when an operand is not a 32-bit value: E does the lower word, M the upper word with E's carry |
 | `W64_SH` | yes | The d-shifts, a byte or a bit a cycle |
 | `W64_MD` | yes | `dmult(u)`: four products of the operands' halves on the 32-bit multiply's DSP block, summed a word at a time; HI and LO of 64 bits |
-| `W64_DIV` | no | `ddiv(u)` of any operand; without it, a `ddiv` of two words and a `ddivu` of two unsigned words are done on the 32-bit divider |
+| `W64_DIV` | yes | `ddiv(u)`, a bit a cycle (64 steps; `div(u)` run on the same divider, 32 steps); without it `ddiv(u)` are Reserved Instructions, and `div(u)` have a 32-bit divider of their own |
+| `W64_UA` | yes | `ldl`, `ldr`, `sdl`, `sdr` (with `W64_SH`, `FAST`, `XWB`, `BIG`): an access to the doubleword the address is in, on the d-shifter's register, a byte a cycle. A store rotates `rt` by 8 - *n* (`sdl`) or 7 - *n* (`sdr`) bytes (*n* the address' low three bits) and writes its two words with the strobes of the bytes it covers; a load takes the doubleword through a byte at a time into `rt`'s place, 8 steps (each of the four takes about 20 CPU clocks on cached memory, back to back). Device, mapped and non-RDRAM addresses are the same address errors as `ld`'s and `sd`'s |
 
-What the CPU does not have is a Reserved Instruction, which the runtime does on the real 64-bit registers: `ddiv(u)`
-of a 64-bit operand and `ldl` / `ldr` / `sdl` / `sdr`. A trap instruction on a 64-bit operand, `lld` and
-`scd` are Reserved Instructions that the runtime does not do.
+The bitstream and `n64rt.sys` are a pair, and the shipped CPU has every level. COP0 register 7 reads the levels in its
+bits 31 (ALU), 30 (SH), 29 (MD), 28 (DIV) and 27 (UA); the runtime checks at start-up that all five are set and, if one
+is not, stops with a notice on the screen (as for a missing layout mark) and starts no game. It keeps no copy of a
+register's upper half, has no soft HI and LO and does no 64-bit instruction itself. What the CPU does not have is a
+Reserved Instruction, and a Reserved Instruction stops the game with a message on the UART like any exception the
+runtime does not handle: a trap instruction (`teq`, `tge` ...) on a 64-bit operand, `lld`, `scd`.
 
 ### The FPU
 
@@ -277,41 +292,73 @@ the pair (beyond a word's range a value saturates as a word's).
 
 ### Address translation
 
-In place of the VR4300's 32-entry TLB the core has two translation tables in block RAM, one for data and one for
-fetches (an instruction and what it reaches may share an index), of 512 entries each. An entry stands for one 4 KiB
-page, indexed by the page number's low 9 bits (`va[20:12]`), and holds valid, dirty, global and cacheable bits, the
-ASID, `va[31:21]` and the physical page `pa[28:12]`. A mapped access or fetch reads its page's entry. An entry that is
-valid, of this page and of this ASID (unless global) translates it into the RDRAM; anything else is the TLB's exception
-(TLBL, TLBS, or Mod for a store to an entry that is not dirty). The runtime then writes the entry from the game's own
-TLB entries and the instruction runs again, so a page costs one exception however much it is touched.
+The CPU has the VR4300's TLB (`TLB_EN`): 32 entries, each a pair of pages of 4 KiB to 16 MiB (PageMask), fully associative
+on VPN2 and the ASID (a global entry matches any), with the Valid, Dirty, Global and C fields of EntryLo0 and EntryLo1, in
+block RAM. `tlbwi`, `tlbwr`, `tlbr` and `tlbp` are the CPU's own, with the game's COP0 registers (EntryHi, EntryLo0/1,
+PageMask, Index with its P bit, Random, Wired, Context's BadVPN2), and a TLB exception is the game's: a page no entry names is
+a refill (TLBL, code 2, for a load or a fetch, TLBS, code 3, for a store) at `0x8000_0000` while Status.EXL is clear and
+at `0x8000_0180` while it is set; a page an entry names with V clear is the same code at `0x8000_0180`; a store to a page
+with D clear is Mod (1) at `0x8000_0180`. BadVAddr, Context's BadVPN2 and EntryHi's VPN2 take the address (the ASID is kept),
+EPC (the branch's, in a delay slot) and Cause.BD are set unless EXL was, and EXL is. So the game's own `osMapTLB`,
+`osUnmapTLB`, `osVirtualToPhysical` and a refill handler of its own (`tlbwr`) run as they are, and the runtime does
+nothing for them. What the console's TLB does and this one does not: the 64-bit XContext and the 64-bit addresses (an address is
+32 bits), and the machine check of two entries that match one address (undefined there; here the first by index wins). The registers keep what is written
+(EntryLo 30 bits, PageMask 12 bits, whatever the mask), a translation uses `pa[31:12]` of EntryLo's page number, and Wired's low five bits
+bound Random from below.
 
-A translation fault that goes to the monitor level leaves BadVAddr and EntryHi as the game has them: its address is
-COP0 register 22's. The tables are not the VR4300's TLB -- a page that an entry of the game's maps can miss them at any
-time, where a wired entry of the console's TLB never misses -- so a miss must not be seen by code of the game's that
-runs from a mapped page, an exception handler about to read BadVAddr among it. The monitor writes BadVAddr and EntryHi
-itself for the exception it delivers to the game.
+The entries are searched one a cycle, from entry 0, by a scanner that F and M share (`tlbp` and `tlbr` use it too), so
+the first entry of the index order that matches wins. Each of F and M keeps the page it last translated in a **micro-TLB**
+(one page, of whatever size the entry's pages are; the fetch side's are the page registers below): a mapped access to
+that page costs the translation's cycle and no search. A TLB write, `tlbr` and a new ASID empty them, and a search
+under way when that happens is dropped and made again. The costs, in cycles of the game's CPU (`lang/mips/test/tlbcost_test.c`):
 
-A mapped load of a word or less from a page whose entry has the cacheable bit goes through the D-cache: the table's
-read gives the physical page, the cache is read at the physical index, and the word is taken a cycle later -- a miss
-reads the line and translates again. Other mapped accesses take the slow path, uncached; a mapped store writes through
-and drops the line it may shadow, as an uncached store does. A mapped fetch runs through the I-cache when its entry has the cacheable bit: two
-**fetch page registers** hold the last two cacheable pages a table read found (virtual page, ASID or global, physical
-page). The I-cache is indexed by the virtual address and tagged by the physical one, `{valid, pa[28:12]}`; F delivers
-the cache's word and D checks it a cycle later against the register's page. A fetch from a page neither register holds
-reads the table and loads the older register. Any write to a table entry empties both registers. Because the index
-comes from the virtual address, a frame mapped at a virtual address whose index bits above the page offset differ from
-the frame's can sit in the cache under more than one index; once such a page has been entered, a hit-type cache
-instruction on the I-cache drops the line under every such index, so code rewritten through one alias is the new code
-through all.
+| What | Cycles |
+|---|---|
+| a mapped load from the page the last load translated, over the same load from KSEG1 | 2 |
+| a mapped load that changes page, over that: the search | entry *k* costs about 0.85 *k* (0 for entry 0, 15 for entry 16, 27 for entry 31) |
+| a refill through the game's own handler of 7 instructions (exception, handler, `tlbwr`, `eret`, the load again), over a load from KSEG0 | 133, the mapped load's own 30 and its search included |
+| the same, through the table's monitor (`TLB_RAM`: below), for comparison | some 3,000 |
+
+A mapped load or store takes the slow path: one uncached word (two for a 64-bit one), and a store through a mapped page
+drops the line it may shadow in the D-cache. A mapped `lw`, `sw`, `ld`, `sd`, `ldl`, `sdl`, `ll` and `sc` are the same as an unmapped
+one's in what they do (`LLAddr` is the physical address). A mapped fetch is the slow path as well, a word at a time, unless the page is held by one of
+the **fetch page registers**: two registers keep the last two pages
+a search found that are cacheable (the entry's C field is not 2) and in the RDRAM -- the virtual page with its size, the ASID or global, the
+physical page -- and a fetch from one runs through the I-cache like KSEG0's. The I-cache is indexed by the virtual address and tagged by
+the physical one, `{valid, pa[28:12]}`; F delivers the cache's word and D checks it a cycle later against the register's page. A
+fetch from a page neither register holds searches the TLB and loads the older register. A TLB write empties both registers.
+Because the index comes from the virtual address, a frame mapped at a virtual address whose index bits above the page offset differ
+from the frame's can sit in the cache under more than one index; once such a page has been entered, a hit-type cache instruction
+on the I-cache drops the line under every such index, so code rewritten through one alias is the new code through all. The D-cache
+does the same for a hit-type instruction through a mapped address.
+
+**Where the physical address goes.** An access through a valid page to a physical address that is not the game's RDRAM -- an
+RCP register, the cartridge, or nothing at all (with MCTL bit 10 the RDRAM's upper 4 MiB too) -- is the device access of an unmapped
+address: an address error (4 or 5) for the monitor level, with the game's Cause, EPC, BadVAddr and EntryHi untouched, and COP0
+register 22 holding the physical address the page gave. The runtime answers it as it answers the unmapped one (`emulate_hw`):
+a register of the RCP as the console's, and an address of `0x2000_0000` or more -- the debug port that libultra maps at
+`0xC000_0000` onto `0x8000_0000` -- as nothing: a load reads 0 and a store goes nowhere. The game's own exceptions for the same page
+(an invalid page, a clean one) come first.
+
+**The tables (`TLB_RAM`, until they are removed).** The core can still be built without the TLB and with two translation tables
+in block RAM, one for data and one for fetches, of 512 entries each, which the runtime fills from the game's entries
+(`MIRLO_TLB_TABLES` in `rtl/soc/mips_sys.sv`): an entry stands for one 4 KiB page, indexed by the page number's low 9 bits, and holds
+valid, dirty, global and cacheable bits, the ASID, `va[31:21]` and the physical page `pa[28:12]`. A mapped access or fetch reads
+its page's entry; anything but a valid entry of this page and this ASID is the TLB's exception, which goes to the monitor level,
+leaves BadVAddr and EntryHi as the game has them (COP0 register 22 has the address) and is answered from the entries the runtime keeps
+(below); the game's own `tlbwi`, `tlbwr`, `tlbr` and `tlbp` are Reserved Instructions for the monitor, which does them. A mapped load of a
+word or less from a cacheable page goes through the D-cache (`PGD`), and the fetch page registers hold the last two cacheable pages of the
+fetch table. `n64rt.sys` finds which CPU it has in COP0 register 23 and runs on either.
 
 ### The monitor level
 
 With `MON`, COP0 register 7's bit 1 (`GAME`) divides exceptions in two:
 
-- Those a console would take go to the game's own handler at `0x8000_0180`, with EPC, Cause and Status.EXL as on the
-  VR4300, when the instruction is the game's.
-- The rest go to the **monitor level**: a device access of the game's, an instruction the core lacks, a translation
-  fault, and the monitor's own interrupt (`irq_mon`, which the game cannot mask). The entry sets ERL and ErrorEPC and
+- Those a console would take go to the game's own handler at `0x8000_0180` (a TLB refill at `0x8000_0000`), with EPC, Cause
+  and Status.EXL as on the VR4300, when the instruction is the game's -- the TLB's exceptions among them.
+- The rest go to the **monitor level**: a device access of the game's (an address that is not the RDRAM, by a pointer or through a
+  page of the TLB), an instruction the core lacks, and the monitor's own interrupt (`irq_mon`, which the game cannot mask). (On the
+  tables' CPU, below, a translation fault too.) The entry sets ERL and ErrorEPC and
   jumps to the runtime's vector; it touches neither EXL nor EPC nor Cause, so it can interrupt the game's handler too.
   `eret` with ERL set returns to ErrorEPC.
 
@@ -321,17 +368,17 @@ Count runs at half the CPU's clock, 46.875 MHz, as the VR4300's. Cause.IP2 is th
 
 | Register | Bits |
 |---|---|
-| 7 (MCTL) | `[1]` GAME; `[2]` the monitor's entry was in a delay slot (ErrorEPC is the branch); `[7:3]` the entry's cause: an exception code, or 31 for the monitor's interrupt; `[8]` the pass-through to the RCP's blocks, written only together with bit 9; `[10]` the game's RDRAM is 4 MiB (its accesses to the upper half of the window go to the monitor), written only together with bit 11; `[12]` the game's view maps `0x2000_0000` - `0x4FFF_FFFF` (above), written only together with bit 13; `[14]` the game's word accesses to the SP's and the DPC's registers are the RSP's host port's (no trap; a store of DPC_STATUS still traps: the runtime keeps DPC_CLOCK), written only together with bit 15; `[31:28]` read the 64-bit levels present: ALU, SH, MD, DIV |
-| 22 | Read only: the address of the last translation fault the monitor level took |
+| 7 (MCTL) | `[1]` GAME; `[2]` the monitor's entry was in a delay slot (ErrorEPC is the branch); `[7:3]` the entry's cause: an exception code, or 31 for the monitor's interrupt; `[8]` the pass-through to the RCP's blocks, written only together with bit 9; `[10]` the game's RDRAM is 4 MiB (its accesses to the upper half of the window go to the monitor), written only together with bit 11; `[12]` the game's view maps `0x2000_0000` - `0x4FFF_FFFF` (above), written only together with bit 13; `[14]` the game's word accesses to the SP's and the DPC's registers are the RSP's host port's (no trap; a store of DPC_STATUS still traps: the runtime keeps DPC_CLOCK), written only together with bit 15; `[31:27]` read the 64-bit levels present: ALU, SH, MD, DIV, UA |
+| 22 | Read only: the physical address a page gave to the last device access through the TLB that the monitor level took; with the tables, the address of the last translation fault it took |
 | 8 (BadVAddr) | Writable by `mtc0` while ERL is set |
-| 23 | Write: stores a table entry for EntryHi's page pair and ASID. `[28:12]` the physical page, `[5]` cacheable, `[4]` which page of the pair, `[3]` the table (1: fetches), `[2]` global, `[1]` dirty, `[0]` valid. Read: `0x5442_0001`, with bit 3 set when the last TLB exception was a fetch's |
+| 23 | Read only, the capability word. With the TLB: `0x544C_42` (the ASCII `TLB`) in bits 31:8, bit 2 the fetch page registers (1 in the SoC), bit 1 the real TLB, bit 0 the monitor. With the tables: write stores a table entry for EntryHi's page pair and ASID (`[28:12]` the physical page, `[5]` cacheable, `[4]` which page of the pair, `[3]` the table (1: fetches), `[2]` global, `[1]` dirty, `[0]` valid); read `0x5442_0001`, with bit 3 set when the last TLB exception was a fetch's; 0 on a core with neither. `n64rt.sys` reads it at its start |
 | 0 (Index) | Bit 31 (P) is writable by `mtc0` while ERL is set |
 | 13 (Cause) | BD and ExcCode are writable by `mtc0` while ERL is set |
 | 4 (Context) | BadVPN2 is writable by `mtc0` while ERL is set |
 
-While GAME is set, `tlbwi`, `tlbwr`, `tlbr` and `tlbp` are Reserved Instructions for the monitor level. The three
-`mtc0` enables let the monitor do what the VR4300 does itself for a `tlbp` that finds nothing and for a TLB exception
-it delivers to the game.
+With the tables, while GAME is set, `tlbwi`, `tlbwr`, `tlbr` and `tlbp` are Reserved Instructions for the monitor level. The
+three `mtc0` enables let the monitor do what the VR4300 does itself for a `tlbp` that finds nothing and for a TLB exception it
+delivers to the game; with the TLB, Index's P bit and BadVAddr are written by the monitor level to put a save state back.
 
 ## The runtime
 
@@ -363,9 +410,10 @@ The loader then:
 4. Clears the RDRAM, sets the RDP's hidden coverage plane to all ones, and copies 1 MiB from ROM `0x1000` to the entry
    address, as IPL3 does.
 5. Writes what the CIC's IPL3 leaves behind and the boot information words (below).
-6. Probes the CPU: an `ld` that runs or traps, the levels in COP0 register 7, the tables' mark in register 23. The
-   runtime takes what the core has from these and from `MONITOR.ID`, not from its own build.
-7. Replaces the dividing 64-bit helpers and the audio library's envelope rate in the boot segment (below).
+6. Checks the CPU (before anything else, with the layout mark): the five 64-bit levels in COP0 register 7 must all be
+   present, or a notice is shown and nothing is started. Reads the translation tables' mark in register 23. The runtime
+   takes what else the core has from `MONITOR.ID` and from this, not from its own build.
+7. Replaces the audio library's envelope rate and a matrix conversion in the boot segment (below).
 8. Reads the save slot's file size, looks the cartridge up in the save-type database, initialises the accessory and
    the audio FIFO, and loads DMEM with the ROM's boot code (ROM `0x40` - `0xFFF`, at the same offsets), as the
    console's boot leaves it -- or, for a boot code that wipes the RSP's memories, DMEM and IMEM as it leaves them (below).
@@ -435,8 +483,8 @@ functions return so), and whose address is one of these registers, each a copy o
 
 The base register is read, and a load's result written, through two jump tables indexed by the register number.
 Anything else falls through to the full path at the point it is found to be different, with nothing of the game's
-changed. A second fast path does the game's `tlbr`, `tlbp` and the `tlbwi` that changes no translation, with seven of
-the game's registers saved in the context for the work.
+changed. On the tables' CPU a second fast path does the game's `tlbr`, `tlbp` and the `tlbwi` that changes no translation,
+with seven of the game's registers saved in the context for the work.
 
 **The full path** saves the game's registers at 64 bits, HI and LO, FCSR and the 32 FPU registers, and calls
 `n64rt_mon_exception` on a stack of the runtime's:
@@ -444,9 +492,9 @@ the game's registers saved in the context for the work.
 | MCTL cause | What the monitor does |
 |---|---|
 | 31, the monitor's interrupt | `n64rt_rcp_events`: the hardware's wake-ups (below) |
-| 4, 5 (address error) | `emulate_hw`: the game's access to an RCP register, or to the cartridge |
-| 1, 2, 3 (TLB) | `tlb_fault`: the page entered in the tables, or the exception delivered to the game |
-| 10 (Reserved Instruction) | `tlb_insn`: the game's TLB instruction; else `emulate_64`: a 64-bit instruction |
+| 4, 5 (address error) | `emulate_hw`: the game's access to an RCP register, or to the cartridge, by a pointer or through a page of the TLB |
+| 1, 2, 3 (TLB; the tables' CPU only) | `tlb_fault`: the page entered in the tables, or the exception delivered to the game |
+| 10 (Reserved Instruction) | `tlb_insn`: the game's TLB instruction (the tables' CPU only) |
 
 Anything else stops the game with a message on the UART.
 
@@ -455,7 +503,7 @@ game takes real time. The exception is an entry while the game has its interrupt
 which is where it is when it sets a timer: there Count is put back to its value at the entry, so that an entry the game
 did not ask for cannot carry Count past a Compare the game is about to write.
 
-The monitor's interrupt is `MONITOR.PEND & MONITOR.MASK`. The runtime masks in four events:
+The monitor's interrupt is `MONITOR.PEND & MONITOR.MASK`. The runtime masks in five events:
 
 | PEND bit | Event | What the runtime does |
 |---|---|---|
@@ -463,10 +511,19 @@ The monitor's interrupt is `MONITOR.PEND & MONITOR.MASK`. The runtime masks in f
 | 2 | a tick, every 2^18 system clocks (4.2 ms) | keeps its field count; notes the frame buffer's origin |
 | 3 | AI_DACRATE was written | computes the resampler's step |
 | 4 | the PIF has commands to run | runs them (SI, below) |
+| 5 | the Pocket asks for a save state, or for its load | makes it or puts it back ([Save states](#save-states)) |
 
 ### TLB instructions and exceptions
 
-The runtime keeps the game's 32 TLB entries as the registers gave them and does each instruction on the game's COP0
+With the CPU's own TLB the runtime has nothing to do for the game's TLB instructions and exceptions: they are the CPU's, and
+nothing of the game's libultra is patched. It keeps no entries, and the monitor's fast path for the TLB instructions never runs.
+What reaches it is a device access through a page (MCTL cause 4 or 5, `emulate_hw`: COP0 register 22 has the physical address; below `0x2000_0000`
+it goes on as the unmapped address `0xA000_0000 | pa`, above it is nothing), and the instruction at a mapped `pc` that it has to
+read to do that, a 64-bit instruction or an access it emulates (`insn_at`, `n64rt_tlb_phys`): found by `tlbp` and `tlbr`, with the game's
+Index, PageMask, EntryHi and EntryLo registers put back. A state holds the 32 entries ([Save states](#save-states)).
+
+**With the translation tables** (`TLB_RAM`, the core built with `MIRLO_TLB_TABLES`; the runtime knows which by COP0 register 23) the
+runtime does all of the following. It keeps the game's 32 TLB entries as the registers gave them and does each instruction on the game's COP0
 registers as the VR4300 would (`tlb_insn` in `n64rt_os.c`): `tlbwi` writes the entry Index names, `tlbwr` the one
 Random names, `tlbr` gives the registers back (G in both EntryLo registers), and `tlbp` searches by VPN2 and ASID and
 sets Index's P bit when it finds nothing. A write over an entry that mapped something empties that entry's pages in
@@ -490,9 +547,9 @@ returns to the vector. Some software maps its code through the TLB and fills it 
 runs as it is, its `tlbwr` is the monitor's, and the access then misses the tables again and is filled from the entry
 the handler wrote.
 
-**The entries a `tlbwr` puts out are kept.** Software with a refill handler has more pages in use than the 32 entries
+**The entries a `tlbwr` puts out are kept** (the tables' only). Software with a refill handler has more pages in use than the 32 entries
 hold, and each `tlbwr` puts a random one out. On the console the page that entry mapped is a refill away, a dozen
-instructions; here a refill is several trips through the monitor. So the entry a `tlbwr` replaces is kept by the
+instructions; with the tables a refill is several trips through the monitor. So the entry a `tlbwr` replaces is kept by the
 runtime (128 of them, by their page pair, 4 KiB pages only) and its pages stay in the CPU's tables: an access to them
 goes on as before, and one that misses the tables is filled from the kept entry, neither seen by the game. The game
 sees its 32 entries as the VR4300 has them (`tlbr`, `tlbp`, Index, Random).
@@ -516,31 +573,20 @@ the SDRAM, where the runtime is, and `0xF000_0000` - `0xFFFF_FFFF` the registers
 but for the **game's view**. With MCTL bit 12 set (the runtime sets it at start-up), `0x2000_0000` - `0x4FFF_FFFF` are mapped
 addresses as well while the game runs: MCTL.GAME set, Status.ERL clear (not the monitor level) and Status bit 4 clear. A game
 can then map code at `0x4000_0000`, unpack an overlay into it and jump there, as on the console. The monitor level, and the
-runtime's helpers that the game's code calls directly (the 64-bit helpers and the envelope rate, `n64rt_boot.c`: their entry
+runtime's helpers that the game's code calls directly (the envelope rate, `n64rt_boot.c`: its entry
 sets Status bit 4, a bit of KSU that the game's code never sets, and the wrapper puts the game's Status back), see the RSP and
 the SDRAM there. The game starts with an `eret` from ERL, so the runtime's code before it is not in the game's view either.
 
 ### 64-bit instructions and the helpers
 
-`emulate_64` does the Reserved Instructions on the context's 64-bit registers: `ddiv(u)` of a 64-bit operand, the
-unaligned doubleword loads and stores, and -- on a core without them in hardware -- the FPU's `dmfc1`, `dmtc1`,
-conversions from `.l` and the round / trunc / ceil / floor / cvt to `.l` (a 64-bit integer is an FPU register pair;
-the arithmetic is the FPU's single precision). An entry costs far
-more than the instruction it stands for, which matters for code that divides in a loop. A compiler's conversions
-between a 64-bit integer and a float are two of the FPU's in a row (`dmtc1` and `cvt.d.l`, or `trunc.l.s` and
-`dmfc1`): the second, behind the first or in the delay slot of the `jr ra` behind it, is done on the same entry.
-
-A compiler's 64-bit support routines are such code: `__ull_div`, `__ll_mod` and the others are each a pair of `ld`, one
-64-bit instruction and a return. `lang/n64rt/n64rt_llsigs.h` has their instruction words as the IDO 5.3 compiler makes
-them (generated by `tools/gen_llsigs.py` from `tools/llsigs/ll.c`). At boot `ll_patch` scans the boot segment and, where
-all the words of a routine match, writes a jump to the runtime's 32-bit version over its start. The routines that shift
-or multiply are left as they are, since the CPU runs their instruction; the ones that divide (`__ull_div`, `__ull_rem`,
-`__ll_div`, `__ll_rem`, `__ll_mod`, `__ull_divremi`) are replaced. Their division (and the monitor's `ddiv(u)`) is
-`n64rt_div64.h`'s: long division by words on the CPU's `divu` -- three or four of them, some 150 cycles where the C
-library's loop of a bit a step took 600; a game that divides 64-bit values by the thousand at its start spent most of
-its fields there. A replacement runs with the game's interrupts off and restores Status in the delay
-slot of its return, because the CPU sends an interrupt to the game's handler only when the interrupted instruction is
-the game's.
+The CPU runs every 64-bit instruction of the games' code itself: the integer ones by the levels above (`ld`, `sd`, `lwu`,
+`ldl`, `ldr`, `sdl`, `sdr`, the d-adds, d-shifts, `dmult(u)`, `ddiv(u)`, the 64-bit logic and compares) and the FPU's
+`dmfc1`, `dmtc1`, `cvt.s.l`, `cvt.d.l` and the round / trunc / ceil / floor / cvt to `.l` (a 64-bit integer is an FPU
+register pair; the arithmetic is the FPU's single precision). The compiler's 64-bit support routines (`__ull_div`,
+`__ll_mod` and the others, each a pair of `ld`, one 64-bit instruction and a return) are the game's own code, run as they
+are: a `ddivu` takes some 70 cycles. The monitor saves and restores the registers at 64 bits and HI and LO whole; it
+reads the upper words only for an `sd` to an RCP register (`emulate_hw`) and for the compare of a branch whose delay slot it
+does for the game (`branch_next`), and writes them for an `ld` of one.
 
 The audio library's envelope mixer has a function that turns a volume ramp into the rate the microcode applies every
 eight samples, `(target / volume)^(8 / samples)` in 16.16, which it takes as `(1 + ln(target / volume) / 2^30)` to the
@@ -551,8 +597,12 @@ same jump over it. Three builds of the function are known: two take the O32 ABI'
 that allocates registers across a module, takes them in registers of its own (`$a0`, `$f16`, `$f14`, `$s1`) and is
 called with values live in what it leaves alone, so its wrapper keeps every register but the result. Each jumps to
 `ul_getrate`, which takes the same power as `2^y` in floats -- `y` the library's own logarithm
-of the ratio times `8 / 2^30` times its own `2^30 / samples` -- and gets the console's 16.16 rate, or one `2^-16` off. These
-two are the only changes the runtime makes to the game's code, and they are made in the RDRAM's copy.
+of the ratio times `8 / 2^30` times its own `2^30 / samples` -- and gets the console's 16.16 rate, or one `2^-16` off. The
+envelope rate is the one change the runtime makes to the game's arithmetic, made in the RDRAM's copy; it is entered with
+the game's interrupts off and Status bit 4 on, and the wrapper puts Status back in the delay slot of its return (the CPU
+sends an interrupt to the game's handler only when the interrupted instruction is the game's). The other patch of the same
+kind, `mf_patch`, replaces a hand-written float-matrix conversion that reads a double's mantissa (`guMtxF2L`: `cvt.d.s`,
+`add.d`, `mfc1` of the even register, which a float-computed double leaves zero) with the same conversion in integers.
 
 ### RCP registers the runtime emulates
 
@@ -619,7 +669,11 @@ console's: PI_WR_LEN moves `len + 1` bytes when that is at most 126 and inside o
 `len + 1` rounded up to even; PI_RD_LEN moves `(len | 1) + 1`. The engine does the copy when the RDRAM address is word
 aligned and the source is even: from the ROM, and to and from the save's memory. The runtime first drops the CPU's
 D-cache lines over an RDRAM destination, and when the destination overlaps a frame buffer it waits (50 ms at most) for
-the RSP and the RDP to finish, so that the copied data is not drawn over. What the engine cannot do, the runtime copies
+the RSP and the RDP to finish, so that the copied data is not drawn over. The frame buffers are the origins the VI has
+shown in the last two seconds (120 fields): one it has not shown since is no longer one. libultra's first ORIGIN, before the game
+hands the VI a buffer, is a line (0x280) into the RDRAM's first bytes; kept for good, it made every DMA into the low memory of a game that
+streams from the cartridge wait for the RDP's frame -- 11 ms at a time, with the game held in the monitor and its audio thread
+with it, the AI dry for 0.65 ms at almost every field (a click each) and for a whole field now and then. What the engine cannot do, the runtime copies
 with the CPU.
 
 Between copies the engine also does the game's own word accesses to the cartridge: a read of the ROM (the word at
@@ -647,10 +701,16 @@ The registers at `0x00` - `0x34` are a block RAM of 16 words and read back what 
   nothing and sends black, every line, whatever its line buffers held of the picture before.
 - **VI_V_SYNC** names the TV system once written: 512 - 575 is 525 lines (NTSC, MPAL and a PAL console's 60 Hz modes),
   576 - 703 is 625 lines (PAL, 50 Hz); another value changes nothing. The change is taken at a frame boundary.
+- **`0x0440_0038`**, not a register of the console's: the runtime's, for a save state. It reads the base the scan-out
+  takes, which a read of VI_ORIGIN does not give (the origin of a hi-res picture's second field leaves the base where it
+  was), and in bit 31 the field bit; a write sets both.
 
 The runtime computes what the scan-out needs -- the rows' pitch, the picture's window in the line and in the field,
 and the two scales -- from VI_WIDTH, VI_H_START, VI_V_START, VI_X_SCALE and VI_Y_SCALE when one of them changes
-(`n64rt_vi_hw_event`); [resolution.md](resolution.md) has how each picture is shown.
+(`n64rt_vi_hw_event`); [resolution.md](resolution.md) has how each picture is shown. A low-resolution window (WIDTH below
+512) that asks for more pixels than the row has -- WIDTH 384, X_SCALE 0.649 and a 597-clock window ask for 387 -- ends with
+the row: the console's VI reads the next row's first pixels there, at the edge a television's overscan hides, and the scan-out
+shows the whole line, so they are not shown.
 
 ### AI
 
@@ -739,7 +799,7 @@ kind of memory and sets the slot's file size then; what the file did not have re
 Domain 2 is an SRAM until the command register is written, and a FlashRAM from then on. The FlashRAM's command
 interpreter is `lang/n64rt/n64rt_save.h`: read-array, status and ID modes (the ID is `0x00C2001E`), sector and chip
 erase, and page program from a 128-byte buffer the game writes by DMA. Its page buffer and status words are in the
-SDRAM beside the save, so that the PI's engine and the hardware's status read reach them.
+PSRAM beside the save, so that the PI's engine and the hardware's status read reach them.
 
 ### The save-type database
 
@@ -770,7 +830,7 @@ The setting "Controller 1 pak" is read at every access (`lang/n64rt/n64rt_pak.c`
 The accessory is what the joybus sees, 32-byte blocks at a 16-bit address, and the game's own `osPfs*` and `osGbpak*`
 code runs on top of it. There is no Rumble Pak: the core's interface to the Pocket has no vibration output.
 
-**Controller Pak**: 32 KiB in the SDRAM, `data.json` slot 2, saved as `<game>.mpk`. An image that is not a formatted
+**Controller Pak**: 32 KiB in PSRAM, `data.json` slot 2, saved as `<game>.mpk`. Space for four paks is reserved; only Controller 1 is implemented. An image that is not a formatted
 pak is formatted empty. The slot gets a file size when the game first writes to the pak.
 
 **Transfer Pak**: its registers are the accessory's own:
@@ -796,6 +856,126 @@ file is involved. `core.json` has `cartridge_adapter` 0, which has the Pocket po
   data at 58. A write has /WR low from clock 16 to 48; the data bank's level translator is turned outward only inside a
   write, when /RD is high, so the translator and the cartridge never drive the data pins together.
 
+### The virtual Transfer Pak
+
+The setting "Controller 1 pak" has a second Transfer Pak, **Virtual Transfer Pak**: the same accessory (the registers above) with a cartridge that
+is made of two files the Pocket loads, in place of the Game Boy cartridge in the Pocket's slot (`lang/n64rt/n64rt_gbvirt.c`; the slot's port is not
+touched). The game's own `osGbpak*` code runs on it as on the real one.
+
+The setting "Controller 2 pak" (None, or Virtual Transfer Pak) puts a second one in controller 2, with a cartridge of its own: two instances of the same code (`n64rt_gbvirt.c`, n = 0 and 1; `n64rt_pak.c` keeps the Transfer Pak's registers of each controller apart), each with its own mapper, RAM and clock, and the slots below with "2". Controller 2 is a pad that is there when that setting asks for the pak (the dock's, with its keys, if it reports one; else with nothing pressed). A game that looks for its controllers when it starts finds the pak only if the setting was made before. The real cartridge in the Pocket's slot is controller 1's alone.
+
+* **The ROM** is data slot 8, "Virtual Transfer Pak 1" (`.gb`, `.gbc`; at most 3 MiB), `0x4340_0000`; controller 2's is slot 9, "Virtual Transfer Pak 2", `0x42E0_0000`. With no
+  file in a slot there is no cartridge in that pak, for either one. They are last among the data slots, and the Pocket lists the Load entries together, next to "Load Game". There is no default file: "Load Virtual Transfer Pak 1"
+  loads one from `Assets/n64/common` while the game runs. It is there for the game when its header's checksum and logo are right and its
+  cartridge type (`0x147`) is one of the mappers below. A ROM put in or taken out is seen as a cartridge put in or taken out, as with the real one: a game
+  that polls the status finds it within a second. A game that looks for the cartridge only when it starts (as a console's power-on) does not see a ROM
+  loaded after that.
+* **The RAM** is memory only: `0x42D0_0000` (controller 2's: `0x42D5_0000`), the cartridge's RAM as the emulators keep it (its size is the header's, `0x149`) and for MBC3 with a clock 48 bytes after it: the clock's
+  registers and the latched ones as ten little-endian words, and a 64-bit time that is left 0. Its file is the Game Boy game's own save, which a Game Boy core keeps as well: `<ROM's name>.sav` in `Saves/gbc/common` for a `.gbc` ROM
+  and for a `.gb` in `Saves/gb/common`, else in `Saves/gbc/common` (a Game Boy core that plays both kinds keeps a `.gb`'s save in gbc), read and written **by path** (below). The Pocket's own save files (the nonvolatile slots, named after the N64 game) are not used for it: they cannot name another game's file.
+* **The save file by path** (`sav_read` and `flush`, n64rt_gbvirt.c). When a cartridge is new to the pak (`ram_init`) the runtime asks the Pocket for the path of the file in the ROM's slot (`APF_BRIDGE.REQUEST_GETFILE`: the Pocket writes
+  a 256-byte NUL-ended path to `RAM_DATA_ADDRESS`, here `LAYOUT_GS_PARAM`; measured: absolute, with the extension, as `/Assets/n64/common/<name>.gbc`), takes its name without the extension, and tries `/Saves/gbc/common/<name>.sav` for a `.gbc` and
+  `/Saves/gb/common/<name>.sav`, then `/Saves/gbc/common/<name>.sav`, for a `.gb` (any other extension: by `/gbc/` or `/gb/` in the path, as a `.gbc` or a `.gb`; with neither, no save file). Only result 3 (not found) goes on to the next folder; the file found there is the one written back. It has the Pocket open that path into data slot 5 (controller 2's: 6), a slot with no file that is not read-only
+  (`REQUEST_OPENFILE`: the parameter struct has the path, then the 32-bit flags, bit 0 creating a file that is not there, and a size; the path must be absolute, with the slash), and read it (`REQUEST_READ`) or write it (`REQUEST_WRITE`, the host's 0x0184)
+  from the offset 0. The Pocket opens only files in the platform folders `core.json`'s `platform_ids` lists, so it lists `gbc` and `gb` besides `n64`: measured, with only `n64` the open of a `Saves/gbc/common` file fails with result code 4.
+  Reading: the file there and as long as the RAM or longer (of a longer one only the RAM and the clock's footer are read): its bytes are the RAM, and it may be written; in no folder (result 3 in each): the RAM is `0xFF` and the first write back makes the file, in `Saves/gbc/common` for a `.gb` too; shorter than the RAM,
+  or any other answer (the folder refused, no answer; no other folder is tried then): the RAM is `0xFF` and the file is never written. Each outcome is logged (`n64rt: Game Boy save: ...`). Writing is of the cartridge's RAM size (and the clock's footer), from the offset 0, never more (a longer file keeps its end),
+  and only if the game has written to the RAM or the clock since the last one. When: (a) the game powers the Transfer Pak's cartridge off (the Transfer Pak's `0xB000`; measured: a game does it at its cartridge check, and the file is written at once), (b) another ROM
+  is found in the slot, before the RAM is replaced, (c) 2 s after the last write to the RAM (`n64rt_gbv_field`, in every field), which also covers a state loaded (its RAM is not the file's: it is marked changed). Not with a save state's request: the Pocket answers no
+  target command while it makes the state (measured: none for some 15 s), and the state carries the RAM. Not when the core is quit: nothing tells the runtime (the Pocket's host command to write a data slot goes to the bridge in hardware and reaches no register). A write that
+  fails is tried again 5 s later; three failures with an answer, or twenty with none, end the write backs for that cartridge.
+* **The mappers**: none, MBC1, MBC2, MBC3 (with its clock) and MBC5, as `0x147` says. A cartridge of another type (HuC, MMM01, the Camera) is not
+  there for the game. The ROM's banks are its size rounded up to a power of two, and a read beyond the file is `0xFF`. Powering the cartridge on
+  (`0xB000`) resets the mapper's registers: the RAM disabled, ROM bank 1, RAM bank 0.
+* **The clock** counts seconds while the core runs. The core has no calendar, so the time the Pocket is off is not counted.
+* **Save states** (Sleep, Memories): the virtual cartridges are in them, with their RAM and clock; a real one in the Pocket's slot is unplugged ([Save states](#save-states)).
+
+`lang/n64rt/test` runs it under libultra's own code (`pak_test`; its header says how).
+
+### GameShark codes
+
+The setting "Enable Gameshark codes" (off by default) makes the runtime run the game's GameShark codes (`lang/n64rt/n64rt_cheat.c`,
+`n64rt_gs.c`). They are a text file on the SD card, in `Assets/n64/common/gameshark/`, named after the cartridge: its four-character ID
+(ROM `0x3B..0x3E`: `NSME`, the game's code and its region) and, for a revision whose addresses differ, its version byte in decimal:
+`NSME.1.txt` is tried first, then `NSME.txt`. Every line that is a code is run, in the file's order, in every video field, as a GameShark does
+from its hook on the vertical retrace: there is no choosing among them (the file holds the codes to run). `n64rt_gs.h` has the format
+(`80123456 0063  a description`; lines that are not a code and `#`, `;` and `//` comments are skipped) and the types: `80`/`81` (8- and 16-bit
+writes), `A0`/`A1`, `D0` to `D3` (the next line runs if the byte or half-word at the address is, or is not, the value), `50` (the repeater), and
+`F0`/`F1` (as `80`/`81`). The GS button's `88` and `89` and the types that are not known are skipped. A write that would not change a value is not made;
+one that does is made visible to the game's data cache, and the instruction cache is dropped in the field if any did. With 4 MiB of RDRAM (the
+Expansion Pak setting off) writes above it are ignored. `lang/n64rt/test/gs_host.c` tests the parse and the codes on the host.
+
+The file is read by the Pocket at the runtime's request, with the bridge's target commands (`APF_BRIDGE`, [control.md](control.md)); the
+core's hardware already has them. The runtime writes the open command's parameter struct (the path, 256 bytes, then the flags and the size,
+0) at `0x42D3_0000`, sets `SLOT_ID` to 7 and `RAM_DATA_ADDRESS` to it, and writes `REQUEST_OPENFILE`; the Pocket reads the struct from the
+SDRAM through the bridge and opens the file. Then `DATA_OFFSET` 0, `TRANSFER_LENGTH` the file's size (`FILE_SIZE`), `RAM_DATA_ADDRESS` `0x42D4_0000` and
+`REQUEST_READ`. Each command's end is `STATUS`; the result is `COMMAND_RESULT_CODE` (0 done; the Pocket answers 4 for a path it does not find).
+**The path has to start with a slash and be the card's own** (`/Assets/n64/common/gameshark/NSME.txt`): measured on a Pocket, the same path
+without the slash, relative to `common/`, to `n64/common/` or alone, all fail with 4.
+
+The setting is looked at in every field (a box that is on and has no codes loads the file; off drops them) because the Pocket does
+not send a setting to the core at a fixed time. A setting's `address` in `interact.json` has to be one no other setting has: the setting
+table's n = 8, `0x1000_0120`, is the Start macro's, and a second setting there overwrote the first (the codes were never on).
+
+### Save states
+
+The Pocket's Sleep and its Memories are save states (`core.json`'s `sleep_supported`). To make one the Pocket sends the
+core its Savestate Start command; when the core says the state is ready, it reads the core's block, as many bytes as the core
+says (at most 10 MiB, `0x00A0_0000`, of which a state is at most `0x0097_0000`; a title screen's is some 0.9 MB, written as 1 MiB) at the bridge's `0x0630_0000` -- the SDRAM's `0x4230_0000`, above the last byte of a ROM of 64 MiB --
+into a file. To put one back (the wake from a Sleep, a Memory chosen) it starts the core as for any launch, the game
+booting afresh, copies the file in at the same address and sends Savestate Load. `target/pocket/core_top.sv` answers
+both commands at once and reports them busy until the runtime is done; `APF_BRIDGE.SAVESTATE` and `SAVESTATE_DONE`
+([control.md](control.md)) are the runtime's side, and `MONITOR.PEND` bit 5 its wake-up. The block is no memory the game
+or the runtime uses, but the Pocket's read of it shares the SDRAM's port with the game (below), and the booted game runs
+while the Pocket copies one in. `lang/n64rt/n64rt_state.c` does the work, with the game stopped in the monitor wherever it was:
+
+1. **The hardware at rest.** The monitor waits for the RSP to halt and its DMA, the RDP, the PI's engine and the SI to
+   be idle, and for the AI to have played its buffers (some 0.2 s, most of it the AI's), answering the other wake-ups as
+   they come. The game's tasks end and their interrupts are pending in the state. A state that cannot be made so in
+   half a second is refused (the Pocket's error), and the game goes on.
+2. **A state** is the runtime's own `.data` and `.bss` (the game's registers in the monitor's context, the PI's and the RI's
+   registers, the saves' kinds and sizes, and on the tables' CPU the game's TLB entries and the kept ones); the RDRAM and the RDP's hidden
+   coverage plane; the cartridge's save, a FlashRAM's page buffer and status, the Controller Pak; and the hardware's
+   registers: COP0 (Count, Compare, EPC, the TLB's registers, Cause's software bits), the CPU's own 32 TLB entries (`tlbr` on the way out, `tlbwi`
+   on the way back, with Index, PageMask, EntryHi and EntryLo0/1 put back after them) and the FPU's condition bit, the MI's
+   mode, interrupts and mask, the VI's registers, base, field and line, the AI's rate and its DMA enable, the PIF RAM, the
+   SI's address and whether the PIF has run commands, DMEM, the RSP's status, PC and semaphore, the DPC's registers, and
+   the sizes the Pocket's table has for the saves' and the paks' slots. Its header names the runtime (a sum of its code)
+   and the ROM (its header's check words, title and ID): a state is refused by another `n64rt.sys` or another game.
+   The game then goes on (a Memory) as from the moment the hardware came to rest: the VI's line is waited for and Count,
+   Compare and the MI's interrupts are put back, so the copies' time is none of the game's.
+   **Its size.** The Pocket's time to save a state and to put one back goes with the state's size (some 16 s of a wake, for
+   9.9 MB), so the memories are written as tokens over 32-bit words: a word with bit 31 clear is the count of words that
+   follow it as they are, with bit 31 set the count of times the word after it is repeated (three or more). The header
+   and the registers are at fixed offsets, then DMEM, the save, the Controller Pak, the coverage plane, the RDRAM and last
+   the runtime's own memory, each from an offset the header names. The core tells the Pocket the size, in MiB, that the runtime has written
+   to `APF_BRIDGE.TRANSFER_LENGTH` (bits 23:20, whole MiB) before its `SAVESTATE_DONE`. The RDRAM of a game that has used little of it is mostly zeros, and the coverage plane a constant:
+   a title screen's state is some 0.9 MB.
+   **The read-out.** The Pocket reads the block after the answer, for seconds (some 11 s for 4 MB), through the bridge's port: the
+   one the AI's reader and the game's SDRAM accesses go through. A game that went on meanwhile had its audio buffers come
+   late and its sound crackled for as long as the read lasted. So the game stays stopped, in the monitor, until it is over (`readout_wait`). The
+   core does not say when that is; it shows in the time a cold read of 4 KiB of the RDRAM takes: measured before the answer
+   and in the 300 ms after it, the read is over when the time has been back near the first for a second. If the contention is
+   not to be seen the wait is 4 s a MiB, and it is never more than 40 s. Count is put back after it (the game's time is that of the
+   state's, not the wait's) and the runtime's own clocks move on by it.
+3. **A load** quiets the booted game's hardware the same way (its RSP halted where it is if it does not stop), puts back
+   the RSP (DMEM through the RDRAM; BROKE by a BREAK it runs), the DPC (CURRENT and END; a SYNC FULL through the RDP's
+   command port clears what END's write set), the PIF RAM, the AI, the VI, the MI and COP0, then the memories, waits for
+   the VI's line to be the state's (the game's next VI interrupt is as far ahead as it was), puts back Count, copies the
+   runtime's memory over its own and leaves the monitor through its exit, into the game where it was.
+
+Not in a state, because the hardware is at rest when it is made: IMEM and the RSP's registers (every task loads its
+microcode and sets its registers), the AI's queue and the SI's DMA. Nor the RDP's modes and TMEM, which nothing reads
+back: a game sets what it draws with in every frame's display list. A Game Boy cartridge in the Pocket's slot, in the Transfer Pak, is unplugged in the state: its RAM, mapper and
+clock are its own, which a state cannot hold. The pak is made off, with no cartridge and "changed" in the copy of the runtime's memory that the state takes (the game that
+goes on does not see it, `n64rt_pak_state_begin`); the game that is put back finds it gone and looks again, and the cartridge is in the slot still. The virtual Transfer Paks are in the
+state: their registers are in the runtime's memory, and the RAM and the clock of each cartridge that is in have a region of their own (`RG_GB1`, `RG_GB2`) and the
+sizes of their save files their place in the table; the clock goes on from where it was. Their ROMs the Pocket loads as for any launch, and
+must be the same file (its header's CRC) when the state is put back: otherwise that cartridge is not in, for the game, as a ROM taken out. The core tells the Pocket it takes a state
+when a game runs, and none when it does not.
+`sim/mips_soc`'s `SS_SAVE`, `SS_LOAD` and `sim/mips_soc/state_compare.py` make a state, load it into another run and
+compare the two runs' pictures and sound.
+
 ## Controllers and settings
 
 The Pocket writes each setting of `pkg/pocket/Cores/tortuga.Mirlo64/interact.json` to a field of the two
@@ -808,39 +988,38 @@ scan-out instead.
 | Crop Vertical | `0x1000_010C` | `interact0[9:5]` | None (0), **8 lines** (8), 12 lines (12) |
 | Crop Horizontal | `0x1000_0114` | `interact0[19:15]` | [1:0] columns at the right, [3:2] at the left, up to 3 each: None (0), 1 / 2 / 3 columns (5 / 10 / 15), 1 / 2 / 3 columns left (4 / 8 / 12), **1 column right** (1), 2 / 3 columns right (2 / 3) |
 | Expansion Pak | `0x1000_0138` | `interact1[24]` | **On** (0), off (1): a check box; read when the game starts |
-| Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak (2) |
-| Shift key | `0x1000_0110` | `interact0[14:10]` | **None** (0), L (1), R (2), ZL (3), ZR (4), Select (6) |
-| Debug (this fork) | `0x1000_0124` | `interact1[9:5]` | **Off** (0), FPS (1), Graph (2), FPS and graph (3); not persistent; the runtime's ([fps.md](fps.md)) |
-| Normal: A B X Y / L R | `0x1000_0140` | `interact2[4:0]` | **Auto** (0), A B cR cL / Z R (1), cR cD cU cL / Z R (2), A B cR cL / R Z (3), A B cU Z / Z R (4) |
-| Shift: A B X Y / L R | `0x1000_0144` | `interact2[9:5]` | **Auto** (0), Same as normal (1), cR cD cU cL (2), A B cU cD (3), / L R (shoulders) (4) |
-| Shift: D-pad | `0x1000_0148` | `interact2[14:10]` | **Auto** (0), Same as normal (1), C buttons (2), Half stick (3), N64 D-pad (4), Stick and D-pad (5) |
-| D-pad keys | `0x1000_014C` | `interact2[19:15]` | **N64 stick** (0), N64 D-pad (1), Stick and D-pad (2), C buttons (3) |
-| Analog sticks (dock) | `0x1000_0150` | `interact2[24:20]` | **L stick / R C buttons** (1), L stick / R none (0), L half / R C buttons (2), L D-pad / R C buttons (3), L C buttons / R stick (4), Both none (5) |
-| Stick dead zone | `0x1000_0118` | `interact0[24:20]` | **Default (12)** (0), None (1), Small (6) (2), Large (20) (3), Huge (30) (4) |
-| Stick range | `0x1000_011C` | `interact0[29:25]` | **Default (80)** (0), Wide (85) (1), 75 (2), 70 (3), Small (60) (4) |
-| Save for this game, Forget this game | `0x1000_0154` | `interact2[29]`, `[28]` | actions: a write of 2 saves, of 3 forgets |
+| Enable Gameshark codes | `0x1000_013C` | `interact1[25]` | **Off** (0), on (1): a check box; seen in every field ([GameShark codes](#gameshark-codes)) |
+| Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak (2), Virtual Transfer Pak (3) |
+| Controller 2 pak | `0x1000_0118` | `interact0[24:20]` | **None** (0), Virtual Transfer Pak (3) |
+| Stick | `0x1000_012C` | `interact1[19:15]` | **D-pad** (0), L stick (1), R stick (2) |
+| D-pad | `0x1000_0134` | `interact1[23:22]` | **None** (0), D-pad (1), L stick (2), R stick (3) |
+| L stick dead zone | `0x1000_0124` | `interact1[9:5]` | Menu 0 % (1), 5 % (2), 10 % (3), ... 70 % (15); actual threshold is 30 % larger (0 % to 91 %) |
+| R stick dead zone | `0x1000_011C` | `interact0[29:25]` | Same as the L stick |
+| Start macro | `0x1000_0120` | `interact1[4:0]` | **None** (0), C-Down + C-Up (14), C-Left + C-Right (13), C-Down + C-Left (15), C-Down + C-Right (16), C-Up + C-Left (17), C-Up + C-Right (18): the two keys together are the Start; the Start key alone is then C-up |
+| R as modifier | `0x1000_0110` | `interact0[14:10]` | **None** (0), Face C buttons (1): R held turns X, B, Y, A into C-up, C-down, C-left, C-right; Joystick half press (2): R held makes the D-pad's stick 60 % |
+| C buttons | `0x1000_0128` | `interact1[14:10]` | **None** (0), D-pad (3), L stick (2), R stick (1) |
 
-The four layout lists are not persistent (the Pocket starts them on Auto), so Save for this game is how a layout is kept. The
-Pocket's own Controls menu (`input.json`) lists A, B, C-Down (Select), C-Left (Y) and C-Right (X); it remaps what each button
-sends, and the runtime sees only the resulting key bits. The settings Stick, C buttons, Z button, L button, R button, Start button and D-pad of
-earlier builds are gone from the menu (the Pocket shows 16 entries at most); their fields read 0 (their defaults).
+The Pocket's own Controls menu (`input.json`) lists A, B, C-Down (Select), C-Left (Y), C-Right (X), C-Up, L (ZL, `pad_trig_l2`), R (R), Z (L) and Start; C-Up is on ZR (`pad_trig_r2`: a key the documentation does not list); it remaps what
+each button sends, and the runtime sees only the resulting key bits (so remapping its "Start" moves the Start key itself).
 
-- **Layers.** Every Pocket key (A B X Y L R ZL ZR Select Start, L3 R3 on a dock pad) and the three groups (the D-pad keys, the
-  left and the right analog stick) has an N64 output in two layers: Normal, and Shift while the Shift key is held (that key
-  never reaches the game). The table is 30 five-bit fields in the runtime's RAM (`n64rt_ctrl.h`, `n64rt_pad.h`).
-- **Which layout.** Each list on Auto takes the layout from the game's saved record (a `.ctl` file, `data.json` slot 5, written
-  by Save for this game), else from the family of the cartridge's ID (Platformer, Shooter, Skate, Racing, Fighter:
-  `n64rt_ctrl_games` in `n64rt_ctrl.h`), else Standard. A list that names a layout puts it over that. A family owns only the
-  Shift key (Select) and the table.
-- **Standard**: A A, B B, X C-right, Y C-left, L Z, R R, Select C-down, Start Start; the D-pad keys are the N64's stick at full
-  deflection (half while Shift is held).
-- **Sticks by default.** A dock pad's left analog stick is the N64's stick and its right stick the C buttons (Analog sticks
-  (dock) changes that); the D-pad keys and the left stick add, clamped to the range. The analog sticks are believed for a pad the
-  dock calls type 3 (with analog), and for type 2 ("without analog") unless the four bytes are all 0x00 or all 0xFF. A type 1
-  pad (the Pocket's own controls) has none.
-- **The stick's feel** (`n64rt_pad_axis`; no RTL). Stick dead zone drops what is closer to the centre than that
-  many of 127; Stick range scales the rest to 0..range (a digital stick is the range, half of it, 0.35 of it on a diagonal, for
-  the half stick). Both are part of a game's saved layout; a family leaves them alone.
+- **Z, L and R** are the Pocket's L, ZL and R keys; the Controls menu moves them.
+- **Button codes** (Modifier, Start): 1 is the Pocket's L, 2 R, 3 ZL, 4 ZR, 5 none, 6 A, 7 B, 8 X, 9 Y,
+  10 Select, 11 Start, any other value none; 0 is the
+  setting's own key (L for Z, ZL for the L button, R for R, none for the Modifier). The settings are independent: one
+  key may serve two N64 buttons.
+- **A and B** are fixed. **C buttons**: C-left is Y, C-right is X, C-down is Select, C-up ZR (the Controls menu's C-Up). With
+  "C buttons" set to L stick or R stick, that stick adds all four beyond half its range, one at a time: the quarter of the
+  circle it points into (45 degrees either side of up, right, down, left; a diagonal of exactly 45 degrees is up or down).
+  With D-pad, the D-pad keys add them too.
+- **R as modifier**: when set, R does that while held and never reaches the game.
+- **Start**: a key (a button code; that key is then the Start only), or Select and Start together, which then count for
+  nothing else. The Start key, when the setting leaves it (another key; with Select+Start, Start alone), is C-up.
+- **Stick**: with None, the stick stays centred. With D-pad, the D-pad keys are the stick at full deflection (80). With L stick or R stick, the analog
+  stick's two bytes (`0x80` the centre; nothing within its stick's dead zone, then linear from its edge to 80 at the end of the range). A pad the dock
+  reports with analog sticks (type 3) gives the stick alone. A pad reported without (type 2) is believed when its stick
+  bytes are not all `0x00` or all `0xFF`, and gives the D-pad keys while its stick is centred. The Pocket's own
+  controls give the D-pad keys.
+- **D-pad** (the N64's): nothing, the D-pad keys, or a stick beyond half its range as the four directions.
 
 `lang/mips/test/padtest.c` is a program that shows on the screen, for the four pads, the key word, the stick bytes and
 the N64 controller they make with the current settings. It is installed in the runtime's place
@@ -917,7 +1096,7 @@ All benches use Verilator. `VERILATOR` and `VERILATOR_ROOT` name the installatio
 `build.sh soc` verilates the SoC with an SDRAM chip model that checks the chip's timing in nanoseconds, and a model of
 a Game Boy cartridge (`gb_cart_model.sv`); it needs the images of `tools/mips_inits.py`. `build.sh sdr` builds a bench
 of the SDRAM controller, PHY and arbiter alone. The bench makes `clk_sys` at 62.5 MHz and the CPU's clock at 3/2 of it,
-in the PLL's phase.
+in the PLL's phase. `EXTRA_DEFS="+define+MIRLO_TLB_TABLES"` builds it with the tables' CPU instead of the TLB; the tests that need what a CPU lacks say SKIPPED.
 
 ```
 obj_soc/tb_soc <program.bin> [-c Mcycles] [-o dir] [-e every_n_frames]
@@ -944,6 +1123,8 @@ switches, all environment variables (the first lines of `tb_soc.cpp` list them):
 | `RSPDUMP=<dir>` (`RSPDUMP_AUDIO=1`) | the graphics (and audio) tasks with the RDRAM, for `sim/rsp` and `rsp_replay` |
 | `CKPT=<dir>,<n>` | a copy of the run left waiting every n fields, to be run on from with other options |
 | `NOLOAD=1` | nothing loaded: the boot ROM's serial boot |
+| `SS_SAVE=<field>`, `SS_OUT`, `SS_EXIT=1` | the Pocket asks for a save state at that field; the state is read out into the file (`<-o dir>/state.bin`) and the run ends, if asked |
+| `SS_LOAD=<file>`, `SS_LOAD_AT=<field>` | the Pocket copies a state in at that field (60) and asks for its load (`SS_BRIDGE=1`: through the bridge's port, a word at a time) |
 | `+gbcart=<rom.gb>` | a cartridge in the slot (a plus argument) |
 
 ### Programs for the SoC: `lang/mips/test`
@@ -955,12 +1136,16 @@ C library (`make -C lang/mips -f lib.mk VARIANT=game`) and are run as
 | Program | What it checks |
 |---|---|
 | `cpu_test`, `libc_test` | Loads and stores of every width, the caches, the FPU, the divider; the C library |
-| `int64_test` | The 64-bit levels against a table |
+| `int64_test`, `ddiv64_test` | The 64-bit levels against a table; `ddiv(u)` and `div(u)` against a table of exact quotients and remainders (`ddiv64_vec.py`) |
+| `ualn_test` | `ldl`, `ldr`, `sdl`, `sdr` at every byte address (cached, uncached, mapped, on either TLB), in delay slots and behind stores to the same doubleword, block moves at every alignment, and their cost |
 | `n64win_test`, `mon_test` | The RDRAM window and its trap; the monitor level beside a game's own handler |
-| `tlbram_test`, `tlbmon_test`, `tlbgame_test`, `tlbpg_test` | The translation tables; the game's TLB instructions; TLB exceptions delivered to the game; the fetch page registers |
+| `tlbram_test`, `tlbmon_test`, `tlbgame_test`, `tlbpg_test` | Each is one program that runs the checks for the CPU it finds (COP0 23), the tables' or the VR4300's own TLB (`<name>_real.c`). On the translation tables' CPU: the tables; the game's TLB instructions; TLB exceptions delivered to the game; the fetch page registers (each says SKIPPED on a CPU with neither). On the real TLB: `tlbram_test`, the seven page sizes, the micro-TLBs, every register of the TLB exceptions and their vectors, `tlbp`, `tlbr`, Index, Wired, Random, the caches, `0x6000_0000`; `tlbmon_test`, the game's own TLB instructions with the monitor (no trap); `tlbgame_test`, its refill and general handlers; `tlbpg_test`, the cached fetches from mapped pages |
+| `tlbint_real_test` | An interrupt that comes while a fetch from a page no entry names is in M: it goes to the general vector (never the refill vector), with the fault coming again afterwards |
+| `tlbdev_test` | A page onto a device or past the RDRAM: the monitor's entry and COP0 22, the 4 MiB setting, the game's exceptions first, every range the game maps, the game's view |
+| `tlbcost_test` | What a mapped load and a refill cost in cycles (printed) |
 | `mi_test`, `vi_test`, `ai_test`, `si_test`, `pi2_test` | Each RCP block: registers, interrupts, DMA, and that the game's accesses enter the monitor only where they should |
 | `rcpcpu_test` | The CPU's side of the SP and DPC registers: the semaphore, the DMA queue, DPC writes |
-| `dma_coh_test` | The D-cache against the PI's engine, the RSP's DMA and the SI's RD64B writing a buffer whose edge shares a 32-byte line with data loaded during the transfer |
+| `dma_coh_test` | The D-cache against the PI's engine, the RSP's DMA and the SI's RD64B writing a buffer beside data loaded during the transfer |
 | `ram8_test` | Every block above the RDRAM's first 4 MiB; `sim/mips_soc/ram8_check.sh` runs it and checks the audio and the picture |
 | `hires_test`, `vwin_test`, `viaa_test` | The scan-out's sizes and windows, and the VI's filters (`sim/vi_filter/viaa_check.py` compares the frame) |
 | `rsp_replay` | One recorded RSP task on the whole SoC, timed |
@@ -975,8 +1160,12 @@ compares the output sample for sample.
 another copy given as `N64_MODEL=<dir>`). Both run the same ROM and must agree on every retired
 instruction's address, word and written register (64 bits), on every exception and on the FPU's registers.
 `GEN="-GFAST=1 -GXWB=1 -GW64_ALU=1 ..."` passes the core's parameters. `gen_rand_rom.py` writes random integer programs
-(every instruction on registers full of 64-bit values, through the cache and around it; its mode `nodiv` matches the
-SoC's levels) and `gen_rand_fpu_rom.py` random FPU programs.
+(every instruction on registers full of 64-bit values, through the cache and around it; its mode `full` matches the
+SoC's levels, `div` is that with mostly divides, on the operands where a divider goes wrong, and `nodiv` has no
+`ddiv(u)`; the argument `tlb` adds four windows of mapped pages onto the scratch memory, loads and stores through them with
+`ll`, `sc`, `ld`, `sd`, `ldl` and `sdl`, and random `tlbwi`, `tlbwr`, `tlbp`, `tlbr` and ASID changes) and `gen_rand_fpu_rom.py` random FPU programs.
+`tlb_rom.sh <out.z64>` builds `tlb_rom.c`, a directed TLB program: every page size, ASID and G, a refill and a fault in a delay slot and with EXL
+set, a fault of a fetch. `TB_TLBDUMP=1` prints both TLBs at a mismatch (the RTL's with `TBC=-DTB_RTL_TLB` and `GEN=--public-flat-rw`).
 
 ### Single blocks
 

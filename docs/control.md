@@ -54,7 +54,7 @@ result codes). A data slot is one of the entries of the core's `data.json`.
 | `REQUEST_OPENFILE` | `0x0C` | W | A write of 1 asks to change the slot's file to the one a path in memory names |
 | `SLOT_ID` | `0x10` | RW | The slot (16 bits) |
 | `DATA_OFFSET` | `0x14` | RW | The offset in the slot's file |
-| `TRANSFER_LENGTH` | `0x18` | RW | The bytes to transfer |
+| `TRANSFER_LENGTH` | `0x18` | RW | The bytes to transfer. Bits 23:20 are also, in MiB, the size of the save state the Pocket is told ([mips.md](mips.md), "Save states"): the runtime writes it before it answers a save and keeps the whole block there otherwise |
 | `RAM_DATA_ADDRESS` | `0x1C` | RW | The SDRAM address (`0x4xxx_xxxx`) of the data |
 | `FILE_SIZE` | `0x20` | RW | Read: the size of the slot's file. Write: sets the size the Pocket has for it, which is what it writes back of a nonvolatile slot |
 | `STATUS` | `0x24` | R | 1 when a command has completed; a read clears it |
@@ -62,9 +62,12 @@ result codes). A data slot is one of the entries of the core's `data.json`.
 | `COMMAND_RESULT_CODE` | `0x2C` | R | The last command's result (3 bits) |
 | `BOOT_READY` | `0x30` | RW | A bit the software can set and read; the Pocket is told the core is ready by the SDRAM's controller, not by this |
 | `HOST_STATE` | `0x34` | R | Bit 0 `RESET_N`: the Pocket has released the core's reset. Bit 1 `LOADED`: it has loaded the data slots |
+| `SAVESTATE` | `0x38` | RW | The Pocket's save states ([mips.md](mips.md), "Save states"). Bit 0 `SUPPORTED` (RW, 1 after reset): what the Pocket's query is told. Bit 1 `SAVE` (R): the Pocket asks for a state. Bit 2 `LOAD` (R): it has copied one in and asks for its load. Each stays set until `SAVESTATE_DONE` |
+| `SAVESTATE_DONE` | `0x3C` | W | A write ends the request: bit 0 set, it failed (the Pocket's error); clear, it is done |
 
 The Pocket loads the ROM, the runtime and the saves by itself before the core starts, and reads the nonvolatile slots
-back when the core is quit: the runtime only sets a save's size (`FILE_SIZE`).
+back when the core is quit: the runtime only sets a save's size (`FILE_SIZE`). A save state's request (the Pocket's
+Savestate Start or Load, `target/pocket/core_top.sv`) wakes the monitor through `MONITOR.PEND` bit 5.
 
 ## APF_INPUT
 
@@ -102,7 +105,7 @@ How the runtime maps these to the N64's controller is in [mips.md](mips.md) (Con
 ## APF_INTERACT
 
 The core's settings: two words that the Pocket writes from `interact.json`. An entry of `interact.json` whose `address`
-is `0x1000_0100 + 4n` (n from 0 to 21) reaches the SoC: n = 0 and 1 write a whole word, the others a field of one, so
+is `0x1000_0100 + 4n` (n from 0 to 15) reaches the SoC: n = 0 and 1 write a whole word, the others a field of one, so
 each setting has an address of its own and needs no mask.
 
 | Register | Offset | Dir | What |
@@ -111,7 +114,6 @@ each setting has an address of its own and needs no mask.
 | `INTERACT_CHANGED0` | `0x04` | R | 1 when the Pocket has written the whole word 0 since the CPU last read `INTERACT0` |
 | `INTERACT1` | `0x08` | RW | Word 1 |
 | `INTERACT_CHANGED1` | `0x0C` | R | The same for word 1 |
-| `INTERACT2` | `0x10` | R | The layout lists the Pocket wrote through the words 16 to 19 (below): `[4:0]` Normal, `[9:5]` Shift, `[14:10]` Shift: D-pad, `[19:15]` D-pad keys (each 0 is Auto), and `[28]`, `[29]`, which flip when Save for this game and Forget this game are pressed |
 
 | n | `address` | Field | The setting (`pkg/pocket/Cores/tortuga.Mirlo64/interact.json`) |
 |---|---|---|---|
@@ -119,20 +121,18 @@ each setting has an address of its own and needs no mask.
 | 1 | `0x1000_0104` | `INTERACT1`, whole | |
 | 2 | `0x1000_0108` | `INTERACT0[4:0]` | Controller 1 pak |
 | 3 | `0x1000_010C` | `INTERACT0[9:5]` | Crop Vertical (the scan-out reads it) |
-| 4 | `0x1000_0110` | `INTERACT0[14:10]` | Shift key |
+| 4 | `0x1000_0110` | `INTERACT0[14:10]` | Modifier |
 | 5 | `0x1000_0114` | `INTERACT0[19:15]` | Crop Right (the scan-out reads its low two bits) |
-| 6 | `0x1000_0118` | `INTERACT0[24:20]` | not used |
-| 7 | `0x1000_011C` | `INTERACT0[29:25]` | not used |
-| 8 | `0x1000_0120` | `INTERACT1[4:0]` | not used |
-| 9 | `0x1000_0124` | `INTERACT1[9:5]` | Debug (this fork: bit 0 the FPS number, bit 1 the graph; the runtime's: [fps.md](fps.md)) |
+| 6 | `0x1000_0118` | `INTERACT0[24:20]` | Controller 2 pak (None, or Virtual Transfer Pak: 3) |
+| 7 | `0x1000_011C` | `INTERACT0[29:25]` | R button |
+| 8 | `0x1000_0120` | `INTERACT1[4:0]` | Start macro |
+| 9 | `0x1000_0124` | `INTERACT1[9:5]` | Z button |
 | 10 | `0x1000_0128` | `INTERACT1[14:10]` | C buttons |
 | 11 | `0x1000_012C` | `INTERACT1[19:15]` | Stick |
-| 12 | `0x1000_0130` | `INTERACT1[21:20]` | not used |
-| 13 | `0x1000_0134` | `INTERACT1[23:22]` | not used |
+| 12 | `0x1000_0130` | `INTERACT1[21:20]` | Start button |
+| 13 | `0x1000_0134` | `INTERACT1[23:22]` | D-pad |
 | 14 | `0x1000_0138` | `INTERACT1[24]` | Expansion Pak (0: in) |
-| 15 | `0x1000_013C` | `INTERACT1[25]` | not used |
-| 16..19 | `0x1000_0140`..`0x1000_014C` | `INTERACT2[4:0]`, `[9:5]`, `[14:10]`, `[19:15]` | Normal, Shift, Shift: D-pad, D-pad keys (a list each; 0 is Auto) |
-| 21 | `0x1000_0154` | `INTERACT2[28]`, `[29]` | Save for this game (a write of 2 flips `[29]`), Forget this game (a write of 3 flips both); a write of 1 is nothing |
+| 15 | `0x1000_013C` | `INTERACT1[25]` | Enable Gameshark codes (a variable of `interact.json` with an address the table gives to another setting writes that setting's field too: check that an address is not taken before giving it) |
 
 ## APF_VIDEO
 
@@ -230,7 +230,7 @@ The monitor level of the CPU ([mips.md](mips.md)) and the controls of the RCP's 
 |---|---|---|---|
 | `ID` | `0x00` | R | `0x4D4F_0000` with a bit for each block the core has: 0 the monitor, 1 the MI, 2 the PI's engine, 3 the VI, 4 the AI, 5 the SI and the PIF RAM, 6 the PI's domain 2 and the cartridge's word reads |
 | `CTL` | `0x04` | RW | Bit 0 `OWN`: the game's interrupt line is the one below, not the RSP's own. Bit 1 `RCP`: that line. Bit 2 `MI`: the game's interrupt is the MI's line. Bit 3 `VI`: the VI is the hardware's. Bit 4 `AI`: the AI is the hardware's |
-| `PEND` | `0x08` | RW | What has happened (a write of 1s clears): bit 0 the RSP's interrupt rose; bit 1 a field began (with the VI in hardware: the registers the picture's window comes from changed); bit 2 a tick of 4.2 ms; bit 3 the RDP completed a full sync (with the AI in hardware: the game wrote the AI's rate); bit 4 the PIF has commands to run |
+| `PEND` | `0x08` | RW | What has happened (a write of 1s clears): bit 0 the RSP's interrupt rose; bit 1 a field began (with the VI in hardware: the registers the picture's window comes from changed); bit 2 a tick of 4.2 ms; bit 3 the RDP completed a full sync (with the AI in hardware: the game wrote the AI's rate); bit 4 the PIF has commands to run; bit 5 the Pocket asks for a save state or for its load (`APF_BRIDGE.SAVESTATE`) |
 | `MASK` | `0x0C` | RW | Which of them interrupt the monitor |
 | `KICK` | `0x10` | RW | A write of 1s sets `PEND`'s bits |
 | `LEVEL` | `0x14` | R | Bit 0: the RSP's interrupt, as it is |

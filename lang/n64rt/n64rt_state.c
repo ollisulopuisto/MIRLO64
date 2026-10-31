@@ -22,8 +22,10 @@
  *     sizes and kinds, the stacks -- everything the runtime knows of the game. Its code is not in the state: a state
  *     is for the same n64rt.sys (a sum of its code and constants says so) and the same ROM (its header);
  *   - the RDRAM, 8 MiB, and the RDP's hidden coverage bits of it (LAYOUT_HID);
- *   - the cartridge's save, a FlashRAM's page buffer and status words, the Controller Pak: the memories the game
- *     reads as they were when the state was made (the Pocket's files are written back when the core quits);
+ *   - the cartridge's save, a FlashRAM's page buffer and status words, the Controller Pak, and the RAM (and clock) of the
+ *     virtual Transfer Paks' Game Boy cartridges: the memories the game reads as they were when the state was made (the Pocket's
+ *     files are written back when the core quits). A real Game Boy cartridge in the Pocket's slot is no memory of the core's: it is
+ *     unplugged in the state (n64rt_pak.c);
  *   - the RCP's registers as the hardware has them, with what they hide: the VI's base and field (rcp_vi.sv's
  *     0x38), its line, the MI's mode, interrupts and mask, the PIF RAM, the RSP's DMEM, its status and PC, the DPC's
  *     registers, and the CPU's COP0 registers the game has (Count, Compare, EPC, Cause's software bits, the TLB's
@@ -48,20 +50,21 @@
 #include "n64rt.h"
 
 #define SS_MAGIC    0x4D535331u         /* "MSS1" */
-#define SS_VERSION  2u
+#define SS_VERSION  4u
 /* the state's block (layout.h LAYOUT_STATE, LAYOUT_STATE_BYTES, its largest): the header and the registers at fixed offsets,
  * then the regions one after the other, each a stream of tokens (rle_put) of the words of a memory */
 #define SS_HEAD     0x000000u           /* ss_head_t */
 #define SS_HW       0x001000u           /* ss_hw_t */
 #define SS_BODY     0x003000u           /* the first region */
 #define SS_RT_MAX   0x03C000u           /* the runtime's .data and .bss, at most */
-enum { RG_DMEM, RG_SAVE, RG_CPAK, RG_HID, RG_RDRAM, RG_RT, RG_N };      /* (the runtime's last: a load goes on from its copy) */
+enum { RG_DMEM, RG_SAVE, RG_CPAK, RG_HID, RG_RDRAM, RG_GB1, RG_GB2, RG_RT, RG_N };      /* (the runtime's last: a load goes on from its copy) */
 /* what a load decodes the runtime's memory into before it is copied over the runtime's own, and what a save keeps RDRAM's first 4 KiB
  * in while DMEM goes through them: SDRAM nothing else uses, above the block's largest size */
-#define SS_SCR_RT   (LAYOUT_STATE + 0x00B00000u)
-#define SS_SCR_RAM  (LAYOUT_STATE + 0x00B40000u)
-_Static_assert(SS_SCR_RAM + 0x1000u <= LAYOUT_SAVEDB, "the scratch areas lie below the save-type database");
-_Static_assert(SS_BODY + 0x1000u + SS_RT_MAX + LAYOUT_SAVE_MAX + 0x1000u + LAYOUT_PAK_BYTES + 0x100000u + 0x800000u + 64u <= LAYOUT_STATE_BYTES,
+#define SS_SCR_RT   (LAYOUT_STATE + 0x00A80000u)        /* 0x42D8_0000: between the second Game Boy RAM and its ROM (layout.h) */
+#define SS_SCR_RAM  (LAYOUT_STATE + 0x00AC0000u)
+_Static_assert(SS_SCR_RT >= LAYOUT_GBSAVE2 + LAYOUT_GBSAVE_MAX && SS_SCR_RT + SS_RT_MAX <= SS_SCR_RAM && SS_SCR_RAM + 0x1000u <= LAYOUT_GBROM2,
+               "the scratch areas lie between the second Game Boy RAM and its ROM");
+_Static_assert(SS_BODY + 0x1000u + SS_RT_MAX + LAYOUT_SAVE_MAX + 0x1000u + LAYOUT_PAK_BYTES + 0x100000u + 0x800000u + 2u * LAYOUT_GBSAVE_MAX + 64u <= LAYOUT_STATE_BYTES,
                "the largest state fits the size the core tells the Pocket it may load: target/pocket/core_top.sv's SS_SIZE");
 #define SS_AT(o)    (LAYOUT_STATE + (o))
 
@@ -91,9 +94,13 @@ typedef struct {
     u32 dpc_start, dpc_end, dpc_cur, dpc_status;
     /* the monitor's: CTL, MASK, PI2 */
     u32 mon_ctl, mon_mask, mon_pi2;
-    /* the Pocket's table of file sizes: the save's slot and the Controller Pak's */
-    u32 fsize[3];
+    /* the Pocket's table of file sizes: the save's slot, the Controller Pak's and the Game Boy saves' */
+    u32 fsize[5];
+    /* the Game Boy cartridges' RAM (and clock) bytes in their regions: 0 for no cartridge */
+    u32 gb_bytes[2];
     u64 uptime;                         /* the SoC's clock when the state was made */
+    /* the CPU's own TLB (n64rt_tlbreal; else zeros): each entry's PageMask, EntryHi, EntryLo0, EntryLo1, as tlbr gives them */
+    u32 tlb[32][4];
 } ss_hw_t;
 _Static_assert(sizeof(ss_head_t) <= 0x1000u && sizeof(ss_hw_t) <= 0x2000u, "the state's header and registers");
 
@@ -136,6 +143,8 @@ static inline void hw_wr(u32 pa, u32 v) { *(volatile u32 *)(uintptr_t)(0xA000000
 
 #define MFC0(r)     ({ u32 _v; __asm__ volatile("mfc0 %0, $" #r : "=r"(_v)); _v; })
 #define MTC0(r, v)  __asm__ volatile("mtc0 %0, $" #r "\n\tnop\n\tnop" :: "r"((u32)(v)))
+#define TLBR()      __asm__ volatile("tlbr\n\tnop\n\tnop")
+#define TLBWI()     __asm__ volatile("tlbwi\n\tnop\n\tnop")
 
 static inline u64 uptime(void) { timer0_uptime_latch_write(1); return timer0_uptime_cycles_read(); }
 #define MS(n) ((u64)(n) * (CONFIG_CLOCK_FREQUENCY / 1000u))
@@ -269,6 +278,62 @@ static void sp_dma(u32 sp, u32 rdram, u32 bytes, int to_rdram)
 
 static void time_put(const ss_hw_t *w);
 
+/* ---- the Pocket's read of the state ------------------------------------------------------------------------------
+ * Once the state is answered the Pocket reads its block out through the bridge, a MiB takes it seconds, and the port it reads by is
+ * the one the AI's reader and the game's own SDRAM accesses go through: a game that goes on meanwhile has its audio buffers
+ * come late (the audio crackles for as long as the read lasts, 17 s for a 4 MB state) and its frames slow. So the game stays
+ * stopped, as for the state, until the read is over. The core does not say when that is; it shows in the time a read of the
+ * RDRAM takes: the baseline is taken before the answer, the contended one in the first moments after, and the read is over
+ * when the time is back near the baseline and stays there. If the contention is not to be seen the wait is as long as the
+ * size says it takes (RD_MS_PER_MIB), and it is never over RD_MAX_MS. */
+#define RD_MS_PER_MIB   4000u
+#define RD_MAX_MS       40000u
+#define RD_QUIET_MS     1000u
+static u32 probe(void)                                  /* the CPU cycles a cold read of 4 KiB of the RDRAM takes */
+{
+    const u32 at = LAYOUT_RDRAM + 0x600000u;
+    flush_cpu_dcache_range((const void *)(uintptr_t)at, 0x1000u);
+    const volatile u32 *p = (const volatile u32 *)(uintptr_t)at;
+    u32 sum = 0;
+    const u64 t0 = uptime();
+    for (u32 n = 0; n < 1024u; n += 8u) sum += p[n];
+    const u32 t = (u32)(uptime() - t0);
+    __asm__ volatile("" :: "r"(sum));
+    return t;
+}
+static u32 probe_avg(u32 n)
+{
+    u64 sum = 0;
+    for (u32 i = 0; i < n; i++) sum += probe();
+    return (u32)(sum / n);
+}
+static void readout_wait(u32 mib, u32 base)
+{
+    const u64 t0 = uptime();
+    u32 busy = 0;                                       /* the time with the Pocket reading, once seen */
+    u64 seen = t0;                                      /* the last time a read was slow */
+    u32 n = 0;
+    u64 sum = 0;
+    for (;;) {
+        if (monitor_pend_read() & monitor_mask_read() & 0x1Fu) n64rt_rcp_events();
+        const u64 now = uptime();
+        const u64 t = now - t0;
+        if (t > MS(RD_MAX_MS)) return;
+        const u32 d = probe();
+        if (!busy) {                                    /* the first 300 ms: how slow a read is with the Pocket's */
+            if (t < MS(300)) { sum += d; n++; continue; }
+            const u32 c = n ? (u32)(sum / n) : base;
+            busy = c > 2u * base ? base + (c - base) / 2u : 0xFFFFFFFFu;    /* (0xFFFFFFFF: not to be seen) */
+        }
+        if (busy == 0xFFFFFFFFu) { if (t >= MS((u64)mib * RD_MS_PER_MIB)) return; }
+        else {
+            if (d > busy) seen = now;
+            else if (now - seen >= MS(RD_QUIET_MS)) return;
+        }
+        for (const u64 w = uptime(); uptime() - w < MS(2); ) { }
+    }
+}
+
 /* ---- a state made --------------------------------------------------------------------------------------------- */
 static void save(void)
 {
@@ -276,14 +341,24 @@ static void save(void)
     ss_hw_t *w = (ss_hw_t *)(uintptr_t)SS_AT(SS_HW);
     const u32 rt = (u32)(_end - _fdata);
     h->magic = 0;                                       /* (a state half made is no state) */
-    if (n64rt_pak_kind(0) >= N64RT_PAK_TRANSFER || rt > SS_RT_MAX || !quiesce(0)) { answer(1, 0); return; }
+    if (rt > SS_RT_MAX || !quiesce(0)) { answer(1, 0); return; }
     memset(w, 0, sizeof *w);
     w->uptime = uptime();
+    w->count = MFC0(9);                                 /* (the game's time as the hardware came to rest: time_put puts it back) */
     /* COP0 */
     w->index = MFC0(0); w->entrylo0 = MFC0(2); w->entrylo1 = MFC0(3); w->context = MFC0(4); w->pagemask = MFC0(5);
     w->wired = MFC0(6); w->badvaddr = MFC0(8); w->entryhi = MFC0(10); w->compare = MFC0(11); w->cause = MFC0(13);
     w->epc = MFC0(14); w->config = MFC0(16); w->lladdr = MFC0(17); w->watchlo = MFC0(18); w->watchhi = MFC0(19);
     w->taglo = MFC0(28); w->mctl = MFC0(7);
+    if (n64rt_tlbreal) {
+        /* the game's 32 TLB entries, by tlbr (it loads PageMask, EntryHi and both EntryLos: the registers above are the game's, and
+         * put back) */
+        for (u32 i = 0; i < 32u; i++) {
+            MTC0(0, i); TLBR();
+            w->tlb[i][0] = MFC0(5); w->tlb[i][1] = MFC0(10); w->tlb[i][2] = MFC0(2); w->tlb[i][3] = MFC0(3);
+        }
+        MTC0(0, w->index); MTC0(2, w->entrylo0); MTC0(3, w->entrylo1); MTC0(5, w->pagemask); MTC0(10, w->entryhi);
+    }
     { u32 c; __asm__ volatile(".set push\n.set noreorder\nli %0, 0\nbc1t 1f\nnop\nb 2f\nnop\n1: li %0, 1\n2:\n.set pop" : "=r"(c)); w->fcc = c; }
     /* the MI */
     w->mi_mode = hw_rd(MI_MODE);
@@ -304,6 +379,8 @@ static void save(void)
     /* the monitor's, the Pocket's table */
     w->mon_ctl = monitor_ctl_read(); w->mon_mask = monitor_mask_read(); w->mon_pi2 = monitor_pi2_read();
     w->fsize[1] = slot_size(1, 0); w->fsize[2] = slot_size(LAYOUT_CPAK_SLOT, 0);
+    w->fsize[3] = slot_size(LAYOUT_GBSAVE_SLOT, 0); w->fsize[4] = slot_size(LAYOUT_GBSAVE2_SLOT, 0);
+    w->gb_bytes[0] = n64rt_gbv_state_bytes(0); w->gb_bytes[1] = n64rt_gbv_state_bytes(1);
     /* the memories, region after region; DMEM through the RDRAM's first 4 KiB, which wait in the scratch area meanwhile */
     u32 *d = (u32 *)(uintptr_t)SS_AT(SS_BODY);
     copy_words(SS_SCR_RAM, LAYOUT_RDRAM, 0x1000u);
@@ -316,17 +393,24 @@ static void save(void)
     d = put_region(h, RG_CPAK, d, (const void *)(uintptr_t)LAYOUT_CPAK, LAYOUT_PAK_BYTES);
     d = put_region(h, RG_HID, d, (const void *)(uintptr_t)LAYOUT_HID, 0x100000u);
     d = put_region(h, RG_RDRAM, d, (const void *)(uintptr_t)LAYOUT_RDRAM, 0x800000u);
+    d = put_region(h, RG_GB1, d, (const void *)(uintptr_t)LAYOUT_GBSAVE, w->gb_bytes[0]);       /* (the virtual Transfer Paks' cartridges' RAM: the ones that are in) */
+    d = put_region(h, RG_GB2, d, (const void *)(uintptr_t)LAYOUT_GBSAVE2, w->gb_bytes[1]);
     /* the header, and last the runtime's own memory: a load goes on from here (n64rt_state_resumed) */
     h->version = SS_VERSION; h->layout = LAYOUT_MARK;
     h->code_sum = code_sum(); h->code_bytes = (u32)(_erodata - _ftext); h->rt_bytes = rt; h->mon_id = monitor_id_read();
     for (u32 n = 0; n < 12u; n++) h->rom[n] = n64rt_rom_word(0x10u + 4u * n);
+    n64rt_pak_state_begin();                            /* (a real Transfer Pak is unplugged in the copy of the runtime's memory, not in the game's view) */
     d = put_region(h, RG_RT, d, _fdata, (rt + 15u) & ~15u);
+    n64rt_pak_state_end();
     const u32 total = ((u32)((uintptr_t)d - LAYOUT_STATE) + 15u) & ~15u;
     h->bytes = total;
     h->magic = SS_MAGIC;
     const u32 padded = (total + 0xFFFFFu) & ~0xFFFFFu;    /* (what the core tells the Pocket: whole MiB, 4 bits of a register) */
-    time_put(w);
+    const u32 quiet = probe_avg(8);                     /* (what a read of the RDRAM takes with nothing else on the SDRAM's port) */
     answer(0, padded);
+    readout_wait(padded >> 20, quiet);
+    n64rt_io_rebase((u32)(uptime() - w->uptime));       /* (the wait is no time of the runtime's) */
+    time_put(w);
 }
 
 /* ---- a state put back ----------------------------------------------------------------------------------------- */
@@ -435,11 +519,20 @@ static void load(void)
     ok &= get_region(h, RG_SAVE, (void *)(uintptr_t)LAYOUT_SAVE, LAYOUT_SAVE_MAX + 0x1000u);
     ok &= get_region(h, RG_CPAK, (void *)(uintptr_t)LAYOUT_CPAK, LAYOUT_PAK_BYTES);
     (void)slot_size(1, w->fsize[1]); (void)slot_size(LAYOUT_CPAK_SLOT, w->fsize[2]);
+    (void)slot_size(LAYOUT_GBSAVE_SLOT, w->fsize[3]); (void)slot_size(LAYOUT_GBSAVE2_SLOT, w->fsize[4]);
     ok &= get_region(h, RG_HID, (void *)(uintptr_t)LAYOUT_HID, 0x100000u);
     ok &= get_region(h, RG_RDRAM, (void *)(uintptr_t)LAYOUT_RDRAM, 0x800000u);
+    ok &= get_region(h, RG_GB1, (void *)(uintptr_t)LAYOUT_GBSAVE, w->gb_bytes[0]);
+    ok &= get_region(h, RG_GB2, (void *)(uintptr_t)LAYOUT_GBSAVE2, w->gb_bytes[1]);
     ok &= get_region(h, RG_RT, (void *)(uintptr_t)SS_SCR_RT, (h->rt_bytes + 15u) & ~15u);
     flush_cpu_dcache(); flush_cpu_icache();
     n64rt_tr_flush();                                   /* (the CPU's tables: filled again from the state's entries) */
+    if (n64rt_tlbreal) {                                /* (the CPU's own TLB: the game's 32 entries; the registers they go through are put back below) */
+        for (u32 i = 0; i < 32u; i++) {
+            MTC0(0, i); MTC0(5, w->tlb[i][0]); MTC0(10, w->tlb[i][1]); MTC0(2, w->tlb[i][2]); MTC0(3, w->tlb[i][3]);
+            TLBWI();
+        }
+    }
     mi_put(w);
     /* COP0 (BadVAddr, Context's BadVPN2, Index's P, Cause's BD and ExcCode: the monitor level's to write) */
     MTC0(0, w->index); MTC0(2, w->entrylo0); MTC0(3, w->entrylo1); MTC0(5, w->pagemask); MTC0(6, w->wired);
@@ -462,6 +555,7 @@ void n64rt_state_resumed(const ss_hw_t *w)
 {
     s_in = 0;
     n64rt_io_rebase((u32)(uptime() - w->uptime));
+    n64rt_pak_state_resumed(uptime() - w->uptime);      /* (the Transfer Paks: the clocks, and is the Game Boy ROM there again) */
     n64rt_vi_hw_event();
     n64rt_ai_hw_event();
     if (w->fcc) __asm__ volatile("c.ueq.s $f0, $f0");   /* (the FPU's condition bit: $f0 is the game's again on the way out) */
@@ -478,11 +572,11 @@ void n64rt_state_event(void)
     else if (r & 4u) load();
     s_in = 0;
 }
-/* whether the Pocket may ask: not with a Game Boy cartridge in the Transfer Pak (its RAM and clock are the cartridge's
- * own, which no state can hold; the virtual one's neither, for now) */
+/* whether the Pocket may ask: always. A Game Boy cartridge in the Pocket's slot (its RAM, mapper and clock are its own, which no state can
+ * hold) is unplugged in the state; the virtual one's RAM and registers are in it (n64rt_pak.c, n64rt_gbvirt.c) */
 void n64rt_state_poll(void)
 {
-    const u32 ok = n64rt_pak_kind(0) < N64RT_PAK_TRANSFER;
+    const u32 ok = 1u;
     if ((apf_bridge_savestate_read() & 1u) != ok) apf_bridge_savestate_write(ok);
     if (!(apf_bridge_transfer_length_read() >> 20 & 0xFu)) apf_bridge_transfer_length_write(LAYOUT_STATE_BYTES);   /* (the size told until a state says its own) */
 }

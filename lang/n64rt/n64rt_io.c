@@ -46,17 +46,22 @@ static void vi_hw_note_origin(void);
 static struct { OSMesgQueue *mq; OSMesg msg; u32 retrace, count; } s_vi_ev;
 static u32 s_fb_cur, s_fb_next, s_fb_prev;
 /* The frame buffers the game has handed the VI lately (osViSwapBuffer, VI_ORIGIN): where the RDP draws.
- * A cartridge DMA into one of them waits for the RDP (pi_copy). */
-static u32 s_fb_ring[4]; static u32 s_fb_ring_n;
+ * A cartridge DMA into one of them waits for the RDP (pi_copy). An origin the VI has not shown for FB_AGE fields is no
+ * longer one: libultra's first ORIGIN, before the game hands it a buffer, is a line into the RDRAM's first bytes (0x280), and
+ * kept for good it made every DMA into the low memory of a game that streams from the cartridge wait for the RDP's frame
+ * (a game's audio thread held up for 11 ms at a time). */
+#define FB_AGE 120u
+static u32 s_fb_ring[4]; static u32 s_fb_ring_n; static u32 s_fb_seen[4];
+static u32 s_fields;
 static void fb_note(u32 fb)
 {
     fb &= 0x007FFFFFu;
-    for (u32 i = 0; i < 4u; i++) if (s_fb_ring[i] == fb) return;
+    for (u32 i = 0; i < 4u; i++) if (s_fb_ring[i] == fb) { s_fb_seen[i] = s_fields; return; }
+    s_fb_seen[s_fb_ring_n & 3u] = s_fields;
     s_fb_ring[s_fb_ring_n++ & 3u] = fb;
 }
 u32 n64rt_swaps;                         /* (framebuffer swaps the scan-out took: a game's frames) */
 static u32 s_tasks[3];
-static u32 s_fields;
 u32 n64rt_fields(void) { return s_fields; }             /* (fields so far: a debugging build's traces start at one) */
 void n64rt_osCreateViManager(OSPri pri) { (void)pri; }
 /* OSViMode: u8 type, then the common registers (ctrl, width, ...) */
@@ -150,6 +155,13 @@ static void vi_width_gamma(void)
     const u32 xs = s_vi_xs & 0xFFFu ? (s_vi_xs > 0x400u ? 0x400u : s_vi_xs & 0xFFFu) : 0x200u;
     u32 ys = s_vi_ys > 0x800u ? 0x800u : s_vi_ys ? s_vi_ys : 0x400u;     /* (2.0 at most: a serrated picture's field, every other row) */
     n64rt_vi_fit(y0, rows, ys, &rows, &ys);
+    /* A window that asks for more pixels than the row has (a mode with WIDTH 384 and X_SCALE 0.649 takes 597 clocks of H_START 128 to
+     * H_END 725: 387 pixels) reads the next row's first ones at its right end, as the console's VI does -- where a television's
+     * overscan hides them. The scan-out shows the whole line, so they are not shown: the window ends with the row. */
+    if (w < 512u && pw) {
+        const u32 maxpw = ((w << 10) - 1u) / xs + 1u;
+        if (pw > maxpw) pw = maxpw;
+    }
     /* the window's last pixel's source pixel, the priming's seven before it (rtl/soc/n64_video.sv NPE - NF), two to a word (a
      * 32-bit picture's: one), and one more */
     const u32 np = (((pw - 1u) * xs) >> 10) + 8u;
@@ -313,6 +325,7 @@ static void vi_field_common(void)
     }
 #endif
     n64rt_cheat_field();
+    n64rt_gbv_field();
 }
 
 /* (n64rt_tick, interrupts off) */
@@ -423,7 +436,7 @@ static int fb_overlaps(u32 pa, u32 size)
 #endif
     const u32 bytes = s_vi_width_cur >= 512u && s_vi_width_cur != ~0u ? 640u * 480u * VI_BPP(s_vi_px32_cur) : 320u * 240u * 4u;
     for (u32 i = 0; i < 4u; i++)
-        if (s_fb_ring[i] && pa < s_fb_ring[i] + bytes && s_fb_ring[i] < pa + size) return 1;
+        if (s_fb_ring[i] && s_fields - s_fb_seen[i] < FB_AGE && pa < s_fb_ring[i] + bytes && s_fb_ring[i] < pa + size) return 1;
     return 0;
 }
 /* a DMA between the RDRAM and domain 2, by the CPU (what the engine does not: n64rt_save.h's d2_engine_addr) */
@@ -628,6 +641,7 @@ static void read_pad(OSContPad *p, int index)
 static int pad_there(int i)
 {
     if (i == 0) return 1;
+    if (n64rt_pak_kind(i) != N64RT_PAK_NONE) return 1;     /* (controller 2's "Virtual Transfer Pak": a pad that is there, nothing pressed if the dock has none) */
     u32 k = i == 1 ? apf_input_cont2_key_read() : i == 2 ? apf_input_cont3_key_read() : apf_input_cont4_key_read();
     return KEY_TYPE(k) != 0u;
 }
@@ -1354,7 +1368,7 @@ void n64rt_mi_init(void)
     /* (bit 10, written with bit 11: the game's RDRAM is 4 MiB -- the console without its Expansion Pak, the core's setting:
      * the game's accesses to the upper half come here, and are answered as RDRAM that is not there, n64rt_os.c emulate_hw) */
     /* (bit 12, written with bit 13: 0x2000_0000 - 0x4FFF_FFFF are the game's mapped addresses while it runs -- not the monitor
-     * level, not a helper of the runtime's with Status bit 4, n64rt_boot.c ll_patch --, as the rest of the VR4300's KUSEG: a game
+     * level, not a helper of the runtime's with Status bit 4, n64rt_boot.c ul_patch --, as the rest of the VR4300's KUSEG: a game
      * can map an overlay at 0x4000_0000 and run it there. A core without it reads the bit 0 and keeps them physical) */
     /* (bit 14, written with bit 15: the game's word accesses to the SP's registers, SP_PC and the DPC's -- but its stores of
      * DPC_STATUS, whose CLR_CLOCK_CTR keeps DPC_CLOCK here -- are the RSP's host port's, no trap: rcp_read_ / rcp_write_ pass
@@ -1499,7 +1513,6 @@ static void mon_field_log(void)
               (unsigned long)n64rt_mon_codes[10], (unsigned long)mi_intr(), (unsigned long)s_mi_mask, (unsigned long)s_mon_line,
               (unsigned long)(monitor_level_read() & 1u), (unsigned long)n64rt_mon_epc);
     rcp_hist_log();
-    { extern void n64rt_ri_hist_log(void); n64rt_ri_hist_log(); }
 }
 #endif
 

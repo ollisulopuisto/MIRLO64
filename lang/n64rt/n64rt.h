@@ -283,25 +283,30 @@ void n64rt_resched(void);                  /* switch if a higher-priority thread
 OSTime n64rt_time(void);                   /* the N64's Count rate, 46.875 MHz, 64-bit */
 void n64rt_tick(void);                     /* the timer interrupt: VI fields, timers */
 void n64rt_io_init(void);
-extern u32 n64rt_cpu64, n64rt_cpu_alu, n64rt_cpu_sh, n64rt_cpu_md;   /* what the game CPU does of the VR4300's 64-bit integers (n64rt_os.c) */
 extern u32 n64rt_yield_wait_ms;            /* a port's: a graphics task's yield held back this long (n64rt_rsp.c) */
-/* controller 1's accessory (n64rt_pak.c): the game's own osPfs* and osGbpak*
+/* the accessories of controllers 1 and 2 (n64rt_pak.c): the game's own osPfs* and osGbpak*
  * run on these blocks */
 enum { N64RT_PAK_NONE, N64RT_PAK_CONTROLLER, N64RT_PAK_TRANSFER, N64RT_PAK_VIRTUAL };   /* (the "Controller 1 pak" setting's values: n64rt_pak.c) */
 void n64rt_pak_init(void);
 int  n64rt_pak_kind(int ch);
 int  n64rt_pak_rw(int ch, u32 addr, u8 *block, int write);
 u8   n64rt_pak_crc(const u8 *block);
+void n64rt_pak_state_begin(void);         /* around the copy of the runtime's memory in a save state: a real Transfer Pak is unplugged in it */
+void n64rt_pak_state_end(void);
+void n64rt_pak_state_resumed(u64 delta);  /* after a state is put back */
 /* the GameShark codes (n64rt_cheat.c): read once, when the game starts, and run in every field */
 void n64rt_cheat_init(void);
 void n64rt_cheat_field(void);
 u32  n64rt_slot_size(u32 slot, u32 want);  /* a data slot's file size in the core's table (0: no file); want != 0 sets it (n64rt_pak.c) */
-/* the virtual Transfer Pak's Game Boy cartridge, made of data.json's slots 5 and 6 (n64rt_gbvirt.c) */
-int  n64rt_gbv_look(void);                 /* 1: a cartridge is in its slot (a ROM with a header checksum and logo right, of a mapper it has) */
-u32  n64rt_gbv_id(void);                   /* its header's CRC */
-void n64rt_gbv_power(int on);              /* the cartridge's power: on is its reset */
-u8   n64rt_gbv_read(u32 addr);             /* its bus, 0x0000 - 0xBFFF */
-void n64rt_gbv_write(u32 addr, u8 value);
+/* the virtual Transfer Paks' Game Boy cartridges, n = 0 (controller 1's) and 1 (controller 2's), each made of two data.json slots (n64rt_gbvirt.c) */
+int  n64rt_gbv_look(int n);               /* 1: a cartridge is in its slot (a ROM with a header checksum and logo right, of a mapper it has) */
+u32  n64rt_gbv_id(int n);                 /* its header's CRC */
+void n64rt_gbv_power(int n, int on);      /* the cartridge's power: on is its reset */
+u8   n64rt_gbv_read(int n, u32 addr);     /* its bus, 0x0000 - 0xBFFF */
+void n64rt_gbv_write(int n, u32 addr, u8 value);
+void n64rt_gbv_field(void);               /* every video field: the RAM the game wrote and left alone for 2 s is written to the Game Boy game's save file */
+u32  n64rt_gbv_state_bytes(int n);        /* a save state: the bytes of the cartridge's RAM (and clock) to keep, 0 with none in; the clock's footer brought up to date */
+void n64rt_gbv_resume(int n, u64 delta);   /* after a state is put back: its clock moved on by delta (the SoC's clock), and is its ROM there again (else it is not in) */
 void *n64rt_rdram_alloc(u32 size);         /* zeroed RDRAM the game can reach (above its mem_size) */
 /* a task of another microcode (not graphics or audio): a game port may
  * provide it (weak; 1 = done) */
@@ -309,6 +314,7 @@ int n64rt_other_task(OSTask *t);
 void n64rt_vi_field(void);                 /* a VI field elapsed (n64rt_tick) */
 /* an RCP register the game reaches itself (the trap): 1 = done */
 int n64rt_hw_read(u32 addr, u32 *v);
+extern u32 n64rt_tlbreal;                  /* the CPU has the VR4300's own TLB (COP0 23): no tables here */
 int n64rt_tlb_phys(u32 va, u32 *pa);       /* a page the game mapped (osMapTLB): 1, and its RDRAM address */
 void n64rt_tlb_frames_loaded(u32 pa, u32 bytes);   /* the cartridge read into the RDRAM there: the TLB entries kept of those frames go (n64rt_os.c) */
 int n64rt_hw_write(u32 addr, u32 v);
