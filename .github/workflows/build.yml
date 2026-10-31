@@ -204,11 +204,11 @@ jobs:
             python3 tools/package_bitstream.py mirlo.rbf mirlo.rev
           fi
           cp runtime/n64rt.sys .
-          python3 tools/make_release.py mirlo.rev n64rt.sys tortuga.Mirlo64_0.1.zip
-          cp mirlo.rev n64rt.sys tortuga.Mirlo64_0.1.zip release/
+          python3 tools/make_release.py mirlo.rev n64rt.sys tortuga.Mirlo64_0.6.1-patched.2.zip
+          cp mirlo.rev n64rt.sys tortuga.Mirlo64_0.6.1-patched.2.zip release/
           cp runtime/pkg/pocket/Cores/tortuga.Mirlo64/interact.json release/interact.json
           cp runtime/pad_test.log release/
-          unzip -l tortuga.Mirlo64_0.1.zip
+          unzip -l tortuga.Mirlo64_0.6.1-patched.2.zip
           ls -l release
       - uses: actions/upload-artifact@v4
         with:

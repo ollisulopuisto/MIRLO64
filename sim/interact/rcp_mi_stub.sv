@@ -25,6 +25,7 @@ module rcp_mi #(parameter bit PI = 0, parameter bit PI2 = 0, parameter bit ROM64
     input  wire         io_req, io_we, io_ps,
     input  wire  [23:0] io_adr,
     input  wire  [31:0] io_wd,
+    input  wire  [3:0]  io_be,
     output wire         io_ack
 );
 assign intr = 0; assign mask_o = 0; assign pi_busy = 0; assign pi_cnt = 0; assign line = 0;
