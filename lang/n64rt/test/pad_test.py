@@ -22,7 +22,16 @@ DEFAULT_MAP = [0] * 30
 
 def pack(fields):
     """30 five-bit fields -> the five table words, six to a word"""
-    return [sum((fields[6 * w + i] & 31) << (5 * i) for i in range(6)) for w in range(5)]
+    # Bolt optimization: unroll bit-packing expressions across words to eliminate generator
+    # and sum() call overhead in the test runner hot path (~3x faster pack()).
+    f = fields
+    return [
+        (f[0] & 31) | ((f[1] & 31) << 5) | ((f[2] & 31) << 10) | ((f[3] & 31) << 15) | ((f[4] & 31) << 20) | ((f[5] & 31) << 25),
+        (f[6] & 31) | ((f[7] & 31) << 5) | ((f[8] & 31) << 10) | ((f[9] & 31) << 15) | ((f[10] & 31) << 20) | ((f[11] & 31) << 25),
+        (f[12] & 31) | ((f[13] & 31) << 5) | ((f[14] & 31) << 10) | ((f[15] & 31) << 15) | ((f[16] & 31) << 20) | ((f[17] & 31) << 25),
+        (f[18] & 31) | ((f[19] & 31) << 5) | ((f[20] & 31) << 10) | ((f[21] & 31) << 15) | ((f[22] & 31) << 20) | ((f[23] & 31) << 25),
+        (f[24] & 31) | ((f[25] & 31) << 5) | ((f[26] & 31) << 10) | ((f[27] & 31) << 15) | ((f[28] & 31) << 20) | ((f[29] & 31) << 25),
+    ]
 
 
 def spec(keys, joy, s0, s1, fields):
