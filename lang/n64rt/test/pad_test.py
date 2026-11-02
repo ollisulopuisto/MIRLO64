@@ -26,6 +26,20 @@ OUT_BITS = {c: N[v] for c, v in OUT.items()}
 UP_BIT, DOWN_BIT, LEFT_BIT, RIGHT_BIT = 1 << K['up'], 1 << K['down'], 1 << K['left'], 1 << K['right']
 DPAD_MASK = UP_BIT | DOWN_BIT | LEFT_BIT | RIGHT_BIT
 
+# Bolt optimization: precomputed axis deflection lookup tables for byte values 0..255.
+# Replaces repeated arithmetic and clamping across 21k+ evaluations in spec().
+AX_LUT = [0] * 256
+AX_FLIP_LUT = [0] * 256
+for _v in range(256):
+    _a = _v - 128
+    if -12 < _a < 12:
+        _val = 0
+    else:
+        _scaled = int(_a * 80 / 127)
+        _val = -80 if _scaled < -80 else (80 if _scaled > 80 else _scaled)
+    AX_LUT[_v] = _val
+    AX_FLIP_LUT[_v] = -_val
+
 
 def pack(fields):
     """30 five-bit fields -> the five table words, six to a word"""
@@ -102,19 +116,13 @@ def spec(keys, joy, s0, s1, fields):
         k_mask &= ~DPAD_MASK
     # joystick bytes: left X, left Y, right X, right Y (0x80 centre)
     lx, ly, rx, ry = joy & 255, (joy >> 8) & 255, (joy >> 16) & 255, (joy >> 24) & 255
-    def axg(v, flip):
-        a = v - 128
-        if flip: a = -a
-        if -12 < a < 12: return 0
-        a = int(a * 80 / 127)
-        return -80 if a < -80 else (80 if a > 80 else a)
     for g, (px, py) in ((1, (lx, ly)), (2, (rx, ry))):
         sel, _ = group(g)
         if not sel:
             continue
         if analog:
-            if sel == 1: tx += axg(px, False); ty += axg(py, True)
-            elif sel == 2: tx += int(axg(px, False) / 2); ty += int(axg(py, True) / 2)
+            if sel == 1: tx += AX_LUT[px]; ty += AX_FLIP_LUT[py]
+            elif sel == 2: tx += int(AX_LUT[px] / 2); ty += int(AX_FLIP_LUT[py] / 2)
             elif sel in (3, 4):
                 if sel == 3:
                     if px - 128 < -64: out |= N['DLEFT']
@@ -135,12 +143,6 @@ def spec(keys, joy, s0, s1, fields):
         if ry - 128 < -64: out |= N['CUP']
         if ry - 128 > 64: out |= N['CDOWN']
     # the stick: "Stick" is interact1[19:15] (0 D-pad, 1 L stick, 2 R stick; other: D-pad)
-    def ax(v, flip):
-        a = v - 128
-        if flip: a = -a
-        if -12 < a < 12: return 0
-        a = int(a * 80 / 127)                     # (C: truncates toward zero)
-        return -80 if a < -80 else (80 if a > 80 else a)
     def dpad_stick():
         full = 40 if lmod else 80
         dx = (-1 if (k_mask & LEFT_BIT) else 0) + (1 if (k_mask & RIGHT_BIT) else 0)
@@ -151,7 +153,7 @@ def spec(keys, joy, s0, s1, fields):
     smode = (s1 >> 15) & 31
     sx = sy = 0
     if smode in (1, 2):
-        use = (ax(lx, False), ax(ly, True)) if smode == 1 else (ax(rx, False), ax(ry, True))
+        use = (AX_LUT[lx], AX_FLIP_LUT[ly]) if smode == 1 else (AX_LUT[rx], AX_FLIP_LUT[ry])
         if not analog: use = (0, 0)
         if typ != 3 and use == (0, 0):
             sx, sy = dpad_stick()                 # no stick to speak of: the D-pad
@@ -229,10 +231,19 @@ def main():
     sets = list(settings())
     tables = list(maps(rng))
     bad = total = 0
+    # Bolt optimization: memoize packed remap table word strings by table identity.
+    # Eliminates tens of thousands of redundant bit-packing calls and string conversions in the test runner.
+    packed_cache = {}
+
+    def get_packed(f):
+        fid = id(f)
+        if fid not in packed_cache:
+            packed_cache[fid] = '%x %x %x %x %x' % tuple(pack(f))
+        return packed_cache[fid]
 
     def check(cases):                             # cases: (keys, joy, s0, s1, fields)
         nonlocal bad, total
-        inp = ''.join('%x %x %x %x %x %x %x %x %x\n' % (k, j, s0, s1, *pack(f)) for k, j, s0, s1, f in cases)
+        inp = ''.join('%x %x %x %x %s\n' % (k, j, s0, s1, get_packed(f)) for k, j, s0, s1, f in cases)
         res = subprocess.run([exe], input=inp, capture_output=True, text=True, check=True).stdout.splitlines()
         assert len(res) == len(cases), 'host harness did not return every case'
         total += len(cases)
