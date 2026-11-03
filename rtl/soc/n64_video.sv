@@ -62,6 +62,7 @@ module n64_video #(
     input  wire         enable,         // sys: scan out (else black, no DMA)
     input  wire  [25:0] vi_origin,      // sys: the framebuffer's byte address (ORIGIN_MASK: its span)
     input  wire         vi_il,          // sys: the picture is serrated (VI_CTRL's SERRATE, a hi-res picture): sent woven
+    input  wire         no_weave,       // sys: send a serrated picture field by field anyway (a 15 kHz analog output cannot show a woven frame)
     output logic        vblank,         // sys
     input  wire  [11:0] vi_width,       // sys: VI_WIDTH, the rows' pitch in pixels (even; 512 or more: a hi-res picture, no filters)
     input  wire         vi_px32,        // sys: the pixels are 32-bit (VI_STATUS type 3): RGBA8888, a pixel a word
@@ -107,7 +108,8 @@ module n64_video #(
     output logic        vga_de,
     output wire [9:0]   picture_x, picture_y, picture_w, picture_h, // the picture's cropped bounds (fork: pocket_frame.sv), clk_vid
     output wire         frame_woven, frame_ann,     // (fork) the frame being sent is a woven one / the one before it was
-    output logic        vga_skip        // a progressive frame's pixel's second clock
+    output logic        vga_skip,       // a progressive frame's pixel's second clock
+    output logic        vga_woven       // the frame being sent is a woven one (wv_v)
 );
 
 // The field's timing: 790 clocks a line (the N64's 3094 VI clocks of 48.68 MHz x 12.5 / 48.68 ... = 395 pixels of the
@@ -246,13 +248,13 @@ logic        nofilt_f;             // a hi-res picture (512 pixels or more a row
 logic        px32_f;               // a 32-bit picture (N64FB only: the RGB565 picture has no such mode)
 logic [1:0]  ann_s;                // the frame announced, from vid
 always_ff @(posedge clk) ann_s <= {ann_s[0], ann};
-// a woven frame: a serrated picture of the two pitches of its fields -- WIDTH 640 with Y_SCALE 2.0 (a field every other row; or
-// down to 1.5: a picture the VI scales), or WIDTH 1280 with 1.0 (a pitch of two rows): the two fields' lines in turn, from the
-// lower origin (rcp_vi's base, the first field's), its window twice the field's lines. The frame's line 2 j + p is the field
-// p's line j, as the VI shows it: the row Y_SCALE's accumulator reaches at the field's line j, from the base, and for the
-// second field one 640-pixel row (320 words) on. (A serrated 240-row buffer, or another pitch, is not a pair of fields: shown
-// as any picture is.)
-wire         wv_rq  = vi_il && (vi_width[11:1] == 11'd640 || (vi_width[11:1] == 11'd320 && vi_ys >= 12'h600));
+// a woven frame: a serrated picture of the pitches of its fields -- WIDTH 640 or 576 with Y_SCALE 2.0 (a field every other row;
+// or down to 1.5: a picture the VI scales), or WIDTH 1280 with 1.0 (a pitch of two rows): the two fields' lines in turn, from the
+// lower origin (rcp_vi's base, the first field's), its window twice the field's lines. The frame's line 2 j + p is the field p's
+// line j, as the VI shows it: the row Y_SCALE's accumulator reaches at the field's line j, from the base, and for the second field
+// one row (the pitch: 320 words of a 640-pixel one, 288 of a 576-pixel one) on, or with WIDTH 1280 one 640-pixel row (320 words).
+// (A serrated 240-row buffer, or another pitch, is not a pair of fields: shown as any picture is.)
+wire         wv_rq  = vi_il && !no_weave && (vi_width[11:1] == 11'd640 || ((vi_width[11:1] == 11'd320 || vi_width[11:1] == 11'd288) && vi_ys >= 12'h600));
 wire  [9:0]  vi_nr2 = {vi_nr, 1'b0};
 logic        hid_f;                // the hidden coverage plane is wanted (a filter is on)
 logic [10:0] col;                  // the read's word in its row
@@ -270,9 +272,11 @@ wire         px32_n = vi_px32 && N64FB;
 wire  [8:0]  vi_nr  = (vi_rows == 0 || vi_rows > 9'd240) ? 9'd240 : vi_rows;
 // the next row: this one and the pitches Y_SCALE's accumulator steps (0 for an enlarged line: the row again, 1, 2)
 wire  [11:0] yan    = {2'b00, yacc} + ys_f;                    // (at most 0x3FF + 0x800: never both carries)
-// (a woven frame: the second field's line is one 640-pixel row on, 320 words or a 32-bit picture's 640: the same adder)
+// (a woven frame: the second field's line is one row on -- the pitch, with Y_SCALE 2.0, a 640-pixel row with WIDTH 1280, 320 words
+// or a 32-bit picture's 640 -- the same adder)
 wire         w2nd   = wv_f && !wodd;
-wire  [23:0] rowp_n = rowp + (w2nd ? (px32_f ? 24'd640 : 24'd320) : yan[11] ? {12'd0, stride_f, 1'b0} : yan[10] ? {13'd0, stride_f} : 24'd0);
+wire  [23:0] w2off  = ys_f >= 12'h600 ? {13'd0, stride_f} : px32_f ? 24'd640 : 24'd320;
+wire  [23:0] rowp_n = rowp + (w2nd ? w2off : yan[11] ? {12'd0, stride_f, 1'b0} : yan[10] ? {13'd0, stride_f} : 24'd0);
 // a word as the FIFO takes it: two pixels, the left one in the low half --
 // RGBA5551 as the game's (N64FB: its bit 0 the RDP's coverage, "complete"),
 // or RGB565 without N64FB. A 32-bit picture's word goes through the same
@@ -671,6 +675,7 @@ always_ff @(posedge clk_vid) begin
     end
     // (a progressive frame's pixel stays on the pads two clocks: the second is skipped)
     vga_skip <= !ce && vga_de;
+    vga_woven <= wv_v;
 end
 
 endmodule

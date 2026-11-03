@@ -4,7 +4,7 @@ and its legal values (a list's option values, a check's value_off / value; an ac
 import json, sys
 d = json.load(open(sys.argv[1]))['interact']['variables']
 word = lambda e: (int(e['address'], 16) - 0x10000100) >> 2
-d = [e for e in d if word(e) < 22]      # (words 22 and up -- Screen Size -- are the Pocket's own: core_top keeps them from the SoC)
+d = [e for e in d if word(e) != 22]      # Screen Size (22) is kept by core_top; Analogizer (23) is in the SoC.
 n = len(d)
 def vals(e):
     if e['type'] == 'list': return [o['value'] for o in e['options']]

@@ -211,18 +211,11 @@ module core_top (
     //   [ 7: 0] ltrig
     //   [15: 8] rtrig
     //
-    input wire [31:0] cont1_key,
-    input wire [31:0] cont2_key,
-    input wire [31:0] cont3_key,
-    input wire [31:0] cont4_key,
-    input wire [31:0] cont1_joy,
-    input wire [31:0] cont2_joy,
-    input wire [31:0] cont3_joy,
-    input wire [31:0] cont4_joy,
-    input wire [15:0] cont1_trig,
-    input wire [15:0] cont2_trig,
-    input wire [15:0] cont3_trig,
-    input wire [15:0] cont4_trig,
+    // the pads, a word at a time (io_pad_controller.v): into the RAM that mirlo_regs.sv reads them from, by clk_74a:
+    // 0..3 CONT1..4_KEY, 4..7 CONT1..4_JOY, 8..11 CONT1..4_TRIG
+    input wire        pad_we,
+    input wire [3:0]  pad_wa,
+    input wire [31:0] pad_wd,
 
     input  wire altera_reserved_tck,
     input  wire altera_reserved_tdi,
@@ -250,17 +243,35 @@ module core_top (
   wire        gb_on, gb_a_dir, gb_a_oe, gb_d_dir, gb_d_oe, gb_phi, gb_wr_n, gb_rd_n, gb_cs_n;
   wire [15:0] gb_a;
   wire [7:0]  gb_d_o;
-  assign cart_tran_bank3         = gb_a_oe ? gb_a[7:0] : 8'hzz;
-  assign cart_tran_bank3_dir     = gb_a_dir;
-  assign cart_tran_bank2         = gb_a_oe ? gb_a[15:8] : 8'hzz;
-  assign cart_tran_bank2_dir     = gb_a_dir;
-  assign cart_tran_bank1         = gb_d_oe ? gb_d_o : 8'hzz;
-  assign cart_tran_bank1_dir     = gb_d_dir;
+  //
+  // The Analogizer's adapter takes the port instead (docs/analogizer.md) when `an_own` says so (the runtime's decision, at the core's start: a
+  // Game Boy cartridge's header is there or it is not); banks 1-3 are then the video DAC's, driven by rtl/analogizer/an_out.sv, with the
+  // DAC's clock on bank 1's bit 5. Bank 0 and the pins 30 and 31 stay as they are (high, the SNAC port's idle).
+  wire        an_own;
+  wire [2:0]  an_mode;
+  wire [1:0]  an_scan;
+  wire [7:0]  an_bank3, an_bank2;
+  wire [4:0]  an_bank1_b;
+  wire        an_vid_woven_s;         // (the scan-out's, clk_vid)
+  logic       an_vid_woven;
+  always_ff @(posedge clk_vid) an_vid_woven <= an_vid_woven_s;
+  // the settings are the SoC's (clk_sys) and hardly ever change: two flip-flops into the video clock
+  logic [1:0] an_scan_s1, an_scan_s2;
+  always_ff @(posedge clk_vid) begin an_scan_s1 <= an_scan; an_scan_s2 <= an_scan_s1; end
+  logic [2:0] an_mode_s1, an_mode_s2;
+  always_ff @(posedge clk_vid) begin an_mode_s1 <= an_mode; an_mode_s2 <= an_mode_s1; end
+  wire        an_en = an_own && an_mode != 3'd0;      // (the adapter drives banks 1-3; sys-side level: it changes with the settings only)
+  assign cart_tran_bank3         = an_own ? (an_en ? an_bank3 : 8'hzz) : gb_a_oe ? gb_a[7:0] : 8'hzz;
+  assign cart_tran_bank3_dir     = an_own ? an_en : gb_a_dir;
+  assign cart_tran_bank2         = an_own ? (an_en ? an_bank2 : 8'hzz) : gb_a_oe ? gb_a[15:8] : 8'hzz;
+  assign cart_tran_bank2_dir     = an_own ? an_en : gb_a_dir;
+  assign cart_tran_bank1         = an_own ? (an_en ? {2'b00, clk_vid_90deg, an_bank1_b} : 8'hzz) : gb_d_oe ? gb_d_o : 8'hzz;
+  assign cart_tran_bank1_dir     = an_own ? an_en : gb_d_dir;
   assign cart_tran_bank0         = {gb_phi, gb_wr_n, gb_rd_n, gb_cs_n};
   assign cart_tran_bank0_dir     = 1'b1;
   assign cart_tran_pin30         = 1'b0;
   assign cart_tran_pin30_dir     = gb_on ? 1'b0 : 1'bz;   // (off: as the template leaves it)
-  assign cart_pin30_pwroff_reset = gb_on;
+  assign cart_pin30_pwroff_reset = an_own ? an_en : gb_on;
   assign cart_tran_pin31         = 1'bz;
   assign cart_tran_pin31_dir     = 1'b0;
 
@@ -1016,28 +1027,16 @@ module core_top (
 
       .apf_id_chip_id(chip_id),
 
-      .apf_input_cont1_key (cont1_key),
-      .apf_input_cont1_joy (cont1_joy),
-      .apf_input_cont1_trig(cont1_trig),
-
-      .apf_input_cont2_key (cont2_key),
-      .apf_input_cont2_joy (cont2_joy),
-      .apf_input_cont2_trig(cont2_trig),
-
-      .apf_input_cont3_key (cont3_key),
-      .apf_input_cont3_joy (cont3_joy),
-      .apf_input_cont3_trig(cont3_trig),
-
-      .apf_input_cont4_key (cont4_key),
-      .apf_input_cont4_joy (cont4_joy),
-      .apf_input_cont4_trig(cont4_trig),
+      .apf_pad_clk(clk_74a),
+      .apf_pad_we(pad_we),
+      .apf_pad_wa(pad_wa),
+      .apf_pad_wd(pad_wd),
 
       .apf_interact_address(interact_addr),
       .apf_interact_data(interact_data),
       .apf_interact_q(soc_interact_q),
-      // The SoC has interact words 0-21 (the layout lists are 16-20, the actions 21). Pocket-only
-      // settings (word 22 onwards) are not passed to it.
-      .apf_interact_wr(interact_wr && interact_addr < 6'd22),
+      // Word 22 is the Pocket-only Screen Size; word 23 is Analogizer video.
+      .apf_interact_wr(interact_wr && (interact_addr < 6'd22 || interact_addr == 6'd23)),
       .video_x(video_x), .video_y(video_y), .video_w(video_w), .video_h(video_h), .video_woven(video_woven), .video_ann(video_ann),
 
       .apf_rtc_date_bcd(rtc_date_bcd_s),
@@ -1076,6 +1075,8 @@ module core_top (
       .vga_vsync(vsync),
       .vga_de(de),
       .vga_skip(skip),
+      .vga_woven(an_vid_woven_s),
+      .an_mode(an_mode), .an_scan(an_scan), .an_own(an_own),
 
       .use_jtag(use_jtag_s),
 
@@ -1192,6 +1193,23 @@ module core_top (
       .rgb(rgb888), .de(de), .hs(hsync), .vs(vsync), .skip(skip),
       .video_rgb(video_rgb), .video_de(video_de), .video_hs(video_hs),
       .video_vs(video_vs), .video_skip(video_skip)
+  );
+
+  // The Analogizer uses the full scan-out, independently of the Pocket's Screen Size crop.
+  reg [23:0] an_rgb_delay = 0;
+  reg an_de_delay = 0, an_hs_delay = 0, an_vs_delay = 0, an_skip_delay = 0;
+  always @(posedge clk_vid) begin
+    an_rgb_delay <= rgb888;
+    an_de_delay <= de;
+    an_hs_delay <= hsync;
+    an_vs_delay <= vsync;
+    an_skip_delay <= skip;
+  end
+  an_out an_video (
+      .clk(clk_vid), .rst(1'b0),
+      .mode(an_mode_s2), .scanlines(an_scan_s2), .woven(an_vid_woven),
+      .rgb(an_rgb_delay), .hs(an_hs_delay), .vs(an_vs_delay), .de(an_de_delay), .skip(an_skip_delay),
+      .bank3(an_bank3), .bank2(an_bank2), .bank1_b(an_bank1_b)
   );
 
   ////////////////////////////////////////////////////////////////////////////////////////

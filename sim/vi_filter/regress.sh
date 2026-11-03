@@ -30,6 +30,8 @@ TB_SEQ=0,1,1,0,0 run $T 2 1 30 320
 # (PAL 626) each field, its slot word -- libultra's modes (WIDTH 640, Y_SCALE 2.0), a 1280 pitch (WIDTH 1280, Y_SCALE 1.0, 237 lines), a
 # window, the crop, PAL, the TV system changing; a serrated 240-row buffer (640ps), or another pitch (704s): not a pair of fields, as it is
 run $T 3 0 30 640s; run $T 4 1 30 1280s; run $T 5 0 30 640ps; run $T 6 0 30 704s
+TB_PX0=32 TB_PW=576 run $T 7 0 30 576s
+TB_NOWEAVE=1 run $T 3 0 30 640s; TB_NOWEAVE=1 run $T 4 1 30 1280s; TB_NOWEAVE=1 run $T 7 0 30 576s    # no_weave: a serrated picture is never woven    # 576 wide (a 576-pixel window): a pair of fields too
 TB_ROWS=237 TB_Y0=1 run $T 2 0 30 1280s; TB_ROWS=237 TB_Y0=1 run $T 6 0 30 640s
 TB_PX0=100 TB_PW=400 TB_Y0=20 TB_ROWS=150 run $T 8 0 30 640s
 TB_CROPV=5 TB_CROPR=1 run $T 8 0 30 1280s
@@ -57,5 +59,10 @@ TB_PX32=1 TB_LOAD=5 run $T 6 1 30 320 1; TB_PX32=1 TB_LOAD=5 run $T 7 0 30 640p;
 TB_BLANK=1 run $T 1 0 30 320; TB_BLANK=1 run $T 3 0 30 640p; TB_BLANK=1 run $T 3 0 30 640s
 # the runtime's fit of a window taller than the field (host test of lang/n64rt/n64rt_vifit.h)
 cc -O1 -o obj_vi/vifit_test vifit_test.c && n=$((n+1)) && { out=$(./obj_vi/vifit_test 2>&1); case "$out" in *"vifit: PASS"*) ;; *) echo "FAIL: vifit_test"; echo "$out" | tail -4; fail=$((fail+1));; esac; }
+# the scan-out's base of a serrated picture, field by field (rcp_vi.sv): the woven pitches keep the first field's, any other the field's own
+export VERILATOR_ROOT="${VERILATOR_ROOT:-$HOME/local/usr/share/verilator}"
+"${VERILATOR:-$HOME/local/usr/bin/verilator}" --cc --exe --build -j 8 -O1 -Wno-fatal -Wno-lint -Wno-style --top-module rcp_vi --Mdir obj_origin \
+    "$HERE/../../rtl/soc/rcp_vi.sv" tb_origin.cpp -o tb_origin > obj_origin.log 2>&1 || { grep -E "%Error" obj_origin.log | head; fail=$((fail+1)); }
+n=$((n+1)); out=$(./obj_origin/tb_origin 2>&1); case "$out" in *"tb_origin: PASS"*) ;; *) echo "FAIL: tb_origin"; echo "$out" | tail -6; fail=$((fail+1));; esac
 echo "vi_filter regress: $n runs, $fail failed"
 exit $fail

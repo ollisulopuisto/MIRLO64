@@ -56,13 +56,18 @@ module mirlo_regs (
     // the runtime's answer a turn of ss_done_t, ss_err stable from before it; ss_sup what the Pocket's query is told
     input  wire         ss_save_t, ss_load_t,
     output logic        ss_done_t, ss_err, ss_sup,
-    // APF input
-    input  wire  [3:0][31:0] cont_key, cont_joy, cont_trig,
+    // APF input: the pads, a word at a time into a RAM (pad_ram, below) by the clock of the writes
+    input  wire         pad_clk, pad_we,
+    input  wire  [3:0]  pad_wa,
+    input  wire  [31:0] pad_wd,
     // APF interact
     input  wire  [5:0]  ia_address,
     input  wire  [31:0] ia_data,
     input  wire         ia_wr,
     output logic [31:0] ia_q,
+    output wire  [2:0]  ia_an_mode,         // interact: the Analogizer's video (field 23: 0 off, 1 RGBS, 2 RGsB, 3 YPbPr, 4 Y/C NTSC, 5 Y/C PAL, 6 RGBHV,
+    output wire  [1:0]  ia_an_scan,         //   7..9 RGBHV with the odd lines 25, 50, 75 % darker: mode 6, scan 1..3), and INTERACT3's bit 31, which the
+    output wire         ia_an_own,          //   runtime sets: the adapter owns the port (docs/analogizer.md)
     output wire  [4:0]  ia_crop_v,          // interact: "Crop Vertical" (lines; field 3) and "Crop Right" (pixels; field 5)
     output wire  [1:0]  ia_crop_r,          // ("Crop Horizontal", field 5: [1:0] columns at the right, [3:2] at the left)
     output wire  [1:0]  ia_crop_l,
@@ -217,7 +222,7 @@ always_ff @(posedge clk) begin
 end
 
 // ---- APF interact: fields 2-15 in the two slots and the fork's layout editor -- docs/control.md.
-logic [31:0] ia0, ia1;
+logic [31:0] ia0, ia1, ia3;
 logic        ia_ch0, ia_ch1;
 // The controller remap editor (interact.json has 16 entries at most, so the table is not one entry per field: the runtime keeps it in
 // RAM, and the Pocket writes what to change): bus words 16-20 are five-bit fields (layer, key, gives, special, and the "Controls"
@@ -232,15 +237,21 @@ wire  [31:0] iaw0 = {2'd0, ia_act_b, ia_act_a, 3'd0, iaf[4], iaf[3], iaf[2], iaf
 assign ia_crop_v = ia0[9:5];
 assign ia_crop_r = ia0[16:15];
 assign ia_crop_l = ia0[18:17];
+wire [3:0] ia_an_video = ia3[3:0];
+wire       ia_an_dark  = ia_an_video >= 4'd7;
+assign ia_an_mode = ia_an_dark ? 3'd6 : ia_an_video[2:0];
+assign ia_an_scan = ia_an_dark ? 2'(ia_an_video - 4'd6) : 2'd0;
+assign ia_an_own  = ia3[31];
 always_ff @(posedge clk) begin
     if (rst) begin
-        ia0 <= 32'(8) << 5 | 32'(1) << 15; ia1 <= 0; ia_ch0 <= 0; ia_ch1 <= 0;
+        ia0 <= 32'(8) << 5 | 32'(1) << 15; ia1 <= 0; ia3 <= 0; ia_ch0 <= 0; ia_ch1 <= 0;
         for (int i = 0; i < 5; i++) iaf[i] <= (i == 4) ? 5'd1 : 5'd0;
         ia_act_a <= 0; ia_act_b <= 0;
     end
     else begin
         if (wr && a == R_APF_INTERACT_INTERACT0) ia0 <= r_wdata;
         if (wr && a == R_APF_INTERACT_INTERACT1) ia1 <= r_wdata;
+        if (wr && a == R_APF_INTERACT_INTERACT3) ia3 <= r_wdata;
         if (rd && a == R_APF_INTERACT_INTERACT0) ia_ch0 <= 0;
         if (rd && a == R_APF_INTERACT_INTERACT1) ia_ch1 <= 0;
         if (ia_wr && iaf_sel) iaf[ia_address[2:0]] <= ia_data[4:0];
@@ -265,6 +276,7 @@ always_ff @(posedge clk) begin
             6'd13: ia1[23:22] <= ia_data[1:0];
             6'd14: ia1[24]    <= ia_data[0];
             6'd15: ia1[25]    <= ia_data[0];
+            6'd23: ia3[4:0]    <= ia_data[4:0];
             default: ;
         endcase
     end
@@ -285,6 +297,7 @@ always_ff @(posedge clk) begin
     6'd13: ia_q <= {30'd0, ia1[23:22]};
     6'd14: ia_q <= {31'd0, ia1[24]};
     6'd15: ia_q <= {31'd0, ia1[25]};
+    6'd23: ia_q <= {27'd0, ia3[4:0]};
     default: ia_q <= iaf_sel ? {27'd0, iaf[ia_address[2:0]]} : 32'd0;
     endcase
 end
@@ -451,6 +464,13 @@ always_ff @(posedge clk) begin
     if (!rst && wr && smask(a) != 32'd0) shadow[sh_a] <= r_wdata;
     sh_q <= shadow[sh_a];
 end
+// APF_INPUT: the pads' words, a RAM of 16 (a word a register, at a[5:2]: KEY1..4 at 0..3, JOY1..4 at 4..7, TRIG1..4 at 8..11),
+// written by io_pad_controller.v in the Pocket's clock and read here by the same rule as the shadow's
+(* ramstyle = "M10K, no_rw_check" *) logic [31:0] pad_ram [0:15];
+logic [31:0] pad_q;
+initial for (int k = 0; k < 16; k++) pad_ram[k] = 32'd0;
+always_ff @(posedge pad_clk) if (pad_we) pad_ram[pad_wa] <= pad_wd;
+always_ff @(posedge clk) pad_q <= pad_ram[a[5:2]];
 // The rest: the map's banks are a[11:8], a register's word in its bank a[5:2] (a[15:12] and a[7:6] are 0 for every register).
 // An address that names no register reads 0.
 logic [31:0] rb [16];
@@ -469,27 +489,14 @@ always_comb begin
     R_APF_BRIDGE_SAVESTATE[5:2]:           rb[1] = {29'd0, ss_load, ss_save, ss_sup};
     default: ;
     endcase
-    case (a[5:2])                                               // APF_INPUT: KEY1..4, JOY1..4, TRIG1..4
-    R_APF_INPUT_CONT1_KEY[5:2]:            rb[2] = cont_key[0];
-    R_APF_INPUT_CONT2_KEY[5:2]:            rb[2] = cont_key[1];
-    R_APF_INPUT_CONT3_KEY[5:2]:            rb[2] = cont_key[2];
-    R_APF_INPUT_CONT4_KEY[5:2]:            rb[2] = cont_key[3];
-    R_APF_INPUT_CONT1_JOY[5:2]:            rb[2] = cont_joy[0];
-    R_APF_INPUT_CONT2_JOY[5:2]:            rb[2] = cont_joy[1];
-    R_APF_INPUT_CONT3_JOY[5:2]:            rb[2] = cont_joy[2];
-    R_APF_INPUT_CONT4_JOY[5:2]:            rb[2] = cont_joy[3];
-    R_APF_INPUT_CONT1_TRIG[5:2]:           rb[2] = cont_trig[0];
-    R_APF_INPUT_CONT2_TRIG[5:2]:           rb[2] = cont_trig[1];
-    R_APF_INPUT_CONT3_TRIG[5:2]:           rb[2] = cont_trig[2];
-    R_APF_INPUT_CONT4_TRIG[5:2]:           rb[2] = cont_trig[3];
-    default: ;
-    endcase
+    rb[2] = pad_q;                                              // APF_INPUT: KEY1..4, JOY1..4, TRIG1..4 (words 12..15 are never written: 0)
     case (a[5:2])                                               // APF_INTERACT
     R_APF_INTERACT_INTERACT0[5:2]:         rb[3] = ia0;
     R_APF_INTERACT_INTERACT_CHANGED0[5:2]: rb[3] = {31'd0, ia_ch0};
     R_APF_INTERACT_INTERACT1[5:2]:         rb[3] = ia1;
     R_APF_INTERACT_INTERACT_CHANGED1[5:2]: rb[3] = {31'd0, ia_ch1};
     R_APF_INTERACT_INTERACT2[5:2]:         rb[3] = iaw0;
+    R_APF_INTERACT_INTERACT3[5:2]:         rb[3] = ia3;
     default: ;
     endcase
     case (a[5:2])                                               // APF_VIDEO

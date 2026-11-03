@@ -326,6 +326,9 @@ static void vi_field_common(void)
 #endif
     n64rt_cheat_field();
     n64rt_gbv_field();
+#ifdef N64RT_GBTRACE
+    { extern void n64rt_trace_field(void); n64rt_trace_field(); }
+#endif
 }
 
 /* (n64rt_tick, interrupts off) */
@@ -641,7 +644,7 @@ static void read_pad(OSContPad *p, int index)
 static int pad_there(int i)
 {
     if (i == 0) return 1;
-    if (n64rt_pak_kind(i) != N64RT_PAK_NONE) return 1;     /* (controller 2's "Virtual Transfer Pak": a pad that is there, nothing pressed if the dock has none) */
+    if (n64rt_pak_kind(i) != N64RT_PAK_NONE) return 1;     /* (controller 2's "Transfer Pak (SD)": a pad that is there, nothing pressed if the dock has none) */
     u32 k = i == 1 ? apf_input_cont2_key_read() : i == 2 ? apf_input_cont3_key_read() : apf_input_cont4_key_read();
     return KEY_TYPE(k) != 0u;
 }
@@ -1637,6 +1640,7 @@ void n64rt_rcp_events(void)
         else if (!s_mi_hw) s_mi_sw |= MI_DP;          /* SYNC FULL */
     }
     if (pend & 4u) n64rt_state_poll();                /* (whether the Pocket may ask for a save state) */
+    if (pend & 4u) n64rt_restart_poll();              /* the core's "Restart Game" action (n64rt_restart.c): does not return when it was chosen */
     if (pend & 32u) n64rt_state_event();              /* the Pocket asks for a save state, or for its load (n64rt_state.c) */
 }
 static u32 vi_current(void)

@@ -64,6 +64,7 @@ BLOCKS = [
         # alone is unused): the CPU compares ACT_A and ACT_B with the ones it saw
         ("INTERACT2",         0x10, R,  1, [("NORMAL", 0, 5), ("SHIFT", 5, 5), ("SHIFT_DPAD", 10, 5), ("DPAD_KEYS", 15, 5), ("STICKS", 20, 5),
                                             ("ACT_A", 28, 1), ("ACT_B", 29, 1)]),
+        ("INTERACT3",         0x14, RW, 1, []),     # Analogizer settings; bit 31: the adapter owns the port
     ]),
     ("APF_VIDEO", 0x0400, [
         # a read clears VBLANK_TRIGGERED (status register: the read strobe clears the flag)

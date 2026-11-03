@@ -2,7 +2,7 @@
 """Writes pkg/pocket/Cores/tortuga.Mirlo64/interact.json: the core's settings menu.
 
 FORK: the entries are readable (the Pocket reads each value back every frame -- Analogue's docs: read, modify, write back -- and its menu shows
-the selected option): rtl/soc/mirlo_regs.sv answers the reads (words 22 and up, Screen Size, core_top.sv does) and sim/interact_bridge runs
+the selected option): rtl/soc/mirlo_regs.sv answers the reads (word 22, Screen Size, core_top.sv does) and sim/interact_bridge runs
 the Pocket's cycle against the menu in CI. Not tried on a Pocket yet, and a Pocket that read wrong values would write them back. The actions stay
 writeonly. `--writeonly` writes the original author's variant (every entry writeonly: the Pocket stores the value and never reads it back,
 a configuration known to load and work, with no selection shown).
@@ -40,7 +40,7 @@ def build():
                                            (4, "1 column left"), (8, "2 columns left"), (12, "3 columns left"),
                                            (1, "1 column right"), (2, "2 columns right"), (3, "3 columns right")], 7),
  {"name":"Expansion Pak","id":238,"type":"check","enabled":True,"persist":True,"address":"0x10000138","defaultval":1,"value":0,"value_off":1,"writeonly":True},   # (upstream's: checked writes 0 = the Pak in)
- lst("Controller 1 pak", 214, "0x10000108", [(0, "None"), (1, "Controller Pak"), (2, "Transfer Pak")]),
+ lst("Controller 1 pak", 214, "0x10000108", [(0, "None"), (1, "Controller Pak"), (2, "Transfer Pak cartridge"), (3, "Transfer Pak SD")]),
  lst("Shift key", 228, "0x10000110", [(0, "None"), (1, "L"), (2, "R"), (3, "ZL"), (4, "ZR"), (6, "Select")]),
  lst("Normal: A B X Y / L R", 240, "0x10000140", [AUTO, (1, "A B cR cL / Z R"), (2, "cR cD cU cL / Z R"), (3, "A B cR cL / R Z"),
                                                    (4, "A B cU Z / Z R")], persist=False),
@@ -51,7 +51,8 @@ def build():
  lst("Analog sticks (dock)", 244, "0x10000150", [(1, "L stick / R C buttons"), (0, "L stick / R none"), (2, "L half / R C buttons"),
                                                  (3, "L D-pad / R C buttons"), (4, "L C buttons / R stick"), (5, "Both none")]),
  lst("Stick dead zone", 273, "0x10000118", [(0, "Default (12)"), (1, "None"), (2, "Small (6)"), (3, "Large (20)"), (4, "Huge (30)")]),
- lst("Stick range", 274, "0x1000011C", [(0, "Default (80)"), (1, "Wide (85)"), (2, "75"), (3, "70"), (4, "Small (60)")]),
+ lst("Analogizer video", 253, "0x1000015C", [(0, "Off"), (1, "RGBS"), (2, "RGsB"), (3, "YPbPr"), (4, "Y/C NTSC"), (5, "Y/C PAL"),
+                                             (6, "RGBHV"), (7, "RGBHV scanlines 25"), (8, "RGBHV scanlines 50"), (9, "RGBHV scanlines 75")]),
  action("Save for this game", 271, 2),
  action("Forget this game", 272, 3),
  lst("Debug", 276, "0x10000124", [(0, "Off"), (1, "FPS"), (2, "Graph"), (3, "FPS and graph")], persist=False),   # (fork only: both the runtime's, n64rt_dbg.h)

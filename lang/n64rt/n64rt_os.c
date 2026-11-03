@@ -18,6 +18,7 @@
 #include <generated/soc.h>
 #include <notice.h>
 #include "n64rt.h"
+#include "n64rt_cart.h"
 
 /* A thread's saved state (n64rt_exc.S). The registers are the VR4300's 64
  * bits, upper word first; register 0's place holds EPC and Status, k0's and
@@ -95,7 +96,11 @@ void n64rt_log(const char *fmt, ...)
 }
 void n64rt_fatal(const char *fmt, ...)
 {
-    __asm__ volatile("mtc0 %0, $12" :: "r"(0u));
+    {   /* (interrupts off, and only that: at the monitor level Status.ERL is set -- the runtime's code is at unmapped addresses
+         * only while it is --, and a 0 here let the next fetch of the runtime's own code miss the game's tables) */
+        u32 st; __asm__ volatile("mfc0 %0, $12" : "=r"(st));
+        __asm__ volatile("mtc0 %0, $12\n\tnop\n\tnop" :: "r"(st & ~1u));
+    }
     static char s_msg[400];
     va_list ap; va_start(ap, fmt); vsnprintf(s_msg, sizeof s_msg, fmt, ap); va_end(ap);
     printf("%s", s_msg);
@@ -104,7 +109,7 @@ void n64rt_fatal(const char *fmt, ...)
      * first 150 KiB -- the game is not going on */
     monitor_ctl_write(1u);
     notice(N64RT_RDRAM_SDRAM, s_msg);
-    for (;;) ;
+    for (;;) n64rt_restart_poll();                       /* (the core's "Restart Game" starts the game over from here too) */
 }
 
 /* ---- interrupts ------------------------------------------------------------ */
@@ -727,7 +732,7 @@ static int emulate_hw(n64rt_ctx_t *x, u32 cause)
 }
 /* An access to the RCP's side of the bus is a 32-bit one, whatever the instruction. What the hardware does with the others
  * (n64-systemtest's spmem / pifram / cart_memory groups; the same for every RCP register):
- *   lb lbu lh lhu   the aligned word is read and the byte or half taken out of it (as it always was here)
+ *   lb lbu lh lhu   the aligned word is read and the byte or half taken out of it (as it always was here; the cartridge's: n64rt_cart.h)
  *   lwl lwr         the aligned word, merged into the register
  *   sb sh           the WHOLE word is written, the register shifted to the byte's or half's lane and zeros below it -- the other
  *                   lanes are not left alone: sb of 0x12345678 at offsets 0, 1, 2, 3 writes 0x78000000, 0x56780000, 0x34567800,
@@ -744,11 +749,13 @@ static int emulate_hw_at(n64rt_ctx_t *x, u32 insn, u32 op, u32 rt, u32 badv)
     u32 v;
     switch (op) {
     case 0x23: case 0x20: case 0x24: case 0x21: case 0x25: {            /* lw lb lbu lh lhu */
-        if (!n64rt_hw_read(badv & ~3u, &v)) return 0;
-        if (op == 0x20) v = (u32)(s32)(s8)(v >> (24 - 8 * k));
-        else if (op == 0x24) v = (v >> (24 - 8 * k)) & 0xFFu;
-        else if (op == 0x21) v = (u32)(s32)(s16)(v >> (16 - 8 * (k & 2u)));
-        else if (op == 0x25) v = (v >> (16 - 8 * (k & 2u))) & 0xFFFFu;
+        /* (a cartridge's byte or half in an odd halfword is the next one's: n64rt_cart.h) */
+        const u32 ba = op == 0x23 ? badv : n64rt_cart_sub_addr(badv), ka = ba & 3u;
+        if (!n64rt_hw_read(ba & ~3u, &v)) return 0;
+        if (op == 0x20) v = (u32)(s32)(s8)(v >> (24 - 8 * ka));
+        else if (op == 0x24) v = (v >> (24 - 8 * ka)) & 0xFFu;
+        else if (op == 0x21) v = (u32)(s32)(s16)(v >> (16 - 8 * (ka & 2u)));
+        else if (op == 0x25) v = (v >> (16 - 8 * (ka & 2u))) & 0xFFFFu;
         if (rt) gset(x, rt, v);
         return 1;
     }
@@ -1530,6 +1537,31 @@ static int own_tlb_call(n64rt_ctx_t *x)
     x->epc = x->g[31].l;
     return 1;
 }
+/* An exception that nothing here does for the game -- a Reserved Instruction, or an address error at an address of a device the
+ * runtime could not take (an unaligned access) -- is the VR4300's: the game's own handler runs, with EPC (the branch's, with BD,
+ * in a delay slot), Cause.ExcCode, Status.EXL and the vector 0x8000_0180, as tlb_deliver does for a translation fault; an address
+ * error also gives BadVAddr and Context's BadVPN2 the address. (The core sends every Reserved Instruction of the game's code to
+ * the monitor level -- the instructions it lacks are the runtime's to do -- and the accesses to addresses of the RCP's registers.) */
+static void exc_deliver(n64rt_ctx_t *x, u32 code, u32 bd)
+{
+    u32 cause;
+    CP0_GET(13, cause);
+    cause = (cause & ~0x7Cu) | code << 2;
+    if (!(x->status & 2u)) { cause = (cause & 0x7FFFFFFFu) | bd << 31; CP0_SET(14, x->epc); }
+    CP0_SET(13, cause);
+    if (code == 4u || code == 5u) {
+        u32 insn, ctxt;
+        const u32 pc = x->epc + (bd ? 4u : 0u);
+        if (insn_at(pc, &insn)) {
+            const u32 badv = g32(x, (insn >> 21) & 31u) + (u32)(s32)(s16)insn;
+            CP0_GET(4, ctxt);
+            CP0_SET(8, badv);
+            CP0_SET(4, (ctxt & 0xFF800000u) | ((badv >> 13) << 4));
+        }
+    }
+    x->status |= 2u;                                    /* (EXL; the eret to the vector clears ERL) */
+    x->epc = 0x80000180u;
+}
 void n64rt_mon_exception(void)
 {
     n64rt_ctx_t *x = &n64rt_mon_ctx;
@@ -1555,6 +1587,8 @@ void n64rt_mon_exception(void)
         /* the game's own tlbwi / tlbwr / tlbr / tlbp */
     } else if (code == 10 && !bd && own_tlb_call(x)) {
         /* osMapTLB / osUnmapTLB / osUnmapTLBAll, the runtime's (n64rt_boot.c: a core that does not take the TLB instructions) */
+    } else if (code == 10 || code == 4 || code == 5) {
+        exc_deliver(x, code, bd);
     } else {
         u32 epc = x->epc + (bd ? 4u : 0u), insn;
         if (!insn_at(epc, &insn)) insn = 0;
@@ -1658,6 +1692,9 @@ void n64rt_os_start(u32 entry, u32 sp)
         /* (the AI in hardware: MONITOR.CTL bit 4, the resampler at its default rate; AI_DACRATE's write wakes the monitor) */
         if (n64rt_ai_hw()) { extern void n64rt_ai_hw_reset(void); n64rt_ai_hw_reset(); }
     }
+#endif
+#ifdef N64RT_RESTART_FP
+    n64rt_restart_fp();
 #endif
     n64rt_resume();
 }

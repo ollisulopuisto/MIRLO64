@@ -1009,3 +1009,174 @@ With the CPU's 64-bit division and unaligned doubleword accesses (+77 and +122 A
 and the two changes above, `tools/area2/fit.sh` gives 17,507 to 17,575 ALMs (95 %) over four seeds, against 18,197 to 18,213 on
 main (98 %), and every one of the 128 timing analyses is at or above zero in each (the worst +0.039 to +0.092 ns). Without
 the FPU's changes the same tree fits at 17,740 to 17,799, and one seed of four misses.
+
+## Round 7: the console's rules in the RDP (docs/rdp_exact.md, rules 2, 4 and 6's copy mode)
+
+The RDP alone (`ooc.sh rdp`, every pin virtual, `FIT="1 2 3"`, from main `cb446a5`): 7,377 ALUTs, 6,340 registers, 39 DSP blocks,
+fitted 4,881 / 4,892 / 4,900 ALMs (mean 4,891), worst setup slack of the 16 ns unit +1.265 ns (seed 3). Each step is the tree
+as committed, measured the same way:
+
+| step | ALUTs | registers | DSP | fitted ALMs, seeds 1 / 2 / 3 | mean (against main) |
+|---|---|---|---|---|---|
+| copy mode by groups, a rectangle's LOD next line | 7,539 | 6,349 | 39 | 5,001 / 5,008 / 4,991 | 5,000 (+109) |
+| and the shade and Z at the first covered sample, the dz code | 7,829 | 6,360 | 37 | 5,132 / 5,140 / 5,142 | 5,138 (+247) |
+| and the span's start (first version: `dif` in registers, the copy mode's mask twice) | 7,977 | 6,652 | 37 | 5,245 / 5,241 / 5,249 | 5,245 (+354) |
+| the same, `dif` a MLAB with one write port, the copy mode's mask shared | 7,892 | 6,452 | 37 | 5,181 / 5,179 / 5,186 | 5,182 (+291) |
+
+Worst setup slack of the last: +1.10 ns (seed 3), the same path as main's (the texture decode into `texA9`). Where it went:
+
+* **Shade and Z at the first covered sample** (+131 ALMs, +290 ALUTs): the shade's `(A >> 14) * 4 + ox * DaDx' + oy * DaDy'` for four channels and
+  the Z's of 22 bits. A first version with `*` of the 2-bit factors took 8 more DSP blocks and missed timing by up to 0.6 ns at the 16 ns
+  unit clock (the shade from the mask to `shade0` in one stage); as shifts and adds it takes none (and Z's two DSP blocks are
+  gone: 39 to 37) and the slack is +0.84 ns. DaDy of the four shade attributes is 52 registers.
+* **The span's start** (+54 ALMs after the sharing): three 32-bit subtractors for `dif`, the adders of the start value, the x fraction's
+  24 x 9 product (in logic: Quartus puts a multiplier this small there); `exh` and its adder are gone. A row's setup takes one clock
+  more (the setup state: 8.9 to 9.7 million clocks on the 138 captured tasks), the whole run of them 95,115,501 to 95,126,383 clocks (+0.01 %: the
+  row's step of `e[]` starts with the setup's last clock now).
+* **Copy mode and the rectangle's next line** (+109 ALMs before the sharing of the mask logic): the pixel's place in its group
+  goes down the pipe (15 registers), the texel's add and the 10-bit mask. A first estimate in rdp_exact.md was 20 ALUTs.
+
+Verification: `rdp_regress.sh` 80 runs, 0 failed (63 before: the new ones are `TB_COPY` and `TB_LOD` with `TB_RECT`); the 138 captured
+tasks RTL == model, also per command; with the model built without the rules each of the new seeds fails (the benches see them).
+
+
+The whole design (`tools/area2/fit.sh`), the same seeds, main `cb446a5` against this tree: seeds 1 / 2 / 3, main 17,422 / 17,333 / 17,363 ALMs,
+with the rules 17,788 / 18,094 / 17,833 (+532 on average: more than the unit's +291, as a design at 94 to 96 % of the device spends more ALMs on
+placing). Fifteen seeds with the rules: 17,786 to 18,125 ALMs; the 128 timing lines are all at or above 0 on four of them (7, 10, 14 and 15; 17,841
+to 18,063 ALMs) and miss by 0.001 to 0.5 ns on the others, in the CPU's 93.75 MHz domain or in `clk_sys`; main misses on two of its seeds 1 to 3
+(-0.001 and -0.129 ns). (Seeds 1, 2, 4, 5, 9 and 13 miss in the CPU's domain only; seeds 3, 6 and 8 in `clk_sys` by 0.002 to 0.03 ns, 3 in setup and 6 and 8 in hold; 11 and 12 also in a third clock. The paths themselves were not traced.)
+
+## Round 8: the depth image's own dz in the RDP (docs/rdp_exact.md, rule 8)
+
+The depth compare's tolerance and the blender's coverage weights use the depth image's own dz, which the RDP writes with each depth (the dz
+code's low two bits in the hidden plane, at the depth image's addresses) and reads back: a hidden-plane word of the depth span read and written
+for each 16 pixels, as the colour span's. The RDP alone (`ooc.sh rdp`, `FIT="1 2 3"`), the tree of round 7 (`8454ce2`) against this one:
+
+| | ALUTs | registers | DSP | block RAMs (whole design) | fitted ALMs, seeds 1 / 2 / 3 | mean |
+|---|---|---|---|---|---|---|
+| round 7 | 7,892 | 6,452 | 37 | 231 | 5,181 / 5,179 / 5,186 | 5,182 |
+| the depth image's own dz | 8,058 | 6,512 | 37 | 234 | 5,289 / 5,282 / 5,303 | 5,291 (+109) |
+
+The estimate in rdp_exact.md (200 to 300 ALMs) was high: the second hidden buffer, its address arithmetic and the write engine's merge are shared with
+the colour image's (the merge is one logic for both passes, which select their lanes and their hidden bits), and the tolerance's decode replaces
+the old step's priority encoder (`z_tol`, `zt_m`) and the word's floor (7 flip-flops). The new pieces: the depth image's row base (`rzb`, 20 flip-flops
+and an adder), the hidden pair read and the memory's code (`rawdz`, `texp`, the two shifts: 30 flip-flops down the blender's two stages), two
+adders of the read engine for the depth span's first and last group, a phase flag, and the 36-bit depth lane (4 flip-flops a stage of the write
+engine's queue). Three block RAMs: the pixels' copy of the depth image's raw hidden buffer (256 x 32), the write engine's copy twice as deep
+(512 x 32, the depth image's groups in the upper half); the depth buffer of the new results is 36 bits wide in the same four blocks.
+
+Cycles, on the 138 captured tasks (the RDP alone, `tb_rdp`): the bench's memory 95,133,674 to 96,770,887 (+1.7 %); the SDRAM controller's rules
+(`TB_SDRAM=1`: a row open per bank, precharge and activate, turns) 91,983,477 to 97,401,049 (+5.9 %). The command channel is the limit in a
+span of two images: a word of two pixels is one read and one write of each image, and the hidden words add one read and one write of each a group
+of eight words (36 against 34 commands a 16 pixels, +5.9 % where it limits). On the SDRAM the depth image's rows of the hidden plane
+are two more row changes a span (in the bench's layout the hidden words of the two images lie in one bank): without the depth image's hidden reads (the
+compare then wrong) the first 40 tasks cost +2.6 % in place of +6.1 % (a row's pixels wait for them, behind the colour image's), and without its hidden
+writes the first 93 cost +4.1 % in place of +5.6 %. A mitigation that was not tried: writing a span's hidden words in a batch at its end (one row change, not two a group), which would help the
+colour image's hidden writes as much.
+
+The whole design (`tools/area2/fit.sh`, seeds 1 to 15, this tree): 17,652 to 17,803 ALMs (mean 17,731), against 17,786 to 18,125 (mean 17,875) of round 7's
+fifteen: the same seeds fit smaller (seeds 1 / 2 / 3: 17,735 / 17,702 / 17,716 against 17,788 / 18,094 / 17,833), which the RDP's +109 ALMs do not explain
+in themselves (the fitter's packing moves a design this full by more than that from one run to another; it is not a saving to count on). The 128
+timing lines are all at or above 0 on six seeds (4, 5, 6, 8, 14 and 15; 17,652 to 17,767 ALMs, worst slack +0.021 to +0.075 ns) against four of round 7's;
+the nine others miss by 0.004 to 0.6 ns: in the CPU's 93.75 MHz domain, in setup (seeds 1, 2, 7, 10 to 13) or by hold (0.010 to 0.089 ns in seeds 1, 2, 3, 7 and 9). None
+of the RDP's new paths is among the failing ones (the worst is the CPU's `e_c.alu` to `m_res`; the hold of seed 1 is `c5_line` to `u6_line` of the LOD, untouched), so
+there was nothing in the compare to pipeline.
+
+Verification: `rdp_regress.sh` 93 runs, 0 failed (80 before: the new ones are `TB_ZDZ`, also with the SDRAM's timing, a width whose rows share
+hidden groups and 32-bit images); the 138 captured tasks RTL == model, with the SDRAM's timing too; `run.sh 50`: the new `zdz` suite (1,300
+primitives, the oracle against the model with the rule: 0 words differ; 106,113 colour words without it) and four minimal streams
+(`memdz_*`). Found by the benches while it was made: the read engine must hold a span's words back until the hidden words are all asked for (the
+words of a 32-bit image's span were asked for before the depth image's groups, whose data then came back as the words); the second half of a
+32-bit image's wide span reads the depth image's groups only after the first half's write, as they may share one. With the model built without
+the rule each `TB_ZDZ` seed fails; and with the oracle's model made without one detail of the rule (the doubling, the floor of 16 >> exponent, the
+coplanar code, the weights' shifts, the shift of the interpenetrating coverage, the hidden bits or the pixel's own dz in the tolerance) `zdz`
+differs in 3 to 426 of its 1,300 primitives in each case.
+
+### The noise LFSR free-running
+
+The RDP's noise generator steps on every clock, as the console's does, instead of once for each pixel with coverage (docs/rdp.md, "Noise"): a pixel
+takes the bits the register holds when it reaches the stage that uses them. The second copy for the combiner's NOISE (`nlfsr`, 23 flip-flops and its
+enable) and the five-stage delay of the colour dither's bits (`nz1` to `nz5`, 45) are gone. The per-pixel LFSR stays behind `RDP_LFSR_PIXEL`, which
+the lockstep benches and `rdp_regress.sh` build (`sim/rdp/build_rtl.sh`); the model is unchanged. This change alone, the RDP alone (`ooc.sh rdp`): 5,279 /
+5,281 / 5,297 fitted ALMs against 5,289 / 5,282 / 5,303 (-6 on average), 27 registers and 5 ALUTs fewer.
+
+The whole design with the depth image's own dz and the free-running LFSR (seeds 1 to 15): 17,667 to 17,765 ALMs (mean 17,711; the dz alone 17,731: inside
+the fitter's noise). The 128 timing lines are all at or above 0 on four seeds (2, 3, 7 and 13; worst slack +0.003 to +0.056 ns) and the other eleven miss by
+0.001 to 0.41 ns: setup in the CPU's domain (seeds 4, 5, 6, 8, 9, 11, 12 and 15), hold (0.006 to 0.053 ns in seeds 1, 5, 10, 12 and 14) and, in seed 15 also,
+the SDRAM PHY's `a_q` (setup, -0.207 ns). No RDP path is among them. (Six of the previous fifteen close, four of round 7's: the number moves
+with the seed, not with these changes, whose paths are not the failing ones.)
+
+Verification: `rdp_regress.sh` 108 runs, 0 failed (93 before: the new ones run the free-running build, `obj_free`, with `TB_FREE` checking that
+the LFSR steps on every clock, `TB_NONOISE` streams, in which nothing reads the noise, RTL == model, and `TB_NOISE` streams, the noise colour dither alone, in
+which the colour words differ from the model's by a step of a 5-bit channel at most and nothing else does).
+
+## Round 9: the RDP's area, to make room (docs: rdp.md, rdp_exact.md)
+
+The aim was to free logic in the RDP, with its cycles, its results and its modes as they are. Ten changes, each a commit; the RDP alone
+(`tools/area2/ooc.sh`), two ways: `rdp` (rdp_top with every port an output of the unit, as before) and `rdpw` (new: the ports as
+`rtl/soc/mirlo_mips.sv` connects them -- `load_count` and `unknown_ops` are not read, nor are the address bits above the RDRAM's -- so
+that what the SoC prunes is not counted: 106 ALMs of the 5,295). Main `79f93bf`: rdp 8,135 ALUTs, 6,496 registers, 5,295 ALMs (synthesis
+estimate), 37 DSP blocks; rdpw 7,990 / 6,336 / 5,189.
+
+**How far the numbers can be trusted.** The same netlist gives the same count, and renaming a signal or swapping the operands of a sum
+changes nothing (checked: 0). But any edit that changes the netlist moves the estimate by more than its own effect: the 'ninth bit of the
+shade' (24 registers fewer, 64 RAM bits fewer) measured -18 ALMs in rdp and +31 in rdpw on one tree, -4 and +6 on another, and
+in unit fits (rdpw, 16 ns clock, seeds 1 / 2 / 3, the seeds themselves 5 to 10 ALMs apart) +14 ALMs; it was dropped. So the table
+gives the synthesis count of each commit on the one before, and the kept-or-not was decided by fits: leave-one-out, three seeds a tree
+(the change taken out of the tree it is in, the mean against the mean of the tree with it).
+
+| commit | rdp ALUTs / regs / ALMs | rdpw ALUTs / regs / ALMs | DSP | fits: taking it out |
+|---|---|---|---|---|
+| main | 8,135 / 6,496 / 5,295 | 7,990 / 6,336 / 5,189 | 37 | |
+| fill colour read from its register in `rdp_mem` | 8,130 / 6,464 / 5,281 | 7,960 / 6,304 / 5,166 | 37 | |
+| hidden words' row bases from the row adders | 8,068 / 6,464 / 5,253 | 7,950 / 6,304 / 5,161 | 37 | +23 |
+| COMBINED cleared where registered | 8,077 / 6,464 / 5,259 | 7,933 / 6,304 / 5,162 | 37 | +25 |
+| low five bits of the shade's and W's iterators | 8,052 / 6,414 / 5,245 | 7,873 / 6,254 / 5,127 | 37 | |
+| filter edges B - A, C - A; weights crosswise | 7,973 / 6,414 / 5,189 | 7,805 / 6,254 / 5,081 | 37 | |
+| shade's step to the first covered sample, DSP | 7,752 / 6,414 / 5,060 | 7,646 / 6,254 / 5,006 | 41 | (with Z's: -81) |
+| Z's step to the first covered sample, DSP | 7,713 / 6,414 / 5,062 | 7,524 / 6,254 / 4,935 | 43 | +34 |
+| a load's request not copied in `rdp_mem` | 7,664 / 6,397 / 5,027 | 7,545 / 6,237 / 4,956 | 43 | +8 |
+| write-back FIFO keeps the pass's word | 7,651 / 6,359 / 5,006 | 7,539 / 6,199 / 4,943 | 43 | (-31, before and after) |
+
+Total, synthesis: rdp 8,135 to 7,651 ALUTs (-484), 6,496 to 6,359 registers, 5,295 to 5,006 ALMs (-289), 37 to 43 DSP blocks, 152 RAM bits fewer;
+rdpw 7,990 to 7,539 ALUTs, 6,336 to 6,199 registers, 5,189 to 4,943 ALMs (-246). Fitted (rdpw alone, seeds 1 / 2 / 3, ALMs): main 5,226 /
+5,219 / 5,218 (mean 5,221); the series 4,986 / 4,986 / 4,979 (mean 4,984): **-237 ALMs (-4.5 %)**, registers 5,932 to 5,796, six more DSP
+blocks. The unit's worst setup slack (the slow corner, 16 ns): +1.4 ns against +1.1 ns, the same path (the texture decode into
+`texA9` / `tex9`, from `other_h[9]`); to `shade0` +3.2 ns, to `zc0` +4.5 ns, to the iterators `cur` +2.7 ns; the fast corner's hold +0.06 ns.
+
+What each does: the first two remove a register copy and two 10-bit adders that duplicate wider ones (a register that only copies
+another costs a half ALM in the fit: the fitter puts a feeder LUT in front of it, some 900 of them in the unit); the third moves a 36-bit AND
+into the register's clear; the fourth finds five bits of five 32-bit iterators that nothing reads (the shade's and W's DaDx have zeros there:
+adx, the adders and cur lose them); the fifth is a rewrite of the filter that does not change its number (the sum of two products does not
+care which edge has which weight: the lower triangle swaps the 6-bit weights in place of 64 bits of texel); the DSP commits are rule 4's
+`ox * DaDx' + oy * DaDy'` as the sum of two products of a block a shade channel and two for Z (the sum of two 2-bit-by-13-bit products is
+a block; timing of this one missed by 0.6 ns in round 7 with each product in a block on its own and the choice of the offsets in front of it; here
+it has +3 ns); the last two drop what a load and the write-back's FIFO carried twice (the FIFO is read as a RAM with a bypass: 38 registers
+and their select fewer).
+
+**Not kept** (measured, unit synthesis in rdpw unless said): the ninth bit of the shade (above: fits +14 ALMs); the shared multiplier's
+first operand in 16 bits (`mul_a`: 14 registers fewer; synthesis 0 / +9 ALMs, fits -6 on average of seeds spread by 26: left out); the texture
+coordinate's clamp, mirror and mask on 17 bits in place of 19 (provably exact: 22 bits signed is the most the coordinate takes; fits 0);
+the scalar choices of the combiner's C operand once for the three channels (-14 ALUTs, -3 ALMs); the RDP's reciprocal table in a block RAM
+(its 22 ALUTs: +13 ALMs, -7 ALUTs); the shift registers of rdp_pix as registers (`AUTO_SHIFT_REGISTER_RECOGNITION OFF`: -77 ALUTs, +489 registers,
++38 ALMs); the pixel results written to the new line buffers straight from the pipe's output registers, without the 71 registers of
+rdp_top's own in front of the RAMs (cycle-identical: the RAMs' input registers take the data a clock earlier; fits 4,997 / 4,999 / 5,000
+against 4,999 / 4,997 / 5,006: -2 ALMs for a bigger change); the TLUT's texel decoded by the same function as the others
+(-4 ALUTs, -19 ALMs, a level deeper on the TLUT path).
+
+**Where the area is, measured by replacing it with wires** (rdpw, a tree of the series' middle): the decode of the three texels 338
+ALUTs; the combiner's two cycles about 750 ALMs on main (cycle 1 432, cycle 0 324: the arithmetic itself is DSP blocks and 35 ALMs); the texture
+coordinate's clamp, mirror and mask 217 ALUTs; the perspective result's range and window (`dv17`, `tx16`) 143; the blender's operand
+selects 115; the texture LOD 259 ALUTs (185 ALMs); a load's word count (`load_words`) 70 ALUTs; the depth compares 32.
+
+**Ideas not done** (estimates by the ablations above): the load word count over the clocks of S_LOAD_INIT, in the shared adder (-40 ALMs);
+the texture address's four adders (`taddr`) as two bases and two offsets, then four sums (-15 ALMs, the path from the row multiplier gets
+a second adder); the three edge words `t_xh`, `t_xm`, `t_xl` (96 registers behind 96 feeders) in the staging RAM (-45 ALMs; the sequencer's
+timing of the reads changes); the eight attribute iterators `cur` as DSP accumulators (the adder, its 32-bit choice of operand and the 32
+registers of each in a block; not tried: Quartus does not infer an accumulator without a product).
+
+Verification: `rdp_regress.sh` 133 runs, 0 failed; on the 138 captured tasks (the bench's memory, and the SDRAM controller's timing), and the
+133 configurations, each run's summary line (commands, cycles, reads, writes, pixels, RTL == model; with the SDRAM controller's rows,
+turns and the other master's accesses) identical to main's: 408 runs; `TB_CMDT` (the clock each command word is taken) identical on 35
+tasks and 14 random streams (also with the SDRAM controller, 8-bit and 32-bit images, copy mode, LOD, `TB_ZDZ`); the model and the oracle are
+not touched, and `sim/rdp_oracle/run.sh 20` runs as before.

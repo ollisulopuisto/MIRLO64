@@ -1,15 +1,15 @@
 /* The accessory in controller 1 -- the core's "Controller 1 pak" setting
  * (interact.json: word 0's bits 4-0), read at every access, so it can be
- * changed while a game runs -- and in controller 2: the "Controller 2 pak" setting (word 0's bits 24-20), None or a
- * Virtual Transfer Pak, which makes controller 2 a pad that is there (with nothing pressed, when the dock reports none) so that
+ * changed while a game runs -- and in controller 2: the "Controller 2 pak" setting (word 1's bits 4-0), None or a
+ * Transfer Pak (SD), which makes controller 2 a pad that is there (with nothing pressed, when the dock reports none) so that
  * the game finds the pak. The values of controller 1's:
  *   0  nothing (the default, and what the setting word is until the Pocket
  *      has sent it: the cartridge slot is left alone)
  *   1  a Controller Pak
  *   2  a Transfer Pak with the Game Boy cartridge that is in the Pocket's
  *      own slot
- *   3  a Transfer Pak with a virtual cartridge: a Game Boy ROM and its save,
- *      files the Pocket loads (the slots "Virtual Transfer Pak 1" and "Game Boy Save 1"; n64rt_gbvirt.c)
+ *   3  a Transfer Pak with an SD cartridge: a Game Boy ROM and its save,
+ *      files the Pocket loads (the slots "Transfer Pak 1" and "Game Boy Save 1"; n64rt_gbvirt.c)
  * Any other value is nothing. Controller 2's takes 3 as well (its own cartridge: the slots "2"); controllers 3 and 4 have none.
  *
  * It is the accessory as the controller's joybus sees it: 32-byte blocks
@@ -55,7 +55,7 @@
  * the slot never sees more than reads. On a SoC without the registers
  * (GB_CART.ID reads 0) the Transfer Pak is there with no cartridge in it.
  *
- * The virtual Transfer Pak is the same accessory with another cartridge: what the game reads and writes at 0xC000 goes to
+ * The Transfer Pak (SD) is the same accessory with another cartridge: what the game reads and writes at 0xC000 goes to
  * n64rt_gbvirt.c's mapper, ROM and RAM, and the Pocket keeps its save. The cartridge is looked for in its slot where the
  * physical one is looked for in the Pocket's. It does not touch the port, so a cartridge in the Pocket's slot is left alone. */
 #include <string.h>
@@ -69,6 +69,12 @@
 #define PAK_BYTES     ((u32)LAYOUT_PAK_BYTES)
 
 #define NPAK 2                                  /* the controllers with an accessory: 1 and 2 */
+#ifdef N64RT_GBTRACE
+void n64rt_trace_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+#define GBLOG(...) do { n64rt_log(__VA_ARGS__); n64rt_trace_log(__VA_ARGS__); } while (0)
+#else
+#define GBLOG(...) n64rt_log(__VA_ARGS__)
+#endif
 static struct { u8 on, access, changed, bank; } s_tpv[NPAK];   /* the Transfer Pak of each */
 static u8 s_sized;                              /* the Controller Pak's file size is in the table */
 
@@ -77,7 +83,7 @@ static u8 s_sized;                              /* the Controller Pak's file siz
 #define LOGO_CRC  0x46195417u                   /* CRC-32 of the header's 48 logo bytes */
 static struct {
     u8  hw;                                     /* the SoC has the port */
-    u8  virt;                                   /* the cartridge looked for, and the one the power is on for, is the virtual one */
+    u8  virt;                                   /* the cartridge looked for, and the one the power is on for, is the SD one */
     u8  in;                                     /* a Game Boy cartridge answered the last look */
     u8  bus;                                    /* the port is on (the game's power) */
     u8  pulled;                                 /* another cartridge, or none, since the status was read */
@@ -107,7 +113,7 @@ static int slot_xfer(u32 addr, u32 we, u8 wd, u8 *rd)
     gb_cart_ctrl_write(0);
     return 0;
 }
-/* one byte on the cartridge's bus, the real one's or the virtual one's */
+/* one byte on the cartridge's bus, the real one's or the SD one's */
 static int xfer(u32 addr, u32 we, u8 wd, u8 *rd)
 {
     if (!s_slot.virt) return slot_xfer(addr, we, wd, rd);
@@ -124,7 +130,7 @@ static void slot_power(int on, int virt)
     s_slot.bus = (u8)on;
     if (on) wait_us(200);
 }
-/* is a Game Boy cartridge there? (the port off before and after); the virtual one: is a ROM in its slot */
+/* is a Game Boy cartridge there? (the port off before and after); the SD one: is a ROM in its slot */
 static void slot_look(int virt)
 {
     u8 h[0x50] = { 0 }, was = s_slot.in;
@@ -155,6 +161,21 @@ static void slot_look(int virt)
     { static u32 s_n; if (s_n++ < 8u) n64rt_log("n64rt: the cartridge slot: %s (header %02x %02x %02x %02x, type %02x)\n",
                                                  s_slot.in ? "a Game Boy cartridge" : "none", h[0], h[1], h[2], h[3], h[0x47]); }
 #endif
+}
+
+/* Who has the cartridge slot: a Game Boy cartridge (the Transfer Pak's) or the Analogizer (docs/analogizer.md). The runtime looks for a Game Boy
+ * cartridge's header once, when the core starts (nothing is driven but the address pins and /RD, for a fraction of a millisecond); there is none -> the
+ * adapter's (there is no setting for it). INTERACT3's bit 31 is the answer
+ * the video output reads; once the adapter owns the port it is not looked at again (a restart of the game does not disturb it), and a Transfer Pak
+ * cartridge is then no cartridge at all: the port is no longer ours. */
+#define AN_OWN        0x80000000u
+static void slot_owner(void)
+{
+    u32 w = apf_interact_interact3_read();
+    if (w & AN_OWN) { s_slot.hw = 0; return; }
+    slot_look(0);
+    if (!s_slot.in) w |= AN_OWN;
+    if (w & AN_OWN) { apf_interact_interact3_write(w); s_slot.hw = 0; s_slot.in = 0; }
 }
 
 static void settle(void) { for (volatile int i = 0; i < 256; i++) { } }
@@ -219,9 +240,11 @@ void n64rt_pak_init(void)
     s_ch = 0;
     s_slot.hw = gb_cart_id_read() == GBC_ID;
     if (s_slot.hw) gb_cart_ctrl_write(0);
+    if (s_slot.hw) slot_owner();
     for (int ch = 0; ch < NPAK; ch++) {
         s_ch = ch;
         int k = n64rt_pak_kind(ch);
+        if (k == N64RT_PAK_VIRTUAL) n64rt_gbv_make(ch);        /* (a ROM loaded before the game starts is a cartridge when the game first looks) */
         if (k == N64RT_PAK_TRANSFER || k == N64RT_PAK_VIRTUAL) { slot_look(k == N64RT_PAK_VIRTUAL); s_slot.pulled = 0; }   /* (any other setting: the port is left alone) */
     }
     s_ch = 0;
@@ -238,13 +261,53 @@ int n64rt_pak_kind(int ch)
 #ifdef N64RT_PAK_FORCE                          /* (a simulation, where nothing sets the core's settings) */
     u32 k = ch == 0 ? N64RT_PAK_FORCE : 0u;
 #else
-    u32 k = (apf_interact_interact0_read() >> (ch == 0 ? 0 : 20)) & 31u;
+    u32 k = (ch == 0 ? apf_interact_interact0_read() : apf_interact_interact1_read()) & 31u;
 #endif
-    if (ch == 1) return k == 3u ? N64RT_PAK_VIRTUAL : N64RT_PAK_NONE;     /* (controller 2's: only the virtual one) */
+    if (ch == 1) return k == 3u ? N64RT_PAK_VIRTUAL : N64RT_PAK_NONE;     /* (controller 2's: only the SD one) */
     return k == 1u ? N64RT_PAK_CONTROLLER : k == 2u ? N64RT_PAK_TRANSFER : k == 3u ? N64RT_PAK_VIRTUAL : N64RT_PAK_NONE;
 }
 
 /* a block of 32 bytes at address a (its low 5 bits clear); 0, or 1 with no pak there */
+#ifdef N64RT_GBTRACE
+void n64rt_gbv_regs(int n, u32 *v);
+/* The game's accesses to the pak other than its status, the first TRACE_LINES lines of each controller in each start: the address, the pak's bank and the
+ * cartridge address that makes, the mapper's registers, and the block's first bytes and its sum. A run of blocks one after the other (the same
+ * direction, each the next 32 bytes) is its first block and a line at its end with the number of blocks and the sum of all their bytes; the same access
+ * again with the same first byte is not logged. */
+#define TRACE_LINES 128u
+static struct { u32 n, last, run, run_sum, next; u8 run_w; } s_tr[NPAK];
+static void trace_run_end(int ch)
+{
+    if (s_tr[ch].run > 1u && s_tr[ch].n++ < TRACE_LINES)
+        GBLOG("n64rt: pak%d %c run of %lu blocks to %04lx, the sum of their bytes %lu\n", ch + 1, s_tr[ch].run_w ? 'W' : 'R', (unsigned long)s_tr[ch].run,
+              (unsigned long)(s_tr[ch].next - 0x20u), (unsigned long)s_tr[ch].run_sum);
+    s_tr[ch].run = 0;
+}
+static void trace_access(int ch, u32 a, int write, const u8 *b)
+{
+    const u32 hi = a >> 12, key = a << 9 | (u32)write << 8 | b[0];
+    u32 sum = 0;
+    for (int i = 0; i < 32; i++) sum += b[i];
+    if (hi == 0xBu && !write) { trace_run_end(ch); return; }       /* (a read of the status ends a run) */
+    if (hi < 0x8u) return;
+    if (s_tr[ch].run && s_tr[ch].run_w == (u8)write && a == s_tr[ch].next && hi >= 0xCu) {      /* (the next block of a run) */
+        s_tr[ch].run++; s_tr[ch].run_sum += sum; s_tr[ch].next = a + 0x20u;
+        return;
+    }
+    trace_run_end(ch);
+    if (key == s_tr[ch].last) return;
+    s_tr[ch].last = key;
+    if (s_tr[ch].n++ >= TRACE_LINES) return;
+    s_tr[ch].run = 1; s_tr[ch].run_sum = sum; s_tr[ch].next = a + 0x20u; s_tr[ch].run_w = (u8)write;
+    u32 v[6] = { 0 };
+    if (s_slotv[ch].virt) n64rt_gbv_regs(ch, v);
+    GBLOG("n64rt: pak%d %c %04lx b%u c%04lx m%lu rom%lu ram%lu en%lu md%lu in%lu: %02x %02x %02x %02x %02x %02x %02x %02x s%lu\n", ch + 1, write ? 'W' : 'R',
+          (unsigned long)a, s_tpv[ch].bank, (unsigned long)(hi >= 0xCu ? (u32)s_tpv[ch].bank << 14 | (a & 0x3FFFu) : 0u), (unsigned long)v[0], (unsigned long)v[1],
+          (unsigned long)v[2], (unsigned long)v[3], (unsigned long)v[4], (unsigned long)v[5], b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], (unsigned long)(sum & 0xFFFFu));
+}
+#else
+#define trace_access(ch, a, write, b) ((void)0)
+#endif
 int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
 {
     int kind = n64rt_pak_kind(ch), virt = kind == N64RT_PAK_VIRTUAL;
@@ -280,6 +343,7 @@ int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
             u32 g = (u32)s_tp.bank << 14 | (a & 0x3FFFu);
             if (s_slot.in && s_slot.bus && g < 0xC000u) for (u32 i = 0; i < 32u && xfer(g + i, 1, b[i], 0); i++) { }
         }
+        trace_access(ch, a, 1, b);
         return 0;
     }
     if (hi == 0xBu && s_tp.on && !s_tp.access && now() - s_slot.looked > CONFIG_CLOCK_FREQUENCY)
@@ -291,12 +355,20 @@ int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
         /* (libultra: no bit 7 is PFS_ERR_NO_GBCART; osGbpakReadId wants bit 3 after the power-on) */
         memset(b, (s_slot.in ? 0x80 : 0) | (s_tp.access ? (s_slot.in ? 0x09 : 0x01) : 0) | (s_tp.changed ? 0x04 : 0)
                   | (s_slot.pulled ? 0x40 : 0), 32);
+#if defined(N64RT_GBTRACE) || defined(N64RT_DEBUG)
+        {   /* (a test build: the status the game reads, the first time after the game starts and whenever it changes) */
+            static u8 s_seen[NPAK], s_last[NPAK];
+            if (!s_seen[ch] || s_last[ch] != b[0]) { s_seen[ch] = 1; s_last[ch] = b[0]; GBLOG("n64rt: Transfer Pak %d: the game reads the status %02x (%s)\n", ch + 1, b[0], b[0] & 0x80 ? "a cartridge" : "no cartridge"); }
+        }
+#endif
         s_tp.changed = 0;
         s_slot.pulled = 0;
     } else if (hi >= 0xCu && s_tp.access && s_slot.in) {
         u32 g = (u32)s_tp.bank << 14 | (a & 0x3FFFu);
+        if (s_slot.virt) n64rt_gbv_block(ch, g);
         if (s_slot.bus && g < 0xC000u) for (u32 i = 0; i < 32u && xfer(g + i, 0, 0, &b[i]); i++) { }
     }
+    trace_access(ch, a, 0, b);
     return 0;
 }
 
@@ -304,7 +376,7 @@ int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
  * A real Transfer Pak's cartridge is outside the core: its RAM, its mapper and its clock are its own, which no state can hold. So the state
  * has the pak unplugged (off, no cartridge there, "changed"), in the copy of the runtime's memory it makes -- the game that goes on does not see
  * it -- and the game that is put back finds the pak gone and looks again: the cartridge is in the Pocket's slot still, and the next time the game reads the
- * status the slot is looked at. The virtual one's registers are in the runtime's memory and its RAM in a region of the state (n64rt_gbvirt.c): it goes
+ * status the slot is looked at. The SD one's registers are in the runtime's memory and its RAM in a region of the state (n64rt_gbvirt.c): it goes
  * on as it was, unless its ROM is not there again (n64rt_gbv_resume) -- then it is unplugged, as well. */
 static __typeof__(s_tpv) s_tp_keep;
 static __typeof__(s_slotv) s_slot_keep;

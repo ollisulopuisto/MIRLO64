@@ -15,13 +15,15 @@
  *          [19:15]  n=5  "Crop Horizontal" (the video: [16:15] columns at the right, [18:17] at the left, 0..3 each)
  *          [24:20]  n=6  "Stick dead zone" (n64rt_pad_deadzone)
  *          [29:25]  n=7  "Stick range" (n64rt_pad_range)
+ *   word 1 [4:0]    n=8  Controller 2 pak (0 none, 3 Transfer Pak SD)
  *          [14:10]  n=10 "C buttons": 0 none, 1 also the right stick (as C buttons)
  *          [19:15]  n=11 "Stick": 0 the D-pad (full deflection), 1 the left analog stick, 2 the right analog stick; any other
  *                        value is the D-pad
+ *          [21:20]  n=12 "Restart Game": action, cleared by n64rt_restart.c
  *          [23:22]  n=13 "D-pad": 0 none, 1 the D-pad, 2 the left analog stick, 3 the right analog stick
  *          [9:5]    n=9  "Debug" (the fork: bit 0 the FPS number, bit 1 the graph, both drawn by the runtime, n64rt_dbg.h)
  *          [25]     n=15 free (was "Show FPS")
- *          the rest free (n=8, 9, 12, 14 were "EEPROM size", "Z button", "Start" and "C-button layer")
+ *          n=14 is Expansion Pak (0: in)
  *
  * A button code (the Modifier) is 0 none, 1 the Pocket's L, 2 R, 3 ZL (L2), 4 ZR (R2), 6 Select, anything else none.
  *

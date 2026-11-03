@@ -9,6 +9,8 @@ module soc_sim_top (
     output wire         file_size_wr,       // the program sets the selected slot's size (what the Pocket writes back)
     output wire  [31:0] file_size_new,
     input  wire         br_complete,
+    input  wire   [2:0] br_result,          // the last command's result code (the Pocket's target commands the bench models: tb_soc.cpp, POCKET_FS)
+    output wire         br_req_getfile, br_req_openfile, br_req_write,
     input  wire         ss_save_t, ss_load_t,   // the Pocket's save states (SS_SAVE, SS_LOAD): a request is a turn of one
     output wire         ss_done_t, ss_err, ss_sup,
     output wire         br_req_read,
@@ -93,6 +95,13 @@ wire c0clk, c1clk;
 wire        gb_on, gb_a_dir, gb_a_oe, gb_d_dir, gb_d_oe, gb_phi, gb_wr_n, gb_rd_n, gb_cs_n;
 wire [15:0] gb_a;
 wire [7:0]  gb_d_o, gb_d_i;
+wire        an_own;
+wire  [2:0] an_mode;
+logic       an_own_d = 1'b0;
+always @(posedge clk_sys) begin     // (the runtime's decision about the cartridge slot: docs/analogizer.md)
+    an_own_d <= an_own;
+    if (an_own != an_own_d) $display("ANALOGIZER: the adapter %s the port (video mode %0d)", an_own ? "owns" : "released", an_mode);
+end
 gb_cart_model gbcart (.clk(clk_sys), .res_n(gb_on), .a_dir(gb_a_dir), .a_oe(gb_a_oe), .a(gb_a), .d_dir(gb_d_dir),
     .d_oe(gb_d_oe), .d_o(gb_d_o), .d_i(gb_d_i), .phi(gb_phi), .wr_n(gb_wr_n), .rd_n(gb_rd_n), .cs_n(gb_cs_n));
 // the APF audio FIFO (core_top's): its fill, flushed, drained at 48 kHz while playing
@@ -104,21 +113,28 @@ always_ff @(posedge clk_sys) begin
     if (aud_flush) aud_fill <= 0;
     else aud_fill <= aud_fill + {11'd0, audio_wr && aud_fill != 12'hFFF} - {11'd0, aud_play && aud_div == 0 && aud_fill != 0};
 end
+// the pads: the bench's values are written into the pad RAM one word at a time, round and round (the Pocket's io_pad_controller
+// writes them as they arrive; the triggers are 0)
+logic [3:0]  pad_i = 4'd0;
+always_ff @(posedge clk_sys) pad_i <= pad_i + 4'd1;
+logic [31:0] pad_w;
+always_comb case (pad_i[3:2])
+    2'd0: pad_w = pad_i[1:0] == 2'd0 ? cont1_key : pad_i[1:0] == 2'd1 ? cont2_key : pad_i[1:0] == 2'd2 ? cont3_key : cont4_key;
+    2'd1: pad_w = pad_i[1:0] == 2'd0 ? cont1_joy : pad_i[1:0] == 2'd1 ? cont2_joy : pad_i[1:0] == 2'd2 ? cont3_joy : cont4_joy;
+    default: pad_w = 32'd0;
+endcase
 mirlo_mips #(.SDR_T_INIT(100)) soc (
     .altera_reserved_tck(1'b0), .altera_reserved_tdi(1'b0), .altera_reserved_tdo(), .altera_reserved_tms(1'b0),
     .apf_audio_buffer_fill(aud_fill), .apf_audio_bus_out(audio_out), .apf_audio_bus_wr(audio_wr), .apf_audio_flush(aud_flush),
     .apf_audio_playback_en(aud_play),
-    .apf_bridge_boot_ready(boot_ready), .apf_bridge_command_result_code(3'd0), .apf_bridge_complete_trigger(br_complete),
+    .apf_bridge_boot_ready(boot_ready), .apf_bridge_command_result_code(br_result), .apf_bridge_complete_trigger(br_complete),
     .apf_bridge_current_address(32'd0), .apf_bridge_data_offset(br_offset), .apf_bridge_file_size(file_size),
     .apf_bridge_file_size_wr(file_size_wr), .apf_bridge_host_loaded(host_loaded), .apf_bridge_host_reset_n(host_reset_n),
     .apf_bridge_length(br_length), .apf_bridge_new_file_size_data(file_size_new), .apf_bridge_ram_data_address(br_addr),
-    .apf_bridge_request_getfile(), .apf_bridge_request_openfile(), .apf_bridge_request_read(br_req_read), .apf_bridge_request_write(),
+    .apf_bridge_request_getfile(br_req_getfile), .apf_bridge_request_openfile(br_req_openfile), .apf_bridge_request_read(br_req_read), .apf_bridge_request_write(br_req_write),
     .apf_bridge_slot_id(br_slot), .apf_id_chip_id(64'd0),
     .apf_ss_save_t(ss_save_t), .apf_ss_load_t(ss_load_t), .apf_ss_done_t(ss_done_t), .apf_ss_err(ss_err), .apf_ss_sup(ss_sup),
-    .apf_input_cont1_joy(cont1_joy), .apf_input_cont1_key(cont1_key), .apf_input_cont1_trig(32'd0),
-    .apf_input_cont2_joy(cont2_joy), .apf_input_cont2_key(cont2_key), .apf_input_cont2_trig(32'd0),
-    .apf_input_cont3_joy(cont3_joy), .apf_input_cont3_key(cont3_key), .apf_input_cont3_trig(32'd0),
-    .apf_input_cont4_joy(cont4_joy), .apf_input_cont4_key(cont4_key), .apf_input_cont4_trig(32'd0),
+    .apf_pad_clk(clk_sys), .apf_pad_we(1'b1), .apf_pad_wa(pad_i), .apf_pad_wd(pad_w),
     .apf_interact_address(ia_address), .apf_interact_data(ia_data), .apf_interact_q(), .apf_interact_wr(ia_wr),
     .apf_rtc_date_bcd(32'd0), .apf_rtc_time_bcd(32'd0), .apf_rtc_unix_seconds(32'd0),
     .clk_sys, .clk_sys2x, .clk_sys2x_90deg(clk_sys2x), .clk_vid, .reset,
@@ -130,7 +146,7 @@ mirlo_mips #(.SDR_T_INIT(100)) soc (
     .cram0_oe_n(), .cram1_oe_n(), .cram0_we_n(), .cram1_we_n(), .cram0_ub_n(), .cram0_lb_n(), .cram1_ub_n(), .cram1_lb_n(),
     .serial_rx(1'b1), .serial_tx(), .use_jtag(1'b0),
     .gb_on, .gb_a_dir, .gb_a_oe, .gb_a, .gb_d_o, .gb_d_dir, .gb_d_oe, .gb_d_i, .gb_phi, .gb_wr_n, .gb_rd_n, .gb_cs_n,
-    .vga_b, .vga_de, .vga_g, .vga_hsync, .vga_r, .vga_skip, .vga_vsync,
+    .vga_b, .vga_de, .vga_g, .vga_hsync, .vga_r, .vga_skip, .vga_vsync, .vga_woven(), .an_mode(an_mode), .an_scan(), .an_own(an_own),
     .wishbone_ack(1'b0), .wishbone_adr(), .wishbone_bte(), .wishbone_cti(), .wishbone_cyc(), .wishbone_dat_r(32'd0),
     .wishbone_dat_w(), .wishbone_err(1'b0),
     .wishbone_master_ack(wbm_ack), .wishbone_master_adr(wbm_adr), .wishbone_master_bte(2'd0), .wishbone_master_cti(3'd0),

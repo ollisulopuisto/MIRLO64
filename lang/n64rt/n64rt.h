@@ -212,6 +212,8 @@ typedef struct {
     u32          rom_size;
     u32          boot_rom, boot_vram, boot_len;   /* what IPL3 copies (ROM offset -> RDRAM) */
     u32          entry;             /* where IPL3 jumps */
+    u32          ipl3;              /* the boot code's kind: N64RT_IPL3_* (0: the console's, which copies boot_len bytes) */
+    u32          elf_off;           /* N64RT_IPL3_ELF: the ROM offset of the ELF file the boot code loads */
     u32          mem_size;          /* RDRAM the game sees: 4 or 8 MiB */
     u32          cic;               /* 6101..6106: the CIC (osCicId, 0x80000310, is not this number: n64rt_boot.c) */
     const n64rt_patch_t *patches;
@@ -223,6 +225,16 @@ typedef struct {
     const u32   *hooks;
     u32          nhooks;
 } n64rt_game_t;
+
+/* The boot code of an open-source IPL3 (an N64 program's own, in the ROM at 0x40) and what it loads, instead of the console's
+ * copy of boot_len bytes from ROM 0x1000 to the header's entry. N64RT_IPL3_ELF: the program is an ELF file in the ROM (found by
+ * the boot code from ROM 0x1000 on, at a 256-byte boundary, elf_off): every PT_LOAD segment goes to its address, the entry is
+ * the ELF's, the boot flags are in DMEM's first 16 bytes and the rest of DMEM and IMEM are 0, and none of the console's boot
+ * words are in the RDRAM's first 0x400 bytes. N64RT_IPL3_FLAT: a flat file at ROM 0x1000, to the header's entry, as many bytes
+ * as the header's word at 0x10 says (boot_len; 0 or too many for the RDRAM: 1 MiB); the boot words are the console's, DMEM and
+ * IMEM are 0. */
+#define N64RT_IPL3_ELF  1u
+#define N64RT_IPL3_FLAT 2u
 
 /* The word a CIC's IPL3 writes as osCicId (0x8000_0310): the 6103's 0x17D7, the 6105's 0x17D9, the 6106's 0x17D8; the
  * others write nothing there (0). The 6103's and the 6106's IPL3 also leave it in IMEM's first word (n64rt_rsp.c). */
@@ -255,6 +267,8 @@ void n64rt_run(const n64rt_game_t *g) __attribute__((noreturn));
 #define N64RT_ROM_WIN      0x30000000u
 u32  n64rt_rom_word(u32 off);
 void n64rt_rom_copy(void *dst, u32 off, u32 size);
+/* the random word an open-source IPL3 collects while it boots and leaves in DMEM (n64rt_boot.c) */
+extern u32 n64rt_boot_entropy;
 void n64rt_boot_game_file(n64rt_game_t *g) __attribute__((noreturn));
 
 /* the RDRAM window, as the runtime's native code reaches it */
@@ -298,15 +312,27 @@ void n64rt_pak_state_resumed(u64 delta);  /* after a state is put back */
 void n64rt_cheat_init(void);
 void n64rt_cheat_field(void);
 u32  n64rt_slot_size(u32 slot, u32 want);  /* a data slot's file size in the core's table (0: no file); want != 0 sets it (n64rt_pak.c) */
-/* the virtual Transfer Paks' Game Boy cartridges, n = 0 (controller 1's) and 1 (controller 2's), each made of two data.json slots (n64rt_gbvirt.c) */
-int  n64rt_gbv_look(int n);               /* 1: a cartridge is in its slot (a ROM with a header checksum and logo right, of a mapper it has) */
+/* the Transfer Paks (SD)' Game Boy cartridges, n = 0 (controller 1's) and 1 (controller 2's), each made of a data.json ROM slot and the Game Boy game's own save file (n64rt_gbvirt.c) */
+int  n64rt_gbv_look(int n);               /* 1: a cartridge is in its slot (a ROM with a header checksum and logo right, of a mapper it has) and n64rt_gbv_field has made it */
 u32  n64rt_gbv_id(int n);                 /* its header's CRC */
 void n64rt_gbv_power(int n, int on);      /* the cartridge's power: on is its reset */
+void n64rt_gbv_block(int n, u32 addr);     /* before the pak reads a block of 32 bytes at addr: the cache's lines of them are dropped, so that the game reads the memory's bytes */
 u8   n64rt_gbv_read(int n, u32 addr);     /* its bus, 0x0000 - 0xBFFF */
 void n64rt_gbv_write(int n, u32 addr, u8 value);
-void n64rt_gbv_field(void);               /* every video field: the RAM the game wrote and left alone for 2 s is written to the Game Boy game's save file */
+void n64rt_gbv_field(void);               /* every video field: a new ROM makes its cartridge and reads its save, the RAM the game wrote and left alone for 2 s is written to the Game Boy game's save file; the only place that talks to the Pocket */
 u32  n64rt_gbv_state_bytes(int n);        /* a save state: the bytes of the cartridge's RAM (and clock) to keep, 0 with none in; the clock's footer brought up to date */
 void n64rt_gbv_resume(int n, u64 delta);   /* after a state is put back: its clock moved on by delta (the SoC's clock), and is its ROM there again (else it is not in) */
+void n64rt_gbv_make(int n);                /* the ROM in its slot is made a cartridge now, if the pak is the SD one (n64rt_pak_init), not at the next video field */
+void n64rt_gbv_restart_prep(void);         /* the game is about to start over (n64rt_restart.c): the ROMs just loaded made cartridges, the RAM written back, the cartridges power-cycled */
+void *n64rt_gbv_keep(u32 *bytes);          /* the cartridges' state, which a restart keeps */
+/* "Restart Game" (n64rt_restart.c): the action in the core's settings starts the game over, as a console switched off and on */
+void n64rt_restart_snapshot(void);         /* main(), at the program's own start: the .data a restart puts back */
+void n64rt_restart_booted(void);           /* main(), on a start that is a restart's: says so */
+void n64rt_restart_poll(void);             /* every tick (MONITOR.PEND bit 2): was the action chosen */
+extern u32 n64rt_restarted;                /* 0, or how many times the program has started over */
+#ifdef N64RT_RESTART_FP
+void n64rt_restart_fp(void);               /* a test build: the hardware's registers as the game is about to start, one line each */
+#endif
 void *n64rt_rdram_alloc(u32 size);         /* zeroed RDRAM the game can reach (above its mem_size) */
 /* a task of another microcode (not graphics or audio): a game port may
  * provide it (weak; 1 = done) */

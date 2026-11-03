@@ -17,11 +17,15 @@ module interact_test;
     wire  [31:0] ia_q;
     wire  [4:0]  ia_crop_v;
     wire  [1:0]  ia_crop_r;
+    wire [2:0] an_mode;
+    wire [1:0] an_scan;
+    wire an_own;
     wire  [3:0][31:0] cont0 = '0;             // the four pads: nothing pressed
     mirlo_regs regs (.clk, .rst, .r_req, .r_we, .r_addr, .r_wdata, .r_rdata,
         .ia_address, .ia_data, .ia_wr, .ia_q, .ia_crop_v, .ia_crop_r,
+        .ia_an_mode(an_mode), .ia_an_scan(an_scan), .ia_an_own(an_own),
         .aud_fill(12'd0), .br_file_size(32'd0), .br_complete_trigger(1'b0), .br_current_address(32'd0), .br_command_result_code(3'd0),
-        .br_host_reset_n(1'b1), .br_host_loaded(1'b1), .cont_key(cont0), .cont_joy(cont0), .cont_trig(cont0),
+        .br_host_reset_n(1'b1), .br_host_loaded(1'b1), .pad_clk(clk), .pad_we(1'b0), .pad_wa(4'd0), .pad_wd(32'd0),
         .vblank(1'b0), .tv_pal(1'b0), .bus_errors(16'd0), .su_valid(1'b0), .su_data(32'd0), .cmd_ready(1'b1),
         .rdp_sync_count(32'd0), .rdp_load_count(32'd0), .rdp_unknown_ops(16'd0), .rdp_idle(1'b1),
         .uart_txfull(1'b0), .uart_rx_byte(8'd0), .uart_rxempty(1'b1), .mon_sp(1'b0), .mon_field(1'b0), .mon_dp(1'b0),
@@ -86,8 +90,8 @@ module interact_test;
         check_regs("five fields written");
         model[3] = 5'd31; ia_write(19, 32'd31);
         check_regs("field 3 rewritten");
-        // words 22-63 are nobody's, and 21 is the actions': the fields do not change
-        for (int w = 22; w < 64; w++) ia_write(6'(w), 32'h1F);
+        // Words 22 and 24-63 are outside the SoC; word 23 belongs to the Analogizer.
+        for (int w = 22; w < 64; w++) if (w != 23) ia_write(6'(w), 32'h1F);
         check_regs("words 22-63 written");
         // the CPU cannot write it
         csr_write(R_APF_INTERACT_INTERACT2, 32'hFFFF_FFFF);
@@ -118,12 +122,29 @@ module interact_test;
         ia_read(1, q); check("ia_q of slot 1", q, 32'h0123_4567);
         check_regs("after the legacy fields");                    // (the slots and the editor do not touch each other)
 
+        // Analogizer settings have their own CSR and menu word, independent of the layout editor.
+        csr_read(R_APF_INTERACT_INTERACT3, q); check("Analogizer reset", q, 0);
+        csr_write(R_APF_INTERACT_INTERACT3, 32'h8000_0006);
+        check("Analogizer owns port", 32'(an_own), 1);
+        for (int mode = 0; mode <= 9; mode++) begin
+            ia_write(23, 32'(mode));
+            ia_read(23, q); check("Analogizer menu readback", q, 32'(mode));
+            csr_read(R_APF_INTERACT_INTERACT3, q); check("Analogizer CSR", q, 32'h8000_0000 | 32'(mode));
+            check("Analogizer mode", 32'(an_mode), mode >= 7 ? 6 : 32'(mode));
+            check("Analogizer scanlines", 32'(an_scan), mode >= 7 ? 32'(mode - 6) : 0);
+            check_regs("Analogizer leaves controller layouts intact");
+        end
+        ia_write(16, 4); model[0] = 4;
+        csr_read(R_APF_INTERACT_INTERACT3, q); check("Layout leaves Analogizer intact", q, 32'h8000_0009);
+        check_regs("layout after Analogizer");
+
         // reset clears everything
         ia_write(21, 1);
         @(negedge clk); rst = 1; @(negedge clk); rst = 0; @(negedge clk);
         for (int i = 0; i < 5; i++) model[i] = (i == 4) ? 5'd1 : 5'd0;
         act_a = 0; act_b = 0;
         check_regs("second reset");
+        csr_read(R_APF_INTERACT_INTERACT3, q); check("Analogizer second reset", q, 0);
         csr_read(R_APF_INTERACT_INTERACT0, q); check("second reset: INTERACT0", q, 32'd8 << 5 | 32'd1 << 15);
 
         if (errors) begin $display("interact_test: FAIL (%0d)", errors); $finish(1); end

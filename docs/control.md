@@ -104,8 +104,8 @@ How the runtime maps these to the N64's controller is in [mips.md](mips.md) (Con
 
 ## APF_INTERACT
 
-The core's settings: two words that the Pocket writes from `interact.json`. An entry of `interact.json` whose `address`
-is `0x1000_0100 + 4n` (n from 0 to 15) reaches the SoC: n = 0 and 1 write a whole word, the others a field of one, so
+The core's settings: four words that the Pocket writes from `interact.json`. An entry of `interact.json` whose `address`
+is `0x1000_0100 + 4n` (n from 0 to 23, except Screen Size at 22) reaches the SoC: n = 0 and 1 write a whole word, the others a field of one, so
 each setting has an address of its own and needs no mask.
 
 | Register | Offset | Dir | What |
@@ -114,6 +114,8 @@ each setting has an address of its own and needs no mask.
 | `INTERACT_CHANGED0` | `0x04` | R | 1 when the Pocket has written the whole word 0 since the CPU last read `INTERACT0` |
 | `INTERACT1` | `0x08` | RW | Word 1 |
 | `INTERACT_CHANGED1` | `0x0C` | R | The same for word 1 |
+| `INTERACT2` | `0x10` | R | Controller layout lists (five 5-bit fields) and action toggles (bits 28, 29) |
+| `INTERACT3` | `0x14` | RW | Analogizer settings (`docs/analogizer.md`); bit 31 is the runtime's |
 
 | n | `address` | Field | The setting (`pkg/pocket/Cores/tortuga.Mirlo64/interact.json`) |
 |---|---|---|---|
@@ -123,16 +125,20 @@ each setting has an address of its own and needs no mask.
 | 3 | `0x1000_010C` | `INTERACT0[9:5]` | Crop Vertical (the scan-out reads it) |
 | 4 | `0x1000_0110` | `INTERACT0[14:10]` | Modifier |
 | 5 | `0x1000_0114` | `INTERACT0[19:15]` | Crop Right (the scan-out reads its low two bits) |
-| 6 | `0x1000_0118` | `INTERACT0[24:20]` | Controller 2 pak (None, or Virtual Transfer Pak: 3) |
-| 7 | `0x1000_011C` | `INTERACT0[29:25]` | R button |
-| 8 | `0x1000_0120` | `INTERACT1[4:0]` | Start macro |
-| 9 | `0x1000_0124` | `INTERACT1[9:5]` | Z button |
+| 6 | `0x1000_0118` | `INTERACT0[24:20]` | Stick dead zone |
+| 7 | `0x1000_011C` | `INTERACT0[29:25]` | Stick range |
+| 8 | `0x1000_0120` | `INTERACT1[4:0]` | Controller 2 pak (0 none, 3 Transfer Pak SD) |
+| 9 | `0x1000_0124` | `INTERACT1[9:5]` | Debug (FPS / graph) |
 | 10 | `0x1000_0128` | `INTERACT1[14:10]` | C buttons |
 | 11 | `0x1000_012C` | `INTERACT1[19:15]` | Stick |
-| 12 | `0x1000_0130` | `INTERACT1[21:20]` | Start button |
+| 12 | `0x1000_0130` | `INTERACT1[21:20]` | Restart Game: an action (`interact.json` type `action`) that writes 1 here whenever it is chosen; the runtime clears the field when it has seen it, so that the next choice is a change again (the Pocket writes the same value every time) |
 | 13 | `0x1000_0134` | `INTERACT1[23:22]` | D-pad |
 | 14 | `0x1000_0138` | `INTERACT1[24]` | Expansion Pak (0: in) |
 | 15 | `0x1000_013C` | `INTERACT1[25]` | Enable Gameshark codes (a variable of `interact.json` with an address the table gives to another setting writes that setting's field too: check that an address is not taken before giving it) |
+| 16–20 | `0x1000_0140`–`0x1000_0150` | `INTERACT2[24:0]`, five 5-bit fields | Normal, Shift, Shift: D-pad, D-pad keys, Analog sticks (dock) |
+| 21 | `0x1000_0154` | `INTERACT2[29:28]`, toggles | Save for this game (2), Forget this game (3) |
+| 22 | `0x1000_0158` | Pocket-only | Screen Size (held by `core_top.sv`) |
+| 23 | `0x1000_015C` | `INTERACT3[4:0]` | Analogizer video (0 off, 1 RGBS, 2 RGsB, 3 YPbPr, 4 Y/C NTSC, 5 Y/C PAL, 6 RGBHV, 7..9 RGBHV with scanlines 25, 50, 75 %) |
 
 ## APF_VIDEO
 
