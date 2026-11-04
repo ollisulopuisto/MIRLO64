@@ -69,7 +69,6 @@ The core's own menu on the Pocket. The default of each is in bold.
 | Enable Gameshark codes | **Off**, on | Runs the game's GameShark codes, if it has a file in `Assets/n64/common/gameshark/` ([GameShark codes](#gameshark-codes)) |
 | Stick | None, **D-pad**, L stick, R stick | What moves the N64's analog stick |
 | Stick dead zone | **Default (12)**, None, Small (6), Large (20), Huge (30) | How far an analog stick must move before the N64's stick does |
-| Stick range | **Default (80)**, Wide (85), 75, 70, Small (60) | How far the N64's stick goes at a full deflection |
 | D-pad | **None**, D-pad, L stick, R stick | What moves the N64's D-pad |
 | Z button | None, **L**, R, ZL, ZR, A, B, X, Y, Select, Start | The Pocket's button for Z |
 | L button | **None**, L, R, ZL, ZR, A, B, X, Y, Select, Start | The Pocket's button for the N64's L |
