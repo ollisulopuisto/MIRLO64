@@ -56,29 +56,6 @@
         "address": "0x07100000"
       },
       {
-        "name": "Game Boy save file 1",
-        "id": 5,
-        "required": false,
-        "parameters": "0x0",
-        "size_maximum": "0x21000",
-        "address": "0x06D00000"
-      },
-      {
-        "name": "Game Boy save file 2",
-        "id": 6,
-        "required": false,
-        "parameters": "0x0",
-        "size_maximum": "0x21000",
-        "address": "0x06D50000"
-      },
-      {
-        "name": "Gameshark codes",
-        "id": 7,
-        "required": false,
-        "parameters": "0x08",
-        "size_maximum": "0x10000",
-        "address": "0x06D40000"
-      },
       {
         "name": "Transfer Pak 1",
         "id": 8,
@@ -102,6 +79,19 @@
         ],
         "size_maximum": "0x300000",
         "address": "0x06E00000"
+      },
+      {
+        "name": "Controls",
+        "id": 10,
+        "required": false,
+        "parameters": "0x24",
+        "nonvolatile": true,
+        "extensions": [
+          "ctl"
+        ],
+        "size_maximum": "0x100",
+        "address": "0x07341000"
+      }
       }
     ]
   }

@@ -51,6 +51,7 @@ def build():
  lst("Analog sticks (dock)", 244, "0x10000150", [(1, "L stick / R C buttons"), (0, "L stick / R none"), (2, "L half / R C buttons"),
                                                  (3, "L D-pad / R C buttons"), (4, "L C buttons / R stick"), (5, "Both none")]),
  lst("Stick dead zone", 273, "0x10000118", [(0, "Default (12)"), (1, "None"), (2, "Small (6)"), (3, "Large (20)"), (4, "Huge (30)")]),
+ lst("Stick range", 274, "0x1000011C", [(0, "Default (80)"), (1, "Wide (85)"), (2, "75"), (3, "70"), (4, "Small (60)")]),
  lst("Analogizer video", 253, "0x1000015C", [(0, "Off"), (1, "RGBS"), (2, "RGsB"), (3, "YPbPr"), (4, "Y/C NTSC"), (5, "Y/C PAL"),
                                              (6, "RGBHV"), (7, "RGBHV scanlines 25"), (8, "RGBHV scanlines 50"), (9, "RGBHV scanlines 75")]),
  action("Save for this game", 271, 2),
