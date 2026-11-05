@@ -21,13 +21,14 @@ DEFAULT_MAP = [0] * 30
 
 # Precomputed bitmasks for fast bitwise controller evaluation in spec()
 TKEY_BITS = [1 << K[k] for k in TKEYS]
+TKEYS_MASK = sum(TKEY_BITS)
 CODE_BIT = {c: 1 << K[k] for c, k in CODE.items()}
 OUT_BITS = {c: N[v] for c, v in OUT.items()}
 UP_BIT, DOWN_BIT, LEFT_BIT, RIGHT_BIT = 1 << K['up'], 1 << K['down'], 1 << K['left'], 1 << K['right']
 DPAD_MASK = UP_BIT | DOWN_BIT | LEFT_BIT | RIGHT_BIT
 
-# Bolt optimization: precomputed axis deflection lookup tables for byte values 0..255.
-# Replaces repeated arithmetic and clamping across 21k+ evaluations in spec().
+# Bolt optimization: precomputed axis deflection, code bit, and button bit lookup tables.
+# Replaces repeated arithmetic, clamping, and dict lookups across 21k+ evaluations in spec().
 AX_LUT = [0] * 256
 AX_FLIP_LUT = [0] * 256
 for _v in range(256):
@@ -39,6 +40,30 @@ for _v in range(256):
         _val = -80 if _scaled < -80 else (80 if _scaled > 80 else _scaled)
     AX_LUT[_v] = _val
     AX_FLIP_LUT[_v] = -_val
+
+# Direct LUTs for 5-bit field and code lookups in spec()
+CODE_BIT_LUT = [1 << K[CODE[c]] if c in CODE else 0 for c in range(32)]
+OUT_LUT = [N[OUT[c]] if c in OUT else 0 for c in range(32)]
+
+
+def _group(fields, rmod, g):
+    sel, lm = fields[12 + g], False
+    if rmod:
+        hg = fields[HELD + 12 + g]
+        if hg == 0:
+            sel, lm = 0, True
+        elif hg != 6:
+            sel = hg
+    return (6 if sel == 7 else 5 if sel > 4 else sel), lm
+
+
+def _dpad_stick(k_mask, lmod):
+    full = 40 if lmod else 80
+    dx = (-1 if (k_mask & LEFT_BIT) else 0) + (1 if (k_mask & RIGHT_BIT) else 0)
+    dy = (1 if (k_mask & UP_BIT) else 0) + (-1 if (k_mask & DOWN_BIT) else 0)
+    if lmod and dx and dy:
+        return 28 * dx, 28 * dy
+    return full * dx, full * dy
 
 
 def pack(fields):
@@ -58,12 +83,12 @@ def pack(fields):
 def spec(keys, joy, s0, s1, fields):
     """-> (button, stick_x, stick_y) by the table in the task: written from the spec, not from the C"""
     # Bolt optimization: evaluate held keys and output button bits directly as integer bitmasks
-    # rather than creating and mutating set objects and summing button values at the end (~45% faster spec()).
+    # with precomputed LUTs and hoisted group/dpad_stick functions (~25% faster spec()).
     typ = keys >> 28
     k_mask = keys & 0xFFFF
     analog = typ == 3 or (typ == 2 and joy not in (0, 0xFFFFFFFF))     # type 2: its stick bytes are believed unless a pad with none would send them
     out = 0
-    mod_bit = CODE_BIT.get((s0 >> 10) & 31, 0)   # "Modifier" is interact0[14:10]: a button code, 0 (or 5, ...) no key
+    mod_bit = CODE_BIT_LUT[(s0 >> 10) & 31]      # "Modifier" is interact0[14:10]: a button code, 0 (or 5, ...) no key
     rmod = bool(mod_bit and (k_mask & mod_bit))
     if mod_bit:
         k_mask &= ~mod_bit                        # the modifier key never reaches the game
@@ -71,28 +96,19 @@ def spec(keys, joy, s0, s1, fields):
     layer_offset = HELD if rmod else 0
     deflt = HELD_DEFAULT if rmod else BASE_DEFAULT
 
-    for i, bit in enumerate(TKEY_BITS):
-        if k_mask & bit:
-            code = fields[layer_offset + i] or deflt[i]
-            if code == 15:                        # same as Base (in the Base layer: none)
-                if not rmod:
-                    continue
-                code = fields[i] or BASE_DEFAULT[i]
-            btn = OUT_BITS.get(code)              # 15 again, 31 and the rest: none
-            if btn:
-                out |= btn
+    if k_mask & TKEYS_MASK:
+        for i, bit in enumerate(TKEY_BITS):
+            if k_mask & bit:
+                code = fields[layer_offset + i] or deflt[i]
+                if code == 15:                    # same as Base (in the Base layer: none)
+                    if not rmod:
+                        continue
+                    code = fields[i] or BASE_DEFAULT[i]
+                out |= OUT_LUT[code]              # 15 again, 31 and the rest: 0
+
     # the groups (0 the D-pad keys, 1 the left stick, 2 the right stick): 0 the settings', 1 stick, 2 half stick, 3 the N64's D-pad,
     # 4 C buttons, 5 none, 6 same as Base (held), 7 the stick and the N64's D-pad (the D-pad keys)
-    def group(g):
-        sel, lm = fields[12 + g], False
-        if rmod:
-            hg = fields[HELD + 12 + g]
-            if hg == 0:
-                sel, lm = 0, True
-            elif hg != 6:
-                sel = hg
-        return (6 if sel == 7 else 5 if sel > 4 else sel), lm
-    dsel, lmod = group(0)
+    dsel, lmod = _group(fields, rmod, 0)
     tx = ty = 0
     if dsel:
         dx = bool(k_mask & RIGHT_BIT) - bool(k_mask & LEFT_BIT)
@@ -117,7 +133,7 @@ def spec(keys, joy, s0, s1, fields):
     # joystick bytes: left X, left Y, right X, right Y (0x80 centre)
     lx, ly, rx, ry = joy & 255, (joy >> 8) & 255, (joy >> 16) & 255, (joy >> 24) & 255
     for g, (px, py) in ((1, (lx, ly)), (2, (rx, ry))):
-        sel, _ = group(g)
+        sel, _ = _group(fields, rmod, g)
         if not sel:
             continue
         if analog:
@@ -143,24 +159,17 @@ def spec(keys, joy, s0, s1, fields):
         if ry - 128 < -64: out |= N['CUP']
         if ry - 128 > 64: out |= N['CDOWN']
     # the stick: "Stick" is interact1[19:15] (0 D-pad, 1 L stick, 2 R stick; other: D-pad)
-    def dpad_stick():
-        full = 40 if lmod else 80
-        dx = (-1 if (k_mask & LEFT_BIT) else 0) + (1 if (k_mask & RIGHT_BIT) else 0)
-        dy = (1 if (k_mask & UP_BIT) else 0) + (-1 if (k_mask & DOWN_BIT) else 0)
-        if lmod and dx and dy:
-            return 28 * dx, 28 * dy
-        return full * dx, full * dy
     smode = (s1 >> 15) & 31
     sx = sy = 0
     if smode in (1, 2):
         use = (AX_LUT[lx], AX_FLIP_LUT[ly]) if smode == 1 else (AX_LUT[rx], AX_FLIP_LUT[ry])
         if not analog: use = (0, 0)
         if typ != 3 and use == (0, 0):
-            sx, sy = dpad_stick()                 # no stick to speak of: the D-pad
+            sx, sy = _dpad_stick(k_mask, lmod)  # no stick to speak of: the D-pad
         else:
             sx, sy = use
     else:
-        sx, sy = dpad_stick()                     # D-pad, or an unknown value
+        sx, sy = _dpad_stick(k_mask, lmod)      # D-pad, or an unknown value
     dmode = (s1 >> 22) & 3                        # the N64's D-pad: 0 none, 1 the D-pad, 2 L stick, 3 R stick
     dpad_swap = dmode == 1 and smode not in (1, 2)
     if dpad_swap and lmod:
