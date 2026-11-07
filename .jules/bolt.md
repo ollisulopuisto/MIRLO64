@@ -54,8 +54,15 @@
 
 **Action:** Clang -O2 already generates near-optimal code for these patterns. The only wins come from eliminating entire function call layers (RSP decode inlining, N64 CPU fetch inlining, N64 data bus fast path), not from micro-optimizing what's already there.
 
+## 2026-11-07 - N64 CPU instruction decode fast paths (PR #16)
+
+**Learning:** After PR #11 inlined KSEG0 instruction fetches and PR #13 inlined KSEG0 data loads/stores in `sim/n64/bus.c`, the remaining hot path in `n64_cpu_step()` is the 64-case `switch (op)` decode with nested switches — every instruction pays the full switch lookup. Adding explicit `if` fast paths before the switch for the 8 most common op codes (ADDI, LW, SW, BEQ, ADDU, NOP, LUI, ORI) lets them skip the switch entirely via `goto done` to the shared epilogue (`r[0] = 0`). Uncommon instructions fall through to the original switch with only a few extra comparisons.
+
+**Action:** ~10% win (195 → 220 Msteps/s, no overlap in 15-run distribution). Falls through to the original switch for all other op codes including COP0/COP1/COP2, 64-bit ops, and complex loads/stores. Correctness verified for all fast-path instructions plus GPR0 zeroing, branch taken/not-taken, and switch-path fallback (SUBU).
+
 ## 2026-11-07 - Per-process startup cost: RSP reciprocal ROM build
 
 **Learning:** For the short tasks the host tools run (`rsp_task`, `rdp_task`, `tb_rsp`, `tb_dpc`, `tb_rdp`), the hot spot was not the interpreter but `make_roms()` in `sim/rsp/rsp.c` (first `rsp_reset`): the inverse-square-root table was built by a linear search from 2^17 (~15M steps, ~16 ms per process). `sim/rsp/make_div_rom.py` mirrors it and took ~3 s in CI. Bisection in C and `math.isqrt` in Python give byte-identical tables.
 
 **Action:** Profile whole short runs with `perf record` before optimizing per-instruction code: one-time setup can dominate. The Python script generates `rtl/rsp/rsp_div_rom.hex` for the RTL (`$readmemh`) and must match the C model's tables, so change both together.
+||||||| 9eef3a8
