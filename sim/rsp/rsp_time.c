@@ -213,7 +213,17 @@ int rsp_time_slot(rsp_time_t *t, rsp_t *s)
     }
     int r = step(t, s, in0);
     if (!r && n == 2) r = step(t, s, in1);
-    rsp_time_issue(t, in0, in1, n, s->delay, s->pc);
+    /* (inlined rsp_time_issue: d0/d1 already decoded, skips 2 redundant decodes) */
+    {
+        ins_t u = d0;
+        if (n == 2) { u.gr |= d1.gr; u.gw |= d1.gw; u.vr |= d1.vr; u.vw |= d1.vw; u.ld |= d1.ld; u.st |= d1.st; u.br |= d1.br; }
+        int delay = t->delay_taken;
+        push(t, u.ld, u.gw, u.vw);
+        t->slots++; t->pairs += (uint64_t)(n == 2);
+        t->single = 0; t->delay_taken = 0;
+        if (u.br) { t->single = 1; t->delay_taken = s->delay; }
+        else if (delay) { t->bubble = 1; t->odd_next = (s->pc & 4u) != 0; }
+    }
     if (r) return r;
     /* (the bubble after a taken branch's delay slot) */
     while (t->bubble) { dma_update(t, s); rsp_time_idle(t); }
