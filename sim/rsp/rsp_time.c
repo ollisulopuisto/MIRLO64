@@ -191,10 +191,24 @@ static int step(rsp_time_t *t, rsp_t *s, uint32_t in)
 int rsp_time_slot(rsp_time_t *t, rsp_t *s)
 {
     uint32_t in0 = word(s, s->pc), in1 = word(s, s->pc + 4u);
-    int n = rsp_time_pair(t, in0, in1) ? 2 : 1;
+    /* (decode once per slot: avoids 2x switch + bit ops per idle cycle) */
+    ins_t d0 = decode(in0), d1 = decode(in1);
+    /* (inline pairs() + ready() check from cached decodes) */
+    int n = (d0.vec != d1.vec && !d0.br && !t->single && !t->delay_taken &&
+             !(d0.vw & (d1.vr | d1.vw)) && !(d0.cw & (d1.cr | d1.cw)) &&
+             (d0.grp || d1.grp || !(d0.vw & d1.vf))) ? 2 : 1;
     for (;;) {
         dma_update(t, s);
-        if (rsp_time_ready(t, in0, in1, n)) break;
+        /* (inlined rsp_time_ready: checks from cached decodes, no re-decode) */
+        int ready = 0;
+        if (t->bubble) { ready = 0; }
+        else if (n == 1) { ready = !(d0.gr & (t->h_gw[0] | t->h_gw[1])) &&
+                                    !(d0.vr & (t->h_vw[0] | t->h_vw[1] | t->h_vw[2])) &&
+                                    !(d0.st && t->h_ld[1]); }
+        else { ready = !((d0.gr | d1.gr) & (t->h_gw[0] | t->h_gw[1])) &&
+                        !((d0.vr | d1.vr) & (t->h_vw[0] | t->h_vw[1] | t->h_vw[2])) &&
+                        !((d0.st | d1.st) && t->h_ld[1]); }
+        if (ready) break;
         rsp_time_idle(t);
     }
     int r = step(t, s, in0);
