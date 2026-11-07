@@ -53,3 +53,9 @@
 3. **`phys()` TLB last-hit cache** (`sim/n64/bus.c`, `n64.h`): added `tlb_last` field and started the TLB scan from the last matching entry. The modulo/branch overhead cancelled any benefit. Result: ~4.5-5.0 ns/read vs ~3.3-3.6 ns/read baseline (actually slower).
 
 **Action:** Clang -O2 already generates near-optimal code for these patterns. The only wins come from eliminating entire function call layers (RSP decode inlining, N64 CPU fetch inlining, N64 data bus fast path), not from micro-optimizing what's already there.
+
+## 2026-11-07 - N64 CPU instruction decode fast paths (PR #16)
+
+**Learning:** After PR #11 inlined KSEG0 instruction fetches and PR #13 inlined KSEG0 data loads/stores in `sim/n64/bus.c`, the remaining hot path in `n64_cpu_step()` is the 64-case `switch (op)` decode with nested switches — every instruction pays the full switch lookup. Adding explicit `if` fast paths before the switch for the 8 most common op codes (ADDI, LW, SW, BEQ, ADDU, NOP, LUI, ORI) lets them skip the switch entirely via `goto done` to the shared epilogue (`r[0] = 0`). Uncommon instructions fall through to the original switch with only a few extra comparisons.
+
+**Action:** ~10% win (195 → 220 Msteps/s, no overlap in 15-run distribution). Falls through to the original switch for all other op codes including COP0/COP1/COP2, 64-bit ops, and complex loads/stores. Correctness verified for all fast-path instructions plus GPR0 zeroing, branch taken/not-taken, and switch-path fallback (SUBU).
