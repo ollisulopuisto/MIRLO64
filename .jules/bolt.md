@@ -30,11 +30,17 @@
 
 **Action:** The rsp_time.c hot paths are already well-optimized by Clang -O2. Remaining measurable gains would require algorithmic changes (e.g., jump table for decode switch) rather than micro-optimizations. No further valid targets found in sim/rsp/.
 
-## 2026-11-07 - Wild goose chase: N64 CPU fetch inlining (PR #11)
+## 2026-11-07 - N64 CPU fetch inlining (PR #11)
 
 **Learning:** `n64_cpu_step()` in `sim/n64/cpu.c` calls `n64_read()` → `phys()` → `n64_read_phys()` for every instruction fetch. For KSEG0 addresses (where nearly all game code runs), `phys()` is just a bitmask and `n64_read_phys()` is just an RDRAM bounds check + pointer read. Inlining this fast path directly in `n64_cpu_step()` skips 2 function calls per instruction fetch. The `pc & 3 == 0` alignment check already guarantees word alignment, so `*(uint32_t *)(rdram + (pc & 0x1FFFFFFF))` is bit-identical to `rd32()`.
 
 **Action:** ~28% win (7.3 → 5.1 ns/step, no overlap in 20-run distribution). Falls through to original `n64_read()` for non-KSEG0 addresses and KSEG0 addresses outside RDRAM (ROM, registers). Correctness verified for KSEG0, KSEG1, and ROM fetch paths.
+
+## 2026-11-07 - N64 data bus fast-path inlining (PR #13)
+
+**Learning:** After PR #11 inlined KSEG0 instruction fetches in `n64_cpu_step()`, data loads/stores still go through `n64_read()` → `phys()` → `n64_read_phys()` for every access. For KSEG0 RDRAM addresses (the vast majority of data accesses), `phys()` is just `va & 0x1FFFFFFF` and `n64_read_phys()` is just an RDRAM bounds check + pointer read. Inlining this fast path directly in `n64_read()`/`n64_write()` skips 2 function calls and a branch chain per data access.
+
+**Action:** ~16-27% win (read: 4.4 → 3.7 ns/op; write: 5.0 → 3.7 ns/op, no overlap in steady-state distributions). Falls through to original `phys()`/`n64_read_phys()`/`n64_write_phys()` for non-KSEG0 addresses and KSEG0 addresses outside RDRAM (ROM, registers). Correctness verified for KSEG0/KSEG1 RDRAM (word, half, byte), write-read consistency, ROM (TLB_MISS), and past-RDRAM (-1).
 
 ## 2026-11-07 - Wild goose chase: failed optimizations outside rsp_time.c
 
@@ -46,15 +52,9 @@
 
 3. **`phys()` TLB last-hit cache** (`sim/n64/bus.c`, `n64.h`): added `tlb_last` field and started the TLB scan from the last matching entry. The modulo/branch overhead cancelled any benefit. Result: ~4.5-5.0 ns/read vs ~3.3-3.6 ns/read baseline (actually slower).
 
-**Action:** Clang -O2 already generates near-optimal code for these patterns. The only wins come from eliminating entire function call layers (RSP decode inlining, N64 CPU fetch inlining), not from micro-optimizing what's already there.
+**Action:** Clang -O2 already generates near-optimal code for these patterns. The only wins come from eliminating entire function call layers (RSP decode inlining, N64 CPU fetch inlining, N64 data bus fast path), not from micro-optimizing what's already there.
 
-## 2026-11-07 - N64 data bus fast-path inlining (PR #13)
-
-**Learning:** After PR #11 inlined KSEG0 instruction fetches in `n64_cpu_step()`, data loads/stores still go through `n64_read()` → `phys()` → `n64_read_phys()` for every access. For KSEG0 RDRAM addresses (the vast majority of data accesses), `phys()` is just `va & 0x1FFFFFFF` and `n64_read_phys()` is just an RDRAM bounds check + pointer read. Inlining this fast path directly in `n64_read()`/`n64_write()` skips 2 function calls and a branch chain per data access.
-
-**Action:** ~16-27% win (read: 4.4 → 3.7 ns/op; write: 5.0 → 3.7 ns/op, no overlap in steady-state distributions). Falls through to original `phys()`/`n64_read_phys()`/`n64_write_phys()` for non-KSEG0 addresses and KSEG0 addresses outside RDRAM (ROM, registers). Correctness verified for KSEG0/KSEG1 RDRAM (word, half, byte), write-read consistency, ROM (TLB_MISS), and past-RDRAM (-1).
-
-## 2026-11-07 - N64 CPU instruction decode fast paths (PR #14)
+## 2026-11-07 - N64 CPU instruction decode fast paths (PR #16)
 
 **Learning:** After PR #11 inlined KSEG0 instruction fetches and PR #13 inlined KSEG0 data loads/stores in `sim/n64/bus.c`, the remaining hot path in `n64_cpu_step()` is the 64-case `switch (op)` decode with nested switches — every instruction pays the full switch lookup. Adding explicit `if` fast paths before the switch for the 8 most common op codes (ADDI, LW, SW, BEQ, ADDU, NOP, LUI, ORI) lets them skip the switch entirely via `goto done` to the shared epilogue (`r[0] = 0`). Uncommon instructions fall through to the original switch with only a few extra comparisons.
 
