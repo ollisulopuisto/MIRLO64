@@ -349,8 +349,7 @@ void n64_cpu_step(n64_t *n)
     uint64_t *r = c->r;
 
     /* Count / Compare: Count advances at half the CPU clock */
-    if (++c->count_frac == 2) {
-        c->count_frac = 0;
+    if (((++c->cycles) & 1) == 0) {
         if (++c->cop0[C0_COUNT] == c->cop0[C0_COMPARE]) c->cop0[C0_CAUSE] |= CAUSE_IP7;
     }
     /* Random: down from 31 to Wired, every step */
@@ -385,7 +384,7 @@ void n64_cpu_step(n64_t *n)
     c->pc = c->next_pc;
     c->next_pc = c->pc + 4;
     c->in_delay = 0;
-    c->cycles++;
+    /* c->cycles++ moved to top of function */
 
     uint64_t rs = r[RS(insn)], rt = r[RT(insn)], v;
     if (rs != SX(rs) || rt != SX(rt)) n64_noncanon_src++;
