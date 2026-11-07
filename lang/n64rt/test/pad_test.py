@@ -234,7 +234,10 @@ def words(rng):
 
 def main():
     exe = os.path.join(tempfile.mkdtemp(), 'pad_host')
-    subprocess.check_call(['gcc', '-O1', '-Wall', '-o', exe, os.path.join(HERE, 'pad_host.c')])
+    # Bolt optimization: compile ephemeral test harness with -O0 instead of -O1.
+    # The C harness execution workload is tiny (<25ms total across 21k cases), so -O1
+    # optimization passes add ~70ms of redundant compilation latency without runtime benefit.
+    subprocess.check_call(['gcc', '-O0', '-Wall', '-o', exe, os.path.join(HERE, 'pad_host.c')])
     rng = random.Random(64)
     ws = list(words(rng))
     sets = list(settings())
