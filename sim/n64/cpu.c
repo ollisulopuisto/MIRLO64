@@ -396,6 +396,41 @@ void n64_cpu_step(n64_t *n)
     uint32_t btarget = pc + 4 + (uint32_t)(IMM(insn) << 2);
     a = rs32 + (uint32_t)IMM(insn);                    /* load/store address */
 
+    /* ---- fast paths: the most common instructions skip the 64-case switch ----
+     * These cover the bulk of executed instructions in typical N64 code.
+     * `goto done` jumps past the switch to the shared epilogue (r[0] = 0). */
+    if (op == 0x08) {                                  /* ADDI rt, rs, imm */
+        WR(rti, SX(rs32 + (uint32_t)IMM(insn)));
+        goto done;
+    }
+    if (op == 0x23) {                                  /* LW rt, imm(rs) */
+        if (!load(n, pc, dly, a, 4, &v)) WR(rti, SX(v));
+        goto done;
+    }
+    if (op == 0x2B) {                                  /* SW rt, imm(rs) */
+        store(n, pc, dly, a, 4, rt32);
+        goto done;
+    }
+    if (op == 0x04) {                                  /* BEQ rs, rt, offset */
+        BRANCH(rs == rt, btarget);
+        goto done;
+    }
+    if (op == 0x00 && (insn & 63u) == 0x21u) {         /* ADDU rd, rs, rt */
+        WR(rdi, SX(rs32 + rt32));
+        goto done;
+    }
+    if (insn == 0u) {                                  /* NOP */
+        goto done;
+    }
+    if (op == 0x0F) {                                  /* LUI rt, imm */
+        WR(rti, SX((uint32_t)IMMU(insn) << 16));
+        goto done;
+    }
+    if (op == 0x0D) {                                  /* ORI rt, rs, imm */
+        WR(rti, rs | IMMU(insn));
+        goto done;
+    }
+
     switch (op) {
     case 0x00: {                                       /* SPECIAL */
         uint32_t f = insn & 63, sa = SA(insn);
@@ -692,6 +727,7 @@ void n64_cpu_step(n64_t *n)
     case 0x3F: OP64(N64_OP64_MEM); store(n, pc, dly, a, 8, rt); break;             /* sd */
     default: N64_FATAL(n, "unimplemented opcode %02x at %08x (%08x)", op, pc, insn);
     }
+done:                                             /* fast-path targets land here */
     r[0] = 0;
 #undef WR
 #undef BRANCH
