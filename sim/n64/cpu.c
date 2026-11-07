@@ -370,9 +370,15 @@ void n64_cpu_step(n64_t *n)
         return;
     }
     {
-        int t = n64_read(n, pc, 4, &insn);
-        if (t <= N64_TLB_MISS) { tlb_fault(n, pc, dly, pc, t, 0); return; }
-        if (t) { N64_FATAL(n, "fetch fault at %08x", pc); return; }
+        /* inline KSEG0 RDRAM fetch (most instruction fetches): skips the
+         * n64_read() → phys() → n64_read_phys() call chain for the common case */
+        if ((pc & 0xE0000000u) == 0x80000000u && (uint32_t)(pc & 0x1FFFFFFFu) < RDRAM_SIZE)
+            insn = *(const uint32_t *)(n->mem.rdram + (pc & 0x1FFFFFFFu));
+        else {
+            int t = n64_read(n, pc, 4, &insn);
+            if (t <= N64_TLB_MISS) { tlb_fault(n, pc, dly, pc, t, 0); return; }
+            if (t) { N64_FATAL(n, "fetch fault at %08x", pc); return; }
+        }
     }
     if (n->trace) fprintf(n->log, "%08x: %08x\n", pc, insn);
 
