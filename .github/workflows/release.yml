@@ -1,0 +1,70 @@
+name: release
+
+# Builds a tagged version of the core and creates the GitHub release carrying
+# the SD-card zip (tortuga.Mirlo64_<version>.zip), as users install it from the
+# releases page (see the repository's README).
+#
+# Runs on pushes of tags matching v*. Needs the same ASSETS_TOKEN secret as the
+# build workflow (Quartus installer), plus the default GITHUB_TOKEN.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+    with:
+      ref: ${{ github.ref }}
+
+  package:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ github.ref }}
+
+      - name: Install the MIPS toolchain and Python deps
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends mips-linux-gnu-gcc
+          python3 -m pip install --quiet meson ninja
+
+      - name: Build the runtime (n64rt.sys)
+        run: bash .github/scripts/prep.sh
+
+      - name: Download the bitstream
+        uses: actions/download-artifact@v4
+        with:
+          name: bitstream
+          path: .
+
+      - name: Pack the release zip
+        id: pack
+        run: |
+          set -euo pipefail
+          CORE=pkg/pocket/Cores/tortuga.Mirlo64/core.json
+          version=$(python3 -c "import json; print(json.load(open('$CORE'))['core']['metadata']['version'])")
+          date=$(git show -s --format=%cd --date=short ${{ github.ref }})
+          zip=tortuga.Mirlo64_${version}.zip
+          python3 tools/make_release.py mirlo.rev lang/n64rt/build/n64rt.bin "$zip" "$version" "$date"
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Create the GitHub release
+        run: |
+          gh release create ${{ github.ref_name }} ${{ steps.pack.outputs.zip }} \
+            --title "MIRLO 64 ${{ steps.pack.outputs.version }}" \
+            --notes "MIRLO 64 core ${{ steps.pack.outputs.version }}, built from ${{ github.ref }}.
+
+Unzip onto the root of the Analogue Pocket's SD card (see Installing on the Pocket in the repository's README).
+
+This release was built automatically by GitHub Actions."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

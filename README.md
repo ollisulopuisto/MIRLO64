@@ -4,7 +4,7 @@
 
 MIRLO 64 is an N64 core made specifically to fit in the Analogue Pocket. It intends to replicate as best as possible the N64 architecture.
 
-It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and runs the games from their own ROMs. This is **version 0.7** and it is experimental: read [Status](#status) before expecting a particular game to work.
+It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and runs the games from their own ROMs. This is **version 0.8** and it is experimental: read [Status](#status) before expecting a particular game to work.
 
 ## What is in it
 
