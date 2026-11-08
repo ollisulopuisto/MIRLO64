@@ -32,11 +32,21 @@ def run(exe, *args, stdin=None):
 
 def main():
     ctrl, pad = build('ctrl_host'), build('pad_host')
-    # Bolt optimization: reuse a single persistent pad_host process over line-buffered pipes.
-    # Eliminates 110+ separate subprocess spawn invocations, reducing test run time by >50%.
+    # Bolt optimization: reuse persistent pad_host and ctrl_host processes over line-buffered pipes.
+    # Eliminates 170+ separate subprocess spawn invocations, reducing test run time by >50%.
     pad_proc = subprocess.Popen([pad, '-u'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    ctrl_proc = subprocess.Popen([ctrl, '-u'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+
+    def ctrl_query(cmd_str):
+        ctrl_proc.stdin.write(cmd_str + '\n')
+        ctrl_proc.stdin.flush()
+        return ctrl_proc.stdout.readline().strip()
+
     presets = {}
-    for line in run(ctrl, 'presets').splitlines():
+    ctrl_proc.stdin.write('presets\n')
+    ctrl_proc.stdin.flush()
+    for _ in range(len(FAM)):
+        line = ctrl_proc.stdout.readline()
         f, s0, s1, m1, *m = line.split()
         presets[int(f)] = dict(s0=int(s0, 16), s1=int(s1, 16), m1=int(m1, 16), map=[int(x, 16) for x in m])
 
@@ -106,7 +116,7 @@ def main():
         if i in seen: fail('cartridge %s is twice in the table' % i)
         seen.add(i)
     for i, want in (('NSME', 1), ('NSMJ', 1), ('NGEP', 2), ('NTQE', 3), ('NKTE', 4), ('NALE', 5), ('XXXX', -1), ('NSM', -1)):
-        got = int(run(ctrl, 'family', i).strip())
+        got = int(ctrl_query(f'family {i}'))
         if got != want and not (len(i) == 3):
             fail('family %s: %d, expected %d' % (i, got, want))
 
@@ -114,16 +124,21 @@ def main():
     s0, s1, m = 6 << 10 | 0x7FFF, 1 << 10 | 2 << 15 | 1 << 22 | 0x3FFF000, [0x12345678 & 0x3FFFFFFF, 1, 2, 3, 0x3FFFFFFF]
     args = ['%x' % s0, '%x' % s1, *('%x' % w for w in m)]
     want = '1 %x %x %s' % (s0 & (31 << 10), s1 & (31 << 10 | 31 << 15 | 3 << 22), ' '.join('%x' % w for w in m))
-    got = run(ctrl, 'record', *args).strip()
+
+    def check_record(dw=None, db=None, length=None):
+        cmd = f"record {' '.join(args)} {1 if dw is not None else 0} {dw or 0} {db or 0} {1 if length is not None else 0} {length or 0}"
+        return ctrl_query(cmd)
+
+    got = check_record()
     if got != want:
         fail('record: %s, expected %s' % (got, want))
     for word in range(9):
         for bit in (0, 7, 31):
-            if run(ctrl, 'record', *args, str(word), str(bit)).strip() != '0':
+            if check_record(word, bit) != '0':
                 # (a flip in a bit the mask drops is not damage: words 1 and 2)
                 if word in (1, 2): continue
                 fail('record with word %d bit %d flipped was accepted' % (word, bit))
-    if run(ctrl, 'record', *args, '8', '0', '35').strip() != '0':
+    if check_record(8, 0, 35) != '0':
         fail('a record of 35 bytes was accepted')
     # the menu file against the Pocket's limits (Analogue's docs: 16 entries shown, names 23 characters, a list 16 options, ids unique 16-bit):
     # a longer file is "Load error in interact" at the core's start
@@ -141,7 +156,16 @@ def main():
         if v['type'] == 'list' and not 0 <= v['defaultval'] < len(v['options']): fail('interact.json %r defaultval' % v['name'])
     # the menu's picks over a layout: the game's saved one, else its family's, else Standard
     def session(saved, fam, script):
-        out = run(ctrl, 'session', str(saved), str(fam), stdin=script).splitlines()
+        ctrl_query(f'session_start {saved} {fam}')
+        out = []
+        for line in script.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            ctrl_proc.stdin.write(line + '\n')
+            ctrl_proc.stdin.flush()
+            if line.startswith(('eff', 'cap')):
+                out.append(ctrl_proc.stdout.readline())
         return [[int(x, 16) for x in line.split()[1:]] for line in out]
     def eff(saved, fam, pk=(0, 0, 0, 0), menu=(0, 0)):
         return session(saved, fam, 'pick %d %d %d %d\nmenu %x %x\neff\n' % (*pk, *menu))[0]
@@ -207,6 +231,9 @@ def main():
     if fld(r[0][2:], 0) != 1 or r[0][0] != 3 << 10: fail('a pick over a saved layout: %s' % (r[0],))
     pad_proc.stdin.close()
     pad_proc.wait()
+    ctrl_proc.stdin.write('quit\n')
+    ctrl_proc.stdin.close()
+    ctrl_proc.wait()
     print('ctrl_test: %s' % ('FAIL (%d)' % bad if bad else 'PASS'))
     return 1 if bad else 0
 
