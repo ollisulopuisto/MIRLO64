@@ -44,7 +44,10 @@ jobs:
       - name: Install the MIPS toolchain and Python deps
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends mips-linux-gnu-gcc meson ninja-build python3
+          # ubuntu-latest ships the versioned cross compiler name only
+          sudo apt-get install -y --no-install-recommends gcc-13-mips-linux-gnu binutils-mips-linux-gnu meson ninja-build python3
+          ln -sf "$(command -v mips-linux-gnu-gcc-13)" /usr/local/bin/mips-linux-gnu-gcc
+          mips-linux-gnu-gcc --version | head -1
 
       - name: Host-side build (runtime, boot ROM, images)
         run: bash .github/scripts/prep.sh
