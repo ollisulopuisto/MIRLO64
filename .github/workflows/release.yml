@@ -1,11 +1,20 @@
 name: release
 
-# Builds a tagged version of the core and creates the GitHub release carrying
-# the SD-card zip (tortuga.Mirlo64_<version>.zip), as users install it from the
-# releases page (see the repository's README).
+# Builds a tagged version of the MIRLO 64 core and creates the GitHub release
+# carrying the SD-card zip (tortuga.Mirlo64_<version>.zip) that users install
+# from the releases page (see Installing on the Pocket in the repository's README).
 #
-# Runs on pushes of tags matching v*. Needs the same ASSETS_TOKEN secret as the
-# build workflow (Quartus installer), plus the default GITHUB_TOKEN.
+# The build mirrors tools/nightly.sh: Quartus fit + compile with the fitter seed
+# recorded in projects/fits.json, then the zip is produced only if that fit
+# closes timing. If the hardware's sources changed since the recorded fit, the
+# job fails and a seed sweep is due (tools/area2/fit.sh, then
+# tools/fits.py record projects_a2_release) before this can succeed.
+#
+# Secrets needed:
+#   ASSETS_TOKEN  - token for the private repo holding the Quartus Prime Lite
+#                   installer (see .github/scripts/install_quartus.sh)
+#   ASSETS_REPO / ASSETS_TAG - override the installer repo/release
+#                             (defaults: ollisulopuisto/mirlo64-quartus-assets / q25.1)
 
 on:
   push:
@@ -15,14 +24,9 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    uses: ./.github/workflows/build.yml
-    with:
-      ref: ${{ github.ref }}
-
-  package:
-    needs: build
+  release:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
       - name: Check out the tag
         uses: actions/checkout@v4
@@ -30,20 +34,38 @@ jobs:
           submodules: recursive
           ref: ${{ github.ref }}
 
+      - name: Install Quartus Prime Lite 25.1std (+ Cyclone V)
+        run: bash .github/scripts/install_quartus.sh
+        env:
+          ASSETS_TOKEN: ${{ secrets.ASSETS_TOKEN }}
+          ASSETS_REPO: ${{ secrets.ASSETS_REPO || 'ollisulopuisto/mirlo64-quartus-assets' }}
+          ASSETS_TAG: ${{ secrets.ASSETS_TAG || 'q25.1' }}
+
       - name: Install the MIPS toolchain and Python deps
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends mips-linux-gnu-gcc
-          python3 -m pip install --quiet meson ninja
+          sudo apt-get install -y --no-install-recommends mips-linux-gnu-gcc meson ninja-build python3
 
-      - name: Build the runtime (n64rt.sys)
+      - name: Host-side build (runtime, boot ROM, images)
         run: bash .github/scripts/prep.sh
 
-      - name: Download the bitstream
-        uses: actions/download-artifact@v4
-        with:
-          name: bitstream
-          path: .
+      - name: Fit and compile the bitstream (recorded seed)
+        id: fit
+        run: |
+          set -euo pipefail
+          seed=$(python3 tools/fits.py seed)
+          tools/fits.py check \
+            || echo "release: the recorded fit is for other sources -- a seed sweep is due; trying the recorded seed anyway"
+          echo "seed=$seed" >> "$GITHUB_OUTPUT"
+          WAIT=1 tools/area2/fit.sh release "$seed"
+          if ! tools/fits.py verify projects_a2_release; then
+            echo "::error::seed $seed does not close timing with these sources: no release."
+            echo "Run a seed sweep (tools/area2/fit.sh) and record it (tools/fits.py record projects_a2_release)."
+            exit 1
+          fi
+
+      - name: Package the bitstream (mirlo.rev)
+        run: python3 tools/package_bitstream.py projects_a2_release/output_files/mirlo.rbf mirlo.rev
 
       - name: Pack the release zip
         id: pack
@@ -61,10 +83,6 @@ jobs:
         run: |
           gh release create ${{ github.ref_name }} ${{ steps.pack.outputs.zip }} \
             --title "MIRLO 64 ${{ steps.pack.outputs.version }}" \
-            --notes "MIRLO 64 core ${{ steps.pack.outputs.version }}, built from ${{ github.ref }}.
-
-Unzip onto the root of the Analogue Pocket's SD card (see Installing on the Pocket in the repository's README).
-
-This release was built automatically by GitHub Actions."
+            --notes "MIRLO 64 core ${{ steps.pack.outputs.version }}, built from ${{ github.ref }}. Unzip onto the root of the Analogue Pocket's SD card (see Installing on the Pocket in the repository's README). This release was built automatically by GitHub Actions."
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
