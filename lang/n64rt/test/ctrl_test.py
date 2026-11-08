@@ -230,10 +230,12 @@ def main():
     r = session(1, P, 'pick 1 0 0 0\nmenu 0 0\neff\n')
     if fld(r[0][2:], 0) != 1 or r[0][0] != 3 << 10: fail('a pick over a saved layout: %s' % (r[0],))
     pad_proc.stdin.close()
-    pad_proc.wait()
+    if pad_proc.wait() != 0:
+        fail('pad_host failed (%d)' % pad_proc.returncode)
     ctrl_proc.stdin.write('quit\n')
     ctrl_proc.stdin.close()
-    ctrl_proc.wait()
+    if ctrl_proc.wait() != 0:
+        fail('ctrl_host failed (%d)' % ctrl_proc.returncode)
     print('ctrl_test: %s' % ('FAIL (%d)' % bad if bad else 'PASS'))
     return 1 if bad else 0
 
