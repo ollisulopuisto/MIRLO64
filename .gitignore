@@ -109,3 +109,4 @@ n64rt.sys
 
 # game ROMs for the local boot sweep: never committed
 /roms/
+*.zip
