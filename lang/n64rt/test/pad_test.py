@@ -49,14 +49,24 @@ for _v in range(256):
 CODE_BIT_LUT = [1 << K[CODE[c]] if c in CODE else 0 for c in range(32)]
 OUT_LUT = [N[OUT[c]] if c in OUT else 0 for c in range(32)]
 
+# Bolt optimization: precompute D-pad deflection vectors and button bitmasks for all 16 D-pad nibbles (0..15).
+# Eliminates repeated boolean arithmetic and branching across 21k+ evaluations in spec() and _dpad_stick().
+DPAD_STICK_FULL_LUT = [(0, 0)] * 16
+DPAD_STICK_HALF_LUT = [(0, 0)] * 16
+DPAD_BITS_C_LUT = [0] * 16
+DPAD_BITS_D_LUT = [0] * 16
+for _d in range(16):
+    _dx = bool(_d & RIGHT_BIT) - bool(_d & LEFT_BIT)
+    _dy = bool(_d & UP_BIT) - bool(_d & DOWN_BIT)
+    DPAD_STICK_FULL_LUT[_d] = (80 * _dx, 80 * _dy)
+    DPAD_STICK_HALF_LUT[_d] = (28 * _dx, 28 * _dy) if (_dx and _dy) else (40 * _dx, 40 * _dy)
+    DPAD_BITS_C_LUT[_d] = (N['CUP'] if _d & UP_BIT else 0) | (N['CDOWN'] if _d & DOWN_BIT else 0) | (N['CLEFT'] if _d & LEFT_BIT else 0) | (N['CRIGHT'] if _d & RIGHT_BIT else 0)
+    DPAD_BITS_D_LUT[_d] = (N['DUP'] if _d & UP_BIT else 0) | (N['DDOWN'] if _d & DOWN_BIT else 0) | (N['DLEFT'] if _d & LEFT_BIT else 0) | (N['DRIGHT'] if _d & RIGHT_BIT else 0)
+
 
 def _dpad_stick(k_mask, lmod):
-    full = 40 if lmod else 80
-    dx = (-1 if (k_mask & LEFT_BIT) else 0) + (1 if (k_mask & RIGHT_BIT) else 0)
-    dy = (1 if (k_mask & UP_BIT) else 0) + (-1 if (k_mask & DOWN_BIT) else 0)
-    if lmod and dx and dy:
-        return 28 * dx, 28 * dy
-    return full * dx, full * dy
+    d = k_mask & DPAD_MASK
+    return DPAD_STICK_HALF_LUT[d] if lmod else DPAD_STICK_FULL_LUT[d]
 
 
 def pack(fields):
@@ -112,24 +122,14 @@ def spec(keys, joy, s0, s1, fields):
 
     tx = ty = 0
     if dsel:
-        dx = bool(k_mask & RIGHT_BIT) - bool(k_mask & LEFT_BIT)
-        dy = bool(k_mask & UP_BIT) - bool(k_mask & DOWN_BIT)
+        dm = k_mask & DPAD_MASK
         if dsel == 1:
-            tx, ty = 80 * dx, 80 * dy
+            tx, ty = DPAD_STICK_FULL_LUT[dm]
         elif dsel == 2:
-            tx, ty = (28 * dx, 28 * dy) if dx and dy else (40 * dx, 40 * dy)
+            tx, ty = DPAD_STICK_HALF_LUT[dm]
         elif dsel in (3, 4, 6):
-            if dsel == 6: tx, ty = 80 * dx, 80 * dy                     # (7 in the field: the stick and the N64's D-pad)
-            if dsel == 4:
-                if k_mask & UP_BIT: out |= N['CUP']
-                if k_mask & DOWN_BIT: out |= N['CDOWN']
-                if k_mask & LEFT_BIT: out |= N['CLEFT']
-                if k_mask & RIGHT_BIT: out |= N['CRIGHT']
-            else:
-                if k_mask & UP_BIT: out |= N['DUP']
-                if k_mask & DOWN_BIT: out |= N['DDOWN']
-                if k_mask & LEFT_BIT: out |= N['DLEFT']
-                if k_mask & RIGHT_BIT: out |= N['DRIGHT']
+            if dsel == 6: tx, ty = DPAD_STICK_FULL_LUT[dm]                     # (7 in the field: the stick and the N64's D-pad)
+            out |= DPAD_BITS_C_LUT[dm] if dsel == 4 else DPAD_BITS_D_LUT[dm]
         k_mask &= ~DPAD_MASK
     # joystick bytes: left X, left Y, right X, right Y (0x80 centre)
     lx, ly, rx, ry = joy & 255, (joy >> 8) & 255, (joy >> 16) & 255, (joy >> 24) & 255
@@ -205,10 +205,7 @@ def spec(keys, joy, s0, s1, fields):
     if dpad_swap and lmod:
         sx = sy = 0
     if dmode == 1 and (not dpad_swap or lmod):
-        if k_mask & UP_BIT: out |= N['DUP']
-        if k_mask & DOWN_BIT: out |= N['DDOWN']
-        if k_mask & LEFT_BIT: out |= N['DLEFT']
-        if k_mask & RIGHT_BIT: out |= N['DRIGHT']
+        out |= DPAD_BITS_D_LUT[k_mask & DPAD_MASK]
     elif dmode in (2, 3) and analog:
         px, py = (lx, ly) if dmode == 2 else (rx, ry)
         if px - 128 < -64: out |= N['DLEFT']
