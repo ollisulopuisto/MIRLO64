@@ -23,7 +23,7 @@ module interact_test;
     wire  [3:0][31:0] cont0 = '0;             // the four pads: nothing pressed
     mirlo_regs regs (.clk, .rst, .r_req, .r_we, .r_addr, .r_wdata, .r_rdata,
         .ia_address, .ia_data, .ia_wr, .ia_q, .ia_crop_v, .ia_crop_r,
-        .ia_an_mode(an_mode), .ia_an_scan(an_scan), .ia_an_own(an_own),
+        .ia_an_mode(an_mode), .ia_an_own(an_own),
         .aud_fill(12'd0), .br_file_size(32'd0), .br_complete_trigger(1'b0), .br_current_address(32'd0), .br_command_result_code(3'd0),
         .br_host_reset_n(1'b1), .br_host_loaded(1'b1), .pad_clk(clk), .pad_we(1'b0), .pad_wa(4'd0), .pad_wd(32'd0),
         .vblank(1'b0), .tv_pal(1'b0), .bus_errors(16'd0), .su_valid(1'b0), .su_data(32'd0), .cmd_ready(1'b1),
@@ -130,8 +130,7 @@ module interact_test;
             ia_write(23, 32'(mode));
             ia_read(23, q); check("Analogizer menu readback", q, 32'(mode));
             csr_read(R_APF_INTERACT_INTERACT3, q); check("Analogizer CSR", q, 32'h8000_0000 | 32'(mode));
-            check("Analogizer mode", 32'(an_mode), mode >= 7 ? 6 : 32'(mode));
-            check("Analogizer scanlines", 32'(an_scan), mode >= 7 ? 32'(mode - 6) : 0);
+            check("Analogizer mode", 32'(an_mode), mode >= 7 ? 0 : 32'(mode));
             check_regs("Analogizer leaves controller layouts intact");
         end
         ia_write(16, 4); model[0] = 4;

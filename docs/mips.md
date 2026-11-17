@@ -116,6 +116,7 @@ The layout is the same for every game (`lang/mips/include/layout.h`):
 | `0x42DD_0000` | 8 KiB | The runtime's `.data` as it was when the program started, which [Restart Game](#restart-game) puts back |
 | `0x4310_0000` | 64 KiB | The save-type database, `n64savedb.txt` |
 | `0x4340_0000` | up to 3 MiB | The Transfer Pak SD 1's Game Boy ROM |
+| `0x4320_0000` | 2 MiB | The RDP's shadow plane, with the core's "Video settings: 32-bit" setting: a byte for each pixel of a 16-bit colour image, some of the low bits of its channels and a check of the pixel's 5551 word ([video_options.md](video_options.md)) |
 | `0x4370_0000` | 1 MiB | The RDP's hidden coverage plane: the other two coverage bits of each 16-bit word of RDRAM ([rdp.md](rdp.md)) |
 | `0x4380_0000` | 8 MiB | The N64's RDRAM |
 
@@ -324,7 +325,8 @@ in D while a register it reads is on its way from a 64-bit result. E computes 32
 | `W64_UA` | yes | `ldl`, `ldr`, `sdl`, `sdr` (with `W64_SH`, `FAST`, `XWB`, `BIG`): an access to the doubleword the address is in, on the d-shifter's register, a byte a cycle. A store rotates `rt` by 8 - *n* (`sdl`) or 7 - *n* (`sdr`) bytes (*n* the address' low three bits) and writes its two words with the strobes of the bytes it covers; a load takes the doubleword through a byte at a time into `rt`'s place, 8 steps (each of the four takes about 20 CPU clocks on cached memory, back to back). Device, mapped and non-RDRAM addresses are the same address errors as `ld`'s and `sd`'s |
 
 The bitstream and `n64rt.sys` are a pair, and the shipped CPU has every level. COP0 register 7 reads the levels in its
-bits 31 (ALU), 30 (SH), 29 (MD), 28 (DIV) and 27 (UA); the runtime checks at start-up that all five are set and, if one
+bits 31 (ALU), 30 (SH), 29 (MD), 28 (DIV) and 27 (UA) (and bit 26 is the FPU's double precision, FPD64, which the shipped CPU does
+not have and the runtime does not ask for); the runtime checks at start-up that all five are set and, if one
 is not, stops with a notice on the screen (as for a missing layout mark) and starts no game. It keeps no copy of a
 register's upper half, has no soft HI and LO and does no 64-bit instruction itself. What the CPU does not have is a
 Reserved Instruction, and a Reserved Instruction stops the game with a message on the UART like any exception the
@@ -333,7 +335,9 @@ runtime does not handle: a trap instruction (`teq`, `tge` ...) on a 64-bit opera
 ### The FPU
 
 `fpu_n64.sv` is the VR4300's COP1 in single precision: 32 registers of 32 bits, a double being an even / odd pair. A
-double operand is converted to a float and a double result is the float widened back. Results and inputs below the
+double operand is converted to a float and a double result is the float widened back, but for the compares (`c.cond.d`), which
+order the doubles' own 64 bits (a game's display-list optimiser may compare 64-bit commands as doubles to drop the ones that repeat; as
+floats, the `G_TEXTURE` commands that turn textures on and off, both out of a float's range, looked equal and the change was dropped). Results and inputs below the
 normals are 0 (as the VR4300 with FCR31's FS bit set), but for a single's compare, which orders them exactly as the
 VR4300 does (it neither flushes nor traps them there; software keeps pointers in float registers and tests them against
 0.0, and every KSEG0 address below 8 MiB is a denormal); a NaN result is `0x7FBFFFFF`, and the conversions to an integer
@@ -387,6 +391,20 @@ faster than the console's (they are floats). The cycles were cut by taking the s
 operands are normal numbers (add, multiply, the conversions to an integer), by starting a comparison, `abs`, `neg` and the
 conversions between S and D there, by the sum of operands of the same sign and the product (one bit to normalise at most) needing no
 count of leading zeros, and by flushing the operands as they are read. Integer instruction cycles are unchanged.
+
+**FPD64** (`mips_core`'s parameter, `MIRLO_FPD64` in `mips_sys.sv`, off by default; with `FAST`; COP0 register 7's bit 26):
+`add.d`, `sub.d`, `mul.d`, `abs.d`, `neg.d` and `c.cond.d` are computed at 53 bits by `fpu_d64.sv` instead of as floats. The rules
+are the single-precision path's: an input below the normals is a zero of its sign, arithmetic rounds to nearest even with an
+unbounded exponent (whatever FCR31's rounding mode is) and then a result below the normals is a zero and one above them
+infinity, a NaN result is the default one (`0x7FF7FFFF_FFFFFFFF`, the single's `0x7FBFFFFF` in a double's fields), no
+exceptions and no cause or flag bits; a compare is exact on the flushed values. `div.d`, `sqrt.d` and every conversion
+(`cvt.s.d`, `cvt.d.w`, `cvt.d.l`, the round / trunc / ceil / floor and `cvt` to `.w` and `.l`) stay on the datapath above, a double
+taken to a float and back. The unit is a few small pieces used over and over: one 57-bit adder, a shifter on its accumulator
+(by 8 or 1 bits, right with the shifted-out bits jammed into a sticky bit, or left), and one 26 x 26 multiplier (a DSP block)
+for the product in four pieces. The cycles the instruction is in M: `add.d` and `sub.d` 8 + a step per 8 bits (and one per bit
+of the remainder) of the exponents' difference + the same for the cancellation of a difference (a sum: none), `mul.d` 13,
+`abs.d` and `neg.d` 3, a compare 3 (6 when the exponents are equal); a special operand is the result at once (3). The VR4300's
+are 3 (add, sub) and 8 (mul). `sim/n64/fpd64.h` is the model of it (and the host's own doubles check the model: `sim/fpd64`).
 
 ### Address translation
 
@@ -569,7 +587,7 @@ Such a ROM can be smaller than 1 MiB. The boot segment's patches (below) are not
 
 ### The Expansion Pak
 
-The core's "Expansion Pak" setting is a check box, on by default (`INTERACT1` bit 24, which is 0 with the Pak in). The
+The core's "Expansion Pak" setting (a half of the menu's "Expansion Pak/Gameshark" list, in by default; `INTERACT1` bit 24, which is 0 with the Pak in). The
 loader reads it once, as the game starts. Without the Pak the game's memory is 4 MiB: that is what `osMemSize` says,
 and the runtime sets MCTL's bit 10, with which the game's own accesses to the upper 4 MiB of the RDRAM's window go to
 the monitor and are answered as memory that is not there: a load reads 0 and a store goes nowhere. Software that sizes
@@ -902,6 +920,12 @@ itself. With another CIC the block is left as it was. The commands:
 A command nothing answers gets the no-response bit. Controller 1 is always there; controllers 2 to 4 are there while the
 dock reports a pad, checked at every command, so a pad can be plugged in or removed while a game runs.
 
+With the menu's "Analogizer controllers" giving players to the SNAC (and the adapter, not a Game Boy cartridge, in the slot) a third kind of channel joins these two: for a player the menu gives to the SNAC port, `pif_run` forwards the game's own command bytes to it (the `SNAC`
+block, `n64rt_snac.c`) and writes its raw reply, with the device's own CRC byte, into the block; the no-response bit is the
+wire's timeout, bit 6 a reply that was short. A player given to the SNAC is the real one's, a device plugged in or not (an empty port answers nothing); a player that is not keeps the
+Pocket's pad and the virtual paks as above (and the EEPROM stays the runtime's). The console's time for the commands that
+`SIDONE` carries is the figures above, or the wire's own time if that is longer ([analogizer.md](analogizer.md#the-snac-port-as-the-consoles-pif)).
+
 ### SP and DPC
 
 The RSP and the RDP are the hardware's own ([rsp.md](rsp.md), [rdp.md](rdp.md)). The CPU's side differs from the
@@ -947,14 +971,18 @@ loads it as slot 4, and the runtime looks the cartridge up once at boot (`lang/n
 - **rev=**: the line is only for those values of the header's version byte (ROM `0x3F`).
 
 Only the EEPROM's size is acted on: an SRAM or a FlashRAM is found from the game's accesses. A cartridge that is not in
-the file, or no file, is a 4 Kbit EEPROM. A command for block 64 or above makes the slot 2,048 bytes whatever the file
-says. No setting overrides the database; a wrong entry is corrected in the file. The lookup is bounded by the file's
-size and cannot fail on malformed input. `tools/build_savedb.py` regenerates the file from public lists (mupen64plus,
-the libretro No-Intro database, ares, micro-64.com); it contains cartridge IDs and types only.
+the file, or no file, is what the ROM's own header says if it is an [advanced homebrew
+header](https://n64brew.dev/wiki/ROM_Header#Advanced_Homebrew_ROM_Header) (`ED` at `0x3C` - `0x3D`, the save type in the
+high nibble of `0x3F`: 1 is a 4 Kbit EEPROM, 2 a 16 Kbit one; some ROM hacks, such as Mario Kart 64 Amped Up, and
+libdragon games that set a save type have one), and otherwise a 4 Kbit EEPROM. A command for block 64 or above makes the
+slot 2,048 bytes whatever the file says. No setting overrides the database; a wrong entry is corrected in the file. The
+lookup is bounded by the file's size and cannot fail on malformed input. `tools/build_savedb.py` regenerates the file
+from public lists (mupen64plus, the libretro No-Intro database, ares, micro-64.com); it contains cartridge IDs and types
+only.
 
 ### Controller 1's accessory
 
-The setting "Controller 1 pak" is read at every access (`lang/n64rt/n64rt_pak.c`); the other controllers have none.
+The setting "Controller paks" is read at every access (`lang/n64rt/n64rt_pak.c`); the other controllers have none.
 The accessory is what the joybus sees, 32-byte blocks at a 16-bit address, and the game's own `osPfs*` and `osGbpak*`
 code runs on top of it. There is no Rumble Pak: the core's interface to the Pocket has no vibration output.
 
@@ -986,13 +1014,13 @@ file is involved. `core.json` has `cartridge_adapter` 0, which has the Pocket po
 
 ### The Transfer Pak SD
 
-The setting "Controller 1 pak" has a second Transfer Pak, **Transfer Pak SD** (the one with the Game Boy cartridge in the Pocket's slot is "Transfer Pak cartridge"): the same accessory (the registers above) with a cartridge that
+The setting "Controller paks" has a second Transfer Pak, **Transfer Pak SD** (the one with the Game Boy cartridge in the Pocket's slot is "Transfer Pak cartridge"): the same accessory (the registers above) with a cartridge that
 is made of a ROM file the Pocket loads and the Game Boy game's own save file, in place of the Game Boy cartridge in the Pocket's slot (`lang/n64rt/n64rt_gbvirt.c`; the slot's port is not
 touched). The game's own `osGbpak*` code runs on it as on the real one.
 
-The setting "Controller 2 pak" (None, or Transfer Pak SD) puts a second one in controller 2, with a cartridge of its own: two instances of the same code (`n64rt_gbvirt.c`, n = 0 and 1; `n64rt_pak.c` keeps the Transfer Pak's registers of each controller apart), each with its own mapper, RAM and clock, and the slots below with "2". Controller 2 is a pad that is there when that setting asks for the pak (the dock's, with its keys, if it reports one; else with nothing pressed). A game that looks for its controllers when it starts finds the pak only if the setting was made before. The real cartridge in the Pocket's slot is controller 1's alone.
+The same setting's values 4, 5 and 6 (Transfer Pak SD P2, Transfer Pak SD P1P2, TPak cart P1 with SD P2) put a Transfer Pak SD in controller 2, with a cartridge of its own: two instances of the same code (`n64rt_gbvirt.c`, n = 0 and 1; `n64rt_pak.c` keeps the Transfer Pak's registers of each controller apart), each with its own mapper, RAM and clock, and the slots below with "2". Controller 2 is a pad that is there when that setting asks for the pak (the dock's, with its keys, if it reports one; else with nothing pressed). A game that looks for its controllers when it starts finds the pak only if the setting was made before. The real cartridge in the Pocket's slot is controller 1's alone.
 
-**Two steps, both before the N64 game starts**: choose "Transfer Pak SD" in "Controller 1 pak" (or 2), and load the Game Boy game with "Load Transfer Pak 1" (or 2). There is no automatic choice: with the setting at None, Controller Pak or Transfer Pak cartridge a Game Boy ROM that is loaded is ignored (no save is read or written for it). The runtime looks at both in every video field, so the order does not matter, and each takes effect when the second of the two is there: the ROM is made a cartridge and its save is read; when either goes away (the setting is changed, or the ROM is replaced or gone) the cartridge's RAM is written back to its save first, if the game changed it. A game that has already looked for its pak sees it come or go as a pak plugged or unplugged while it runs (measured with a game that checks its pak at its start: it shows its "Transfer Pak not installed" error when the setting goes to None, and does not look again); one that looks only when it starts needs both steps before it, or the core's Restart Game after them ([Restart Game](#restart-game)).
+**Two steps, both before the N64 game starts**: choose a Transfer Pak SD in "Controller paks" (for controller 1, 2 or both), and load the Game Boy game with "Load Transfer Pak 1" (or 2). There is no automatic choice: with the setting at None, Controller Pak or Transfer Pak cartridge a Game Boy ROM that is loaded is ignored (no save is read or written for it). The runtime looks at both in every video field, so the order does not matter, and each takes effect when the second of the two is there: the ROM is made a cartridge and its save is read; when either goes away (the setting is changed, or the ROM is replaced or gone) the cartridge's RAM is written back to its save first, if the game changed it. A game that has already looked for its pak sees it come or go as a pak plugged or unplugged while it runs (measured with a game that checks its pak at its start: it shows its "Transfer Pak not installed" error when the setting goes to None, and does not look again); one that looks only when it starts needs both steps before it, or the core's Restart Game after them ([Restart Game](#restart-game)).
 
 * **The ROM** is data slot 8, "Transfer Pak 1" (`.gb`, `.gbc`; at most 3 MiB), `0x4340_0000`; controller 2's is slot 9, "Transfer Pak 2", `0x42E0_0000`. With no
   file in a slot there is no cartridge in that pak, for either one. They are last among the data slots, and the Pocket lists the Load entries together, next to "Load Game". There is no default file: "Load Transfer Pak 1"
@@ -1028,7 +1056,7 @@ The setting "Controller 2 pak" (None, or Transfer Pak SD) puts a second one in c
 
 ### GameShark codes
 
-The setting "Enable Gameshark codes" (off by default) makes the runtime run the game's GameShark codes (`lang/n64rt/n64rt_cheat.c`,
+The setting "Expansion Pak/Gameshark" with the codes on (the other half of that list; off by default) makes the runtime run the game's GameShark codes (`lang/n64rt/n64rt_cheat.c`,
 `n64rt_gs.c`). They are a text file on the SD card, in `Assets/n64/common/gameshark/`, named after the cartridge: its four-character ID
 (ROM `0x3B..0x3E`: `NSME`, the game's code and its region) and, for a revision whose addresses differ, its version byte in decimal:
 `NSME.1.txt` is tried first, then `NSME.txt`. Every line that is a code is run, in the file's order, in every video field, as a GameShark does
@@ -1160,14 +1188,13 @@ scan-out instead.
 |---|---|---|---|
 | Crop Vertical | `0x1000_010C` | `interact0[9:5]` | None (0), **8 lines** (8), 12 lines (12) |
 | Crop Horizontal | `0x1000_0114` | `interact0[19:15]` | [1:0] columns at the right, [3:2] at the left, up to 3 each: None (0), 1 / 2 / 3 columns (5 / 10 / 15), 1 / 2 / 3 columns left (4 / 8 / 12), **1 column right** (1), 2 / 3 columns right (2 / 3) |
-| Expansion Pak | `0x1000_0138` | `interact1[24]` | **On** (0), off (1): a check box; read when the game starts |
-| Enable Gameshark codes | `0x1000_013C` | `interact1[25]` | **Off** (0), on (1): a check box; seen in every field ([GameShark codes](#gameshark-codes)) |
-| Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak cartridge (2), Transfer Pak SD (3) |
-| Controller 2 pak | `0x1000_0118` | `interact0[24:20]` | **None** (0), Transfer Pak SD (3) |
+| Video settings | `0x1000_0144` | `interact2[9:5]` | **Default** (0), 32-bit color (1), Deblur (2), 32-bit color + Deblur (3): [video_options.md](video_options.md) |
+| Expansion Pak/Gameshark | `0x1000_0150` | `interact1[25:24]` | Exp Pak and GameShark (2), **Exp Pak** (0, the default), GameShark (3), None (1). The Expansion Pak (bit 24, 0 = in; `0x1000_0138` writes it alone) is read when the game starts; the Gameshark codes (bit 25, `0x1000_013C` alone) are seen in every field ([GameShark codes](#gameshark-codes)) |
+| Controller paks | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak cartridge (2), Transfer Pak SD (3), Transfer Pak SD P2 (4: SD in controller 2 alone), Transfer Pak SD P1P2 (5), TPak cart P1, SD P2 (6) |
+| Analogizer controllers | `0x1000_0148` | `interact2[14:10]` | **Dock: P1P2P3P4** (0), SNAC: P1P2P3P4 (15), Dock: P1 and SNAC: P2P3P4 (14), SNAC: P1 and Dock: P2P3P4 (1), SNAC: P1P2 and Dock: P3P4 (3), SNAC: P1P2P3 and Dock: P4 (7): a mask of the players that are the SNAC port's ([analogizer.md](analogizer.md)) |
 | Stick | `0x1000_012C` | `interact1[19:15]` | **D-pad** (0), L stick (1), R stick (2) |
 | D-pad | `0x1000_0134` | `interact1[23:22]` | **None** (0), D-pad (1), L stick (2), R stick (3) |
-| L stick dead zone | `0x1000_0124` | `interact1[9:5]` | Menu 0 % (1), 5 % (2), 10 % (3), ... 70 % (15); actual threshold is 30 % larger (0 % to 91 %) |
-| R stick dead zone | `0x1000_011C` | `interact0[29:25]` | Same as the L stick |
+| Stick dead zone | `0x1000_0124` | `interact1[9:5]` | Menu 0 % (1), 10 % (3), 20 % (5), ... 70 % (15), for both sticks; actual threshold is 30 % larger (0 % to 91 %) |
 | Start macro | `0x1000_0120` | `interact1[4:0]` | **None** (0), C-Down + C-Up (14), C-Left + C-Right (13), C-Down + C-Left (15), C-Down + C-Right (16), C-Up + C-Left (17), C-Up + C-Right (18): the two keys together are the Start; the Start key alone is then C-up |
 | R as modifier | `0x1000_0110` | `interact0[14:10]` | **None** (0), Face C buttons (1): R held turns X, B, Y, A into C-up, C-down, C-left, C-right; Joystick half press (2): R held makes the D-pad's stick 60 % |
 | C buttons | `0x1000_0128` | `interact1[14:10]` | **None** (0), D-pad (3), L stick (2), R stick (1) |
@@ -1356,14 +1383,20 @@ that acknowledges it: the interrupts come in the middle of FPU operations, which
 each). `TB_RETLOG=1` prints the cycle, the address and the word of every retired instruction, and `fpu_cycles.py [--bench
 obj_dir/Vmips_core]` runs a ROM of blocks between markers and prints what every COP1 instruction, and the multiplies, divides, loads,
 stores and branches, cost in cycles (the table in "The FPU").
+`gen_rand_fpu_rom.py SEED out.z64 N d64` writes double programs for a core with FPD64 (`TB_FPD64=1`; the model does the doubles exactly), and
+`fpd64_rom.sh <out.z64>` builds `lang/mips/test/fpu_d64_test.c` for the same (the failures in `fails`).
 
 ### Single blocks
+
+- `sim/fpd64`: `build.sh`, then `obj_dir/Vfpu_d64 [millions of operands per operation] [seed]`: the double unit alone against its
+  model (`sim/n64/fpd64.h`) and the model against the host's IEEE doubles, on a grid of the special values and random operands made to
+  cancel, tie and overflow, with the cycles each operation took.
 
 - `sim/ai`: `build.sh`, then `obj_ai/tb_ai [handler latency us]`: the AI's queue and interrupt, the third buffer
   dropped, the reader's lead, and a driver that queues its next buffer from the interrupt.
 - `sim/gb_cart`: `run.sh <rom.gb>` runs the cartridge port against the cartridge model, and then mutants of the port,
   each of which the model's checks must catch. `lang/n64rt/test/make_gb.py` makes a ROM for it.
-- `sim/vi_filter`: `build.sh`, then `obj_vi/tb_vi <seed> <divot> <partial %>`: the scan-out's filters against a model.
+- `sim/vi_filter`: `build.sh`, then `obj_vi/tb_vi <seed> <divot> <partial %>`: the scan-out's filters against a model (`TB_DEBLUR=1`, `TB_OUT32=1`: the "Video settings" setting's choices).
 - `sim/rsp`, `sim/rdp`, `sim/rdp_dither`: see [rsp.md](rsp.md) and [rdp.md](rdp.md).
 
 ### The runtime: `lang/n64rt/test`
@@ -1371,7 +1404,7 @@ stores and branches, cost in cycles (the table in "The FPU").
 | Test | How it runs | What it checks |
 |---|---|---|
 | `pad_test.py` | on the host (needs gcc) | `n64rt_pad_map()` against an independent table, over every combination of settings |
-| `savedb_host.c` | on the host, with the address sanitiser (the command is in its header) | the database's lookup: its cases, the shipped file, random bytes |
+| `savedb_host.c` | on the host, with the address sanitiser (the command is in its header) | the database's lookup: its cases, the homebrew header, the shipped file, random bytes |
 | `cart_host.c` | on the host (the command is in its header) | the cartridge's byte and halfword reads (`n64rt_cart.h`) against the console's: a halfword of odd index reads the next one |
 | `tlb_insn_host.py` | on the host (needs gcc) | the runtime's TLB instructions against a model of the VR4300's registers, on random operations |
 | `rcp_bench.mk` | a ROM the released runtime runs in `sim/mips_soc` | the monitor's RCP emulation against the console's answers |

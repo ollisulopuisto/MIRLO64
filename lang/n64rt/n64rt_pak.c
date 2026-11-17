@@ -1,16 +1,18 @@
-/* The accessory in controller 1 -- the core's "Controller 1 pak" setting
- * (interact.json: word 0's bits 4-0), read at every access, so it can be
- * changed while a game runs -- and in controller 2: the "Controller 2 pak" setting (word 1's bits 4-0), None or a
- * Transfer Pak (SD), which makes controller 2 a pad that is there (with nothing pressed, when the dock reports none) so that
- * the game finds the pak. The values of controller 1's:
+/* The accessories in controllers 1 and 2 -- the core's "Controller paks" setting
+ * (interact.json: word 0's bits 4-0), read at every access, so it can be changed while a game runs. A Transfer Pak (SD)
+ * in controller 2 makes it a pad that is there (with nothing pressed, when the dock reports none) so that the game finds the pak.
+ * The values:
  *   0  nothing (the default, and what the setting word is until the Pocket
  *      has sent it: the cartridge slot is left alone)
- *   1  a Controller Pak
+ *   1  a Controller Pak in controller 1
  *   2  a Transfer Pak with the Game Boy cartridge that is in the Pocket's
- *      own slot
- *   3  a Transfer Pak with an SD cartridge: a Game Boy ROM and its save,
+ *      own slot, in controller 1
+ *   3  a Transfer Pak with an SD cartridge in controller 1: a Game Boy ROM and its save,
  *      files the Pocket loads (the slots "Transfer Pak 1" and "Game Boy Save 1"; n64rt_gbvirt.c)
- * Any other value is nothing. Controller 2's takes 3 as well (its own cartridge: the slots "2"); controllers 3 and 4 have none.
+ *   4  a Transfer Pak (SD) in controller 2 (its own cartridge: the slots "2")
+ *   5  a Transfer Pak (SD) in controllers 1 and 2
+ *   6  the Transfer Pak with the cartridge from the slot in controller 1 and a Transfer Pak (SD) in controller 2
+ * Any other value is nothing; controllers 3 and 4 have none. (Values 0 to 3 are what the setting "Controller 1 pak" had.)
  *
  * It is the accessory as the controller's joybus sees it: 32-byte blocks
  * read and written at a 16-bit address. The game's own libultra runs on top
@@ -259,12 +261,19 @@ int n64rt_pak_kind(int ch)
 {
     if (ch < 0 || ch >= NPAK) return N64RT_PAK_NONE;
 #ifdef N64RT_PAK_FORCE                          /* (a simulation, where nothing sets the core's settings) */
-    u32 k = ch == 0 ? N64RT_PAK_FORCE : 0u;
+    const u32 k = N64RT_PAK_FORCE;
 #else
-    u32 k = (ch == 0 ? apf_interact_interact0_read() : apf_interact_interact1_read()) & 31u;
+    const u32 k0 = apf_interact_interact0_read() & 31u;                  /* "Controller paks" */
+    const u32 k1 = apf_interact_interact1_read() & 31u;
+    const u32 k = ch == 0 ? k0 : (k0 >= 4u && k0 <= 6u ? k0 : k1);
 #endif
-    if (ch == 1) return k == 3u ? N64RT_PAK_VIRTUAL : N64RT_PAK_NONE;     /* (controller 2's: only the SD one) */
-    return k == 1u ? N64RT_PAK_CONTROLLER : k == 2u ? N64RT_PAK_TRANSFER : k == 3u ? N64RT_PAK_VIRTUAL : N64RT_PAK_NONE;
+    if (ch == 1) return (k >= 4u && k <= 6u) || k == 3u ? N64RT_PAK_VIRTUAL : N64RT_PAK_NONE;
+    switch (k) {
+    case 1: return N64RT_PAK_CONTROLLER;
+    case 2: case 6: return N64RT_PAK_TRANSFER;
+    case 3: case 5: return N64RT_PAK_VIRTUAL;
+    default: return N64RT_PAK_NONE;
+    }
 }
 
 /* a block of 32 bytes at address a (its low 5 bits clear); 0, or 1 with no pak there */
@@ -373,11 +382,11 @@ int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
 }
 
 /* ---- the accessory in a save state ------------------------------------------------------------------------------
- * A real Transfer Pak's cartridge is outside the core: its RAM, its mapper and its clock are its own, which no state can hold. So the state
+ * A real Transfer Pak's cartridge is outside the core: its RAM, its mapper and its clock are its own, which no state can hold. The SD one's are
+ * the runtime's (n64rt_gbvirt.c) and a state does not hold them either: the Game Boy game's own file is the one that keeps its save. So the state
  * has the pak unplugged (off, no cartridge there, "changed"), in the copy of the runtime's memory it makes -- the game that goes on does not see
- * it -- and the game that is put back finds the pak gone and looks again: the cartridge is in the Pocket's slot still, and the next time the game reads the
- * status the slot is looked at. The SD one's registers are in the runtime's memory and its RAM in a region of the state (n64rt_gbvirt.c): it goes
- * on as it was, unless its ROM is not there again (n64rt_gbv_resume) -- then it is unplugged, as well. */
+ * it -- and the game that is put back finds the pak gone and looks again: the cartridge is in the Pocket's slot still, or the SD one's is the
+ * booted runtime's (n64rt_state.c puts its copy of it over the state's), its RAM and clock the file's. */
 static __typeof__(s_tpv) s_tp_keep;
 static __typeof__(s_slotv) s_slot_keep;
 void n64rt_pak_state_begin(void)
@@ -385,7 +394,7 @@ void n64rt_pak_state_begin(void)
     memcpy(s_tp_keep, s_tpv, sizeof s_tpv);
     memcpy(s_slot_keep, s_slotv, sizeof s_slotv);
     for (int ch = 0; ch < NPAK; ch++)
-        if (n64rt_pak_kind(ch) == N64RT_PAK_TRANSFER) {
+        if (n64rt_pak_kind(ch) == N64RT_PAK_TRANSFER || n64rt_pak_kind(ch) == N64RT_PAK_VIRTUAL) {
             s_tpv[ch].on = 0; s_tpv[ch].access = 0; s_tpv[ch].changed = 1;
             s_slotv[ch].in = 0; s_slotv[ch].bus = 0; s_slotv[ch].pulled = 1;
         }
@@ -395,12 +404,12 @@ void n64rt_pak_state_end(void)
     memcpy(s_tpv, s_tp_keep, sizeof s_tpv);
     memcpy(s_slotv, s_slot_keep, sizeof s_slotv);
 }
-void n64rt_pak_state_resumed(u64 delta)
+void n64rt_pak_state_resumed(void)
 {
     for (int ch = 0; ch < NPAK; ch++) {
         s_ch = ch;
         s_slot.looked = 0;                              /* (a time of the old clock: look again at the next status read) */
-        if (n64rt_pak_kind(ch) == N64RT_PAK_VIRTUAL) { n64rt_gbv_resume(ch, delta); slot_look(1); }   /* (still in: nothing changes for the game) */
+        if (n64rt_pak_kind(ch) == N64RT_PAK_VIRTUAL) slot_look(1);   /* (the booted runtime's cartridge, or none: "changed" for the game, as the state had it gone) */
     }
     s_ch = 0;
 }

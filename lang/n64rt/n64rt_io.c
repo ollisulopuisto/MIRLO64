@@ -643,6 +643,7 @@ static void read_pad(OSContPad *p, int index)
  * when the dock reports a pad */
 static int pad_there(int i)
 {
+    if (n64rt_snac_present(i)) return 1;                   /* (a real controller on the SNAC port) */
     if (i == 0) return 1;
     if (n64rt_pak_kind(i) != N64RT_PAK_NONE) return 1;     /* (controller 2's "Transfer Pak (SD)": a pad that is there, nothing pressed if the dock has none) */
     u32 k = i == 1 ? apf_input_cont2_key_read() : i == 2 ? apf_input_cont3_key_read() : apf_input_cont4_key_read();
@@ -735,9 +736,10 @@ s32 n64rt_osPfsIsPlug(OSMesgQueue *mq, u8 *pattern)
  * the type their status command gets with the 4 Kbit one exactly (Pilotwings 64 shows "EEPROM CHECK FAILED", Super Mario 64,
  * Star Fox 64 and Mario Kart 64 never get past their first screen when it says 16 Kbit). So it is told from outside: by the
  * SAVE-TYPE DATABASE, a text file on the SD card (n64savedb.txt, data.json's slot 4, n64rt_savedb.h) with a line per
- * cartridge ID, looked up once at boot with the ID in the ROM's header (eep_db_init) -- no game is named here, and a game that
- * is not in the file, or no file, is a 4 Kbit chip. There is no setting to override it (the core had an "EEPROM size" one, Auto /
- * 4 Kbit / 16 Kbit, interact field 8: removed -- the database decides; fix a game's entry in the file).
+ * cartridge ID, looked up once at boot with the ID in the ROM's header (eep_db_init) -- no game is named here; a game that
+ * is not in the file, or no file, is what its homebrew header says (an ID "?ED?", n64rt_savedb_header), else a 4 Kbit chip.
+ * There is no setting to override it (the core had an "EEPROM size" one, Auto / 4 Kbit / 16 Kbit, interact field 8:
+ * removed -- the database decides; fix a game's entry in the file).
  * A block of 64 or more, which only a 16 Kbit game is asked for, makes the slot 2,048 bytes whatever the database says.
  * For tests and for trying a game, at build time only: N64RT_EEP16K forces 16 Kbit (make EEP16K=1); N64RT_EEP_FORCE (an
  * expression: 1 the 4 Kbit chip, 2 the 16 Kbit one, else the database) stands for a database in a simulation. */
@@ -764,17 +766,20 @@ static void eep_db_init(void)
     bridge_settle();
     u32 len = apf_bridge_file_size_read();
     apf_bridge_slot_id_write(prev);
-    s_eep_db_16k = 0;
-    if (len == 0) { n64rt_log("n64rt: no save-type database: the EEPROM is 4 Kbit\n"); return; }
     if (len > LAYOUT_SAVEDB_MAX) len = LAYOUT_SAVEDB_MAX;
     const u32 w = n64rt_rom_word(0x38u), v = n64rt_rom_word(0x3Cu);       /* 0x3B..0x3E: the ID, 0x3F: the version */
     const unsigned char id[4] = { (unsigned char)w, (unsigned char)(v >> 24), (unsigned char)(v >> 16), (unsigned char)(v >> 8) };
-    const int kind = n64rt_savedb_lookup((const char *)(uintptr_t)LAYOUT_SAVEDB, len, id, v & 0xFFu);
+    /* the file first (a line corrects anything), then the ROM's own homebrew header ("?ED?", n64rt_savedb.h) */
+    int kind = len ? n64rt_savedb_lookup((const char *)(uintptr_t)LAYOUT_SAVEDB, len, id, v & 0xFFu) : N64RT_SAVEDB_NONE;
+    const int from_file = kind != N64RT_SAVEDB_NONE;
+    if (!from_file) kind = n64rt_savedb_header(id, v & 0xFFu);
     s_eep_db_16k = kind == N64RT_SAVEDB_EEP16K;
     static const char *const names[] = { "not in the file", "eeprom4k", "eeprom16k", "sram", "flash", "none" };
-    n64rt_log("n64rt: save-type database of %lu bytes: %c%c%c%c version %lu is %s\n", (unsigned long)len,
+    if (!len && kind == N64RT_SAVEDB_NONE) { n64rt_log("n64rt: no save-type database: the EEPROM is 4 Kbit\n"); return; }
+    n64rt_log("n64rt: save-type database of %lu bytes: %c%c%c%c version %lu is %s%s\n", (unsigned long)len,
            id[0] >= 32 && id[0] < 127 ? id[0] : '?', id[1] >= 32 && id[1] < 127 ? id[1] : '?', id[2] >= 32 && id[2] < 127 ? id[2] : '?',
-           id[3] >= 32 && id[3] < 127 ? id[3] : '?', (unsigned long)(v & 0xFFu), names[kind]);
+           id[3] >= 32 && id[3] < 127 ? id[3] : '?', (unsigned long)(v & 0xFFu), names[kind],
+           from_file || kind == N64RT_SAVEDB_NONE ? "" : " (the ROM's homebrew header)");
 }
 static u32 s_eep_bytes;                 /* the EEPROM's part of the slot in use (0: the game has not spoken to one) */
 static void eep_use(u32 bytes)
@@ -808,14 +813,17 @@ static u8 s_pif_joy;                    /* the block holds commands */
  * mark, 37,987 for one controller read, 97,890 for four with one controller there -- 13,600, then 1,420 for each byte that
  * is no command (0x00, 0xFD, 0xFF, the end), 22,000 for a command a device answers, 18,000 for one nothing answers (the
  * timeout), 20,000 for the cartridge's; a command longer than a controller read's 5 bytes (a pak's block, 36) adds the
- * joybus's 32 us (2,000) for each byte more. */
+ * joybus's 32 us (2,000) for each byte more. A command forwarded to a real device on the SNAC port takes the figure above, or PIF_TREAL (the console's
+ * 22,000 for a controller read less its 5 bytes' line time) plus the time the wire really took (the SoC clocks the runtime waited for it), if that is more. */
 #define PIF_T0    13600u
 #define PIF_TSKIP 1420u
 #define PIF_TCMD(ok, ch, n) (((ch) == 4 ? 20000u : (ok) ? 22000u : 18000u) + ((n) > 5u ? ((n) - 5u) * 2000u : 0u))
+#define PIF_TREAL 10500u
 static u32 pif_run(void)
 {
     int ch = 0;
     u32 t = PIF_T0;
+    n64rt_snac_sync();                               /* (the setting, and who is on the SNAC port) */
     for (int i = 0; i < 63 && ch < 6; ) {
         u8 tx = s_pif[i];
         if (tx == 0xFEu) { t += PIF_TSKIP; break; }
@@ -827,6 +835,25 @@ static u32 pif_run(void)
         u8 *cmd = &s_pif[i + 2], *rep = cmd + tx;
         if (i + 2 + tx + rx > 63) break;
         int ok = 0;
+        if (ch < 4 && tx != 0 && n64rt_snac_present(ch)) {
+            /* a real device on the SNAC port: the game's own command bytes go to it and its raw reply, with its own CRC byte, comes back as it
+             * is; the "no response" flag (0x80, below) is the wire's timeout, 0x40 a reply that was short. The time is the console's figure for
+             * the command or, if the wire took longer, the wire's own (the clocks the runtime waited). The game's Count does not run while the
+             * monitor does, so the game sees none of the wait itself: the time the SI hands it is the whole of the console's. */
+            u32 got = 0;
+            const int r = n64rt_snac_xfer(ch, cmd, tx, rep, rx, &got);
+            const u32 w = n64rt_snac_wait_take();
+            ok = got != 0;
+            if (ok && (r & 2)) s_pif[i + 1] |= 0x40u;
+            if (!ok) s_pif[i + 1] |= 0x80u;
+            {   /* the console's figure for the command, or the wire's own time if a device is slower than that */
+                const u32 c = PIF_TCMD(ok, ch, (u32)tx + rx), r = PIF_TREAL + w;
+                t += r > c ? r : c;
+            }
+            i += 2 + tx + rx;
+            ch++;
+            continue;
+        }
         if (ch < 4 && pad_there(ch)) {
             const int pak = n64rt_pak_kind(ch) != N64RT_PAK_NONE;
             if ((cmd[0] == 0x00u || cmd[0] == 0xFFu) && rx >= 3) { rep[0] = 0x05; rep[1] = 0x00; rep[2] = pak ? 0x01 : 0x02; ok = 1; }   /* a pad, its pak */
@@ -1298,6 +1325,7 @@ void n64rt_io_init(void)
     ctrl_init();
     n64rt_cheat_init();
     n64rt_pak_init();
+    n64rt_snac_sync();                                   /* (after the cartridge slot's owner is known) */
     extern void n64rt_audio_init(void), n64rt_gfx_init(void);
     n64rt_audio_init();
     n64rt_gfx_init();
@@ -1371,7 +1399,7 @@ void n64rt_mi_init(void)
     /* (bit 10, written with bit 11: the game's RDRAM is 4 MiB -- the console without its Expansion Pak, the core's setting:
      * the game's accesses to the upper half come here, and are answered as RDRAM that is not there, n64rt_os.c emulate_hw) */
     /* (bit 12, written with bit 13: 0x2000_0000 - 0x4FFF_FFFF are the game's mapped addresses while it runs -- not the monitor
-     * level, not a helper of the runtime's with Status bit 4, n64rt_boot.c ul_patch --, as the rest of the VR4300's KUSEG: a game
+     * level, not code of the runtime's with Status bit 4 --, as the rest of the VR4300's KUSEG: a game
      * can map an overlay at 0x4000_0000 and run it there. A core without it reads the bit 0 and keeps them physical) */
     /* (bit 14, written with bit 15: the game's word accesses to the SP's registers, SP_PC and the DPC's -- but its stores of
      * DPC_STATUS, whose CLR_CLOCK_CTR keeps DPC_CLOCK here -- are the RSP's host port's, no trap: rcp_read_ / rcp_write_ pass
@@ -1412,7 +1440,9 @@ void n64rt_si_hw_event(void)
     for (int i = 0; i < 16; i++) orig[i] = s_pif_w[i] = hw_rd(PIF_RAM + 4u * (u32)i);
     u32 t = 0;
     if (s_pif[63] & 2u) pif_challenge();             /* (the status byte keeps that bit: a challenge, not commands) */
-    else { t = pif_run(); n64rt_si_joy = 1; }
+    else {
+        t = pif_run(); n64rt_si_joy = 1;
+    }
     for (int i = 0; i < 16; i++) if (s_pif_w[i] != orig[i]) hw_wr(PIF_RAM + 4u * (u32)i, s_pif_w[i]);
     monitor_sidone_write(t < 0x3FFFFu ? t : 0x3FFFFu);
 }

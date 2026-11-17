@@ -210,6 +210,9 @@ module mips_core #(
     parameter bit W64_DIV = 0,
     // (with W64_SH, FAST, XWB and BIG) ldl, ldr, sdl, sdr: left out (a Reserved Instruction, the runtime's) unless this is set
     parameter bit W64_UA = 0,
+    // FPD64 (with FAST): add.d, sub.d, mul.d, abs.d, neg.d and the compares of doubles exact, at 53 bits, in fpu_d64 (a few cycles each, on
+    // an adder, a shifter and a DSP block); div.d, sqrt.d and the conversions stay on the FPU's single-precision datapath. COP0 register 7's bit 26.
+    parameter bit FPD64 = 0,
     // for a clock half as fast again (docs/mips.md): what the caches hold is
     // used before its tag is looked at, and a branch's compare no longer
     // reaches the next fetch
@@ -297,6 +300,7 @@ localparam bit XSH  = XALU && W64_SH;        // its shifter
 localparam bit XMD  = XALU && W64_MD;        // dmult(u); HI and LO of 64 bits
 localparam bit XDIV = XMD && W64_DIV;        // ddiv(u)
 localparam bit XUA  = XSH && W64_UA && FAST && XWB && BIG;   // ldl, ldr, sdl, sdr: the d-shifter's register, a byte a cycle
+localparam bit XFPD = FPD64 && FAST;                  // double-precision add, sub, mul, abs, neg and compares (fpu_d64)
 localparam bit PG   = (TLB_RAM || TLB_EN) && FAST && FLAT && N64WIN;     // the fetch page registers
 
 // =============================================================== decode
@@ -511,7 +515,7 @@ function automatic logic [31:0] sx16(input logic [15:0] v); return {{16{v[15]}},
 // read there byte by byte. 0xF000_0000 - 0xFFFF_FFFF stay physical: the registers, the monitor RAM.)
 // (and, in the game's view only -- `gv`: MCTL bits 12 and 1 set, Status.ERL and Status.KSU's bit 4 clear, see game_view -- the rest of
 // KUSEG, 0x2000_0000 - 0x4FFF_FFFF: a game can map code at 0x4000_0000, unpack an overlay into it and jump there. The
-// monitor level (ERL) and the runtime's helpers that the game's code calls (n64rt_boot.c, ul_patch: they set bit 4) see
+// monitor level (ERL) and any code of the runtime's that the game's code calls with bit 4 set see
 // the RSP and the SDRAM there, as the runtime itself does.)
 localparam bit MAP_HI = (TLB_RAM || TLB_EN) && MON;
 function automatic logic map_hi(input logic [31:0] va);
@@ -581,8 +585,9 @@ function automatic logic [31:0] hx32(input logic [63:0] v); return v[63:32] ^ {3
 function automatic logic [63:0] v64(input logic [31:0] hx, input logic [31:0] lo); return {hx ^ {32{lo[31]}}, lo}; endfunction
 
 logic [31:0] c0_index, c0_entrylo0, c0_entrylo1, c0_context, c0_pagemask, c0_wired, c0_badvaddr,
-             c0_count, c0_entryhi, c0_compare, c0_cause, c0_epc, c0_config, c0_lladdr,
-             c0_watchlo, c0_watchhi, c0_taglo, c0_errorepc;
+             c0_count, c0_entryhi, c0_compare, c0_cause, c0_epc, c0_config, c0_errorepc;
+// (no LLAddr, WatchLo, WatchHi, TagLo: they only store what mtc0 gives them -- LL's address, the watch of an access that no exception follows
+// here, a cache tag -- and no game reads them back; mfc0 finds 0 there and mtc0 does nothing)
 logic        count_frac;
 logic [4:0]  c0_random;                     // decrements every step, from 31 down to Wired
 wire  [4:0]  rnd_dec = (c0_random <= c0_wired[4:0]) ? 5'd31 : c0_random - 5'd1;
@@ -798,7 +803,7 @@ logic [$clog2(RASN):0]   ras_n;              // how many are valid
 logic [29:0] d_jt;
 wire  [1:0]  bh_rd = bh[f_pc[BH+1:2]];
 wire  [29:0] ras_rd = ras[ras_t];
-logic        rp_pend, rp_m;                  // FAST: a load took another line's word: again from its pc -- W's by now, or (rp_m) M's still
+logic        rp_pend;                        // FAST: a load took another line's word: again from its pc (w_pc: M's of the cycle before)
 logic [31:0] d_fill_pa;
 logic [31:0] d_pc, d_insn;
 logic [4:0]  d_fexc_code;
@@ -1126,6 +1131,19 @@ always_comb begin
 end
 // ldl, ldr, sdl, sdr (XUA): a doubleword access at any address -- no alignment requirement, and its first read is the doubleword's first word
 wire e_ua = XUA && (e_c.ld == M_LDL || e_c.ld == M_LDR || e_c.st == S_SDL || e_c.st == S_SDR);
+// W's selects (see m_s_c0): the chains' conditions on E's instruction, in their priority
+wire e_ldw = e_c.ld != M_NONE && !e_ua;                                           // (m_ldw)
+wire e_xsh = XSH && (e_c.x64 == X_SLL || e_c.x64 == X_SRL || e_c.x64 == X_SRA);   // (m_xshift)
+wire e_xcm = XALU && (e_c.x64 == X_SLT || e_c.x64 == X_SLTU);                     // (m_xcmp)
+wire e_cp  = e_c.mfc0 || e_c.cop1_gpr || e_c.st == S_SC;
+wire e_s_c0 = e_c.mfc0, e_s_fp = !e_c.mfc0 && e_c.cop1_gpr, e_s_sc = !e_c.mfc0 && !e_c.cop1_gpr && e_c.st == S_SC;
+wire e_s_ld = !e_cp && e_ldw, e_s_xc = !e_cp && !e_ldw && e_xcm, e_s_sh = !e_cp && !e_ldw && !e_xcm && XALU && e_xsh;
+wire e_s_res = !e_cp && !e_ldw && !e_xcm && !(XALU && e_xsh);
+wire e_h_lwu = e_ldw && e_c.ld == M_LWU, e_h_ld = e_ldw && e_c.ld == M_LD;
+wire e_h_c1 = !e_ldw && e_c.cop1_64, e_h_sh = !e_ldw && !e_c.cop1_64 && XALU && e_xsh;
+wire e_h_x = !e_ldw && !e_c.cop1_64 && !(XALU && e_xsh) && XALU && e_c.x64 != X_NONE && !e_xcm;
+wire e_h_al = e_h_x && (e_c.x64 == X_ADD || e_c.x64 == X_SUB || e_c.x64 == X_AND || e_c.x64 == X_OR || e_c.x64 == X_XOR || e_c.x64 == X_NOR);
+wire e_h_hi = e_h_x && e_c.x64 == X_MFHI, e_h_lo = e_h_x && e_c.x64 == X_MFLO;
 wire e_misalign = (e_al2 && e_ea[0]) || (e_al4 && e_ea[1:0] != 0) || (e_al8 && e_ea[2:0] != 0);
 // N64WIN: the game touching what is not RDRAM (Mirlo's runtime emulates it)
 // (MI: the MI's and PI_STATUS' word accesses, in KSEG0 or KSEG1, are the device port's. The address error they would
@@ -1341,7 +1359,19 @@ wire [31:0]  m_xhb = m_c.b_imm ? (m_c.imm_zero ? 32'd0 : {32{m_insn[15]}}) : m_s
 // (FAST: a compare is the 64-bit subtraction too -- E's adder subtracts the lower words for it (e_k_sub), its carry is m_xc,
 // and the upper words' go through this adder: no borrow out of it is "not below", its sign decides operands of one sign)
 wire         m_xsub = m_c.x64 == X_SUB || (FAST && (m_c.x64 == X_SLT || m_c.x64 == X_SLTU));
-wire [32:0]  m_xsum_c = {1'b0, m_xha} + {1'b0, m_xhb ^ {32{m_xsub}}} + 33'(m_xc);
+// (and the logic operations are the adder's too -- the result of the operation as one addend, zero the other and no carry -- so that
+// W's hx chooses among fewer sources)
+wire         m_xlogic = m_c.x64 == X_AND || m_c.x64 == X_OR || m_c.x64 == X_XOR || m_c.x64 == X_NOR;
+logic [31:0] m_xla;
+always_comb case (m_c.x64)
+    X_AND:   m_xla = m_xha & m_xhb;
+    X_OR:    m_xla = m_xha | m_xhb;
+    X_XOR:   m_xla = m_xha ^ m_xhb;
+    default: m_xla = ~(m_xha | m_xhb);
+endcase
+wire [31:0]  m_xa = m_xlogic ? m_xla : m_xha;
+wire [31:0]  m_xb = m_xlogic ? 32'd0 : m_xhb ^ {32{m_xsub}};
+wire [32:0]  m_xsum_c = {1'b0, m_xa} + {1'b0, m_xb} + 33'(m_xc && !m_xlogic);
 wire [31:0]  m_xsum = m_xsum_c[31:0];
 wire         m_xlt = FAST ? (m_c.x64 == X_SLT ? ((m_xha[31] != m_xhb[31]) ? m_xha[31] : m_xsum[31]) : !m_xsum_c[32])
                    : (m_xha != m_xhb) ? (m_c.x64 == X_SLT ? $signed(m_xha) < $signed(m_xhb) : m_xha < m_xhb) : m_xltu;
@@ -1349,11 +1379,7 @@ wire         m_xlt = FAST ? (m_c.x64 == X_SLT ? ((m_xha[31] != m_xhb[31]) ? m_xh
 logic [31:0] m_xhx;
 always_comb begin
     case (m_c.x64)
-    X_ADD, X_SUB: m_xhx = m_xsum ^ {32{m_res[31]}};
-    X_AND:        m_xhx = (m_xha & m_xhb) ^ {32{m_res[31]}};
-    X_OR:         m_xhx = (m_xha | m_xhb) ^ {32{m_res[31]}};
-    X_XOR:        m_xhx = (m_xha ^ m_xhb) ^ {32{m_res[31]}};
-    X_NOR:        m_xhx = ~(m_xha | m_xhb) ^ {32{m_res[31]}};
+    X_ADD, X_SUB, X_AND, X_OR, X_XOR, X_NOR: m_xhx = m_xsum ^ {32{m_res[31]}};
     X_MFHI:       m_xhx = hi_up ^ {32{m_res[31]}};
     X_MFLO:       m_xhx = lo_up ^ {32{m_res[31]}};
     default:      m_xhx = 32'd0;
@@ -1377,6 +1403,20 @@ wire        ua_go  = !m_k_ua || !m_ld || ua_rdy;
 wire        ua_sel = m_ld && (ua_u[3] ^ !m_insn[26]);
 wire  [7:0] ua_feed = ua_sel ? ms_data[8 * (3'd7 - ua_u[2:0]) +: 8] : sh_r[63:56];
 wire         m_xcmp = m_c.x64 == X_SLT || m_c.x64 == X_SLTU;
+
+// (FAST) W's result and hx by one-hot selects, found as the instruction leaves E (the priority of the chains below, resolved there:
+// registered flags, not a decode of m_c behind every bit's choice)
+logic m_s_c0, m_s_fp, m_s_sc, m_s_ld, m_s_xc, m_s_sh, m_s_res;       // w_res: mfc0, mfc1 / cfc1 / dmfc1, sc, a load, a 64-bit compare, a d-shift, E's result
+logic m_h_lwu, m_h_ld, m_h_c1, m_h_sh, m_h_al, m_h_hi, m_h_lo;       // w_hx: lwu, ld, dmfc1, a d-shift, dadd / dsub / and / or / xor / nor, mfhi, mflo
+logic [31:0] m_wres_d, m_whx_d;
+always_comb begin
+    m_wres_d = ({32{m_s_c0}} & c0_rd) | ({32{m_s_fp}} & fpu_gpr_out[31:0]) | ({32{m_s_ld}} & m_ld_val) | ({32{m_s_sh}} & sh_r[31:0]) | ({32{m_s_res}} & m_res);
+    m_wres_d[0] = m_wres_d[0] | (m_s_sc & ll_bit) | (m_s_xc & m_xlt);
+    // (hx is the upper word XOR the lower word's sign: the upper word and the sign are chosen, then the one XOR)
+    m_whx_d = ({32{m_h_ld}} & m_w64[63:32]) | ({32{m_h_c1}} & fpu_gpr_out_hi) | ({32{m_h_sh}} & sh_r[63:32]) | ({32{m_h_al}} & m_xsum)
+            | ({32{m_h_hi}} & hi_up) | ({32{m_h_lo}} & lo_up);
+    m_whx_d = m_whx_d ^ {32{(m_h_lwu & m_word[31]) | (m_h_ld & m_w64[31]) | (m_h_c1 & fpu_gpr_out[31]) | (m_h_sh & sh_r[31]) | ((m_h_al | m_h_hi | m_h_lo) & m_res[31])}};
+end
 
 // stores: data and strobes of the word at m_addr (lane 3 - k is N64 byte k);
 // sd's by which of its two words is being written
@@ -1417,8 +1457,8 @@ always_comb begin
     5'd1: c0_rd = {27'd0, rnd_now};
     5'd2: c0_rd = c0_entrylo0; 5'd3: c0_rd = c0_entrylo1; 5'd4: c0_rd = c0_context;
     5'd5: c0_rd = c0_pagemask; 5'd6: c0_rd = c0_wired;    5'd8: c0_rd = c0_badvaddr;
-    // (31:27: which of the 64-bit levels this core has -- W64_ALU, W64_SH, W64_MD, W64_DIV, W64_UA; a core before them reads 0 there)
-    5'd7: c0_rd = {XALU, XSH, XMD, XDIV, XUA, 12'd0, SPW ? mon_sp : 1'b0, 1'b0, MAP_HI ? mon_klo : 1'b0, 1'b0, MON ? mon_mem4 : 1'b0, 1'b0, MON ? mon_mi : 1'b0, MON ? {mon_code, mon_bd, mon_game} : 7'd0, hilo_soft};
+    // (31:27: which of the 64-bit levels this core has -- W64_ALU, W64_SH, W64_MD, W64_DIV, W64_UA; a core before them reads 0 there; bit 26: FPD64)
+    5'd7: c0_rd = {XALU, XSH, XMD, XDIV, XUA, XFPD, 11'd0, SPW ? mon_sp : 1'b0, 1'b0, MAP_HI ? mon_klo : 1'b0, 1'b0, MON ? mon_mem4 : 1'b0, 1'b0, MON ? mon_mi : 1'b0, MON ? {mon_code, mon_bd, mon_game} : 7'd0, hilo_soft};
     // (TLB_RAM: bit 0, the game's TLB instructions are the monitor's; TLB_EN: 'T' 'L' 'B', bit 2 cached fetches from mapped pages
     // (the page registers), bit 1 the real TLB, bit 0 the monitor)
     5'd23: c0_rd = TLB_EN ? {24'h544C42, 5'd0, PG, 1'b1, MON} : TLB_RAM ? {28'h5442000, tr_lastf, 2'b00, MON} : 32'd0;
@@ -1426,9 +1466,7 @@ always_comb begin
     5'd9: c0_rd = (SIM_COUNT_RETIRE && count_frac) ? c0_count + 32'd1 : c0_count;   // (the model counts before executing)
     5'd10: c0_rd = c0_entryhi; 5'd11: c0_rd = c0_compare;
     5'd12: c0_rd = c0_status;  5'd13: c0_rd = cause_now;  5'd14: c0_rd = c0_epc;   // (Cause: IP2 live, as the model)
-    5'd15: c0_rd = 32'h00000B22; 5'd16: c0_rd = c0_config; 5'd17: c0_rd = c0_lladdr;
-    5'd18: c0_rd = c0_watchlo; 5'd19: c0_rd = c0_watchhi;
-    5'd28: c0_rd = c0_taglo;   5'd30: c0_rd = c0_errorepc;
+    5'd15: c0_rd = 32'h00000B22; 5'd16: c0_rd = c0_config; 5'd30: c0_rd = c0_errorepc;
     default: c0_rd = 32'd0;
     endcase
 end
@@ -1445,6 +1483,8 @@ wire int_pending = int_game || int_mon;
 logic int_pend_r, int_mon_r;
 always_ff @(posedge clk) begin int_pend_r <= int_pending; int_mon_r <= int_mon; end
 wire m_take_int = m_valid && (FAST ? int_pend_r : int_pending) && ms == MS_IDLE && !m_ph;
+// (the address EPC / ErrorEPC take: the branch's, if M's is in its delay slot -- the word address less the flag, one decrement)
+wire [31:0] m_epc = {m_pc[31:2] - 30'(m_dly), m_pc[1:0]};
 wire m_exc_v = m_exc && !(m_hwx && m_dev);          // (MI: the game's word access to a register the hardware has is no exception)
 wire m_take_exc = m_valid && !m_take_int && (m_exc_v || m_tlb_fault);
 wire [4:0] m_code = m_exc_v ? m_exc_code : m_tlb_code;
@@ -1552,7 +1592,7 @@ wire d_adv = e_adv && !d_stall;
 wire flush = m_take_int || m_take_exc || (m_commit_e && m_c.eret) || (FAST && rp_pend);
 logic [31:0] flush_pc;
 always_comb begin
-    if (FAST && rp_pend) flush_pc = rp_m ? m_pc : w_pc;
+    if (FAST && rp_pend) flush_pc = w_pc;
     else if (m_commit_e && m_c.eret) flush_pc = c0_status[2] ? c0_errorepc : c0_epc;
     else if (m_to_game) flush_pc = (m_refill && !c0_status[1]) ? 32'h8000_0000 : 32'h8000_0180;     // (the TLB refill vector, when no exception is being handled)
     else flush_pc = (c0_status[22] ? 32'hBFC00200 : EXC_BASE) + ((m_refill && !c0_status[1] && !FLAT) ? 32'h0 : 32'h180);   // (FLAT: one vector -- a miss there is the runtime's to report)
@@ -1891,7 +1931,7 @@ end
 
 // COP1: at M; its results are written as the instruction completes
 wire m_fpu = FAST ? m_k_fpu : m_c.cop1 || m_c.ld == M_FL || m_c.st == S_FS;
-fpu_n64 #(.FAST(FAST)) fpu (
+fpu_n64 #(.FAST(FAST), .D64(XFPD)) fpu (
     .clk, .rst,
     .insn_next(m_adv ? e_insn : m_insn), .insn(m_insn), .insn_e(e_insn), .adv(m_adv),
     .live((FAST ? m_valid : m_live) && m_fpu), .valid(fpu_valid),      // (FAST: an instruction taken out by an exception is not in M the next cycle; the flush is not in the FPU's state)
@@ -1934,8 +1974,7 @@ always_ff @(posedge clk) begin
         d_valid <= 0; e_valid <= 0; m_valid <= 0; w_valid <= 0;
         c0_status <= 32'h34000000; c0_config <= 32'h7006E463; c0_cause <= 0; c0_count <= 0; c0_compare <= 0;
         c0_wired <= 0; c0_index <= 0; c0_entryhi <= 0; c0_entrylo0 <= 0; c0_entrylo1 <= 0; c0_pagemask <= 0;
-        c0_context <= 0; c0_epc <= 0; c0_errorepc <= 0; c0_badvaddr <= 0; c0_lladdr <= 0; c0_watchlo <= 0;
-        c0_watchhi <= 0; c0_taglo <= 0;
+        c0_context <= 0; c0_epc <= 0; c0_errorepc <= 0; c0_badvaddr <= 0;
         count_frac <= 0; c0_random <= 5'd31; ll_bit <= 0; fcc <= 0;
         hi_r <= 0; lo_r <= 0; hi_up <= 0; lo_up <= 0; hi_wide <= 0; lo_wide <= 0; m_ph <= 0; sh_on <= 0; m_shwait <= 0; m_xshift <= 0;
         hilo_soft <= 0; tr_lastf <= 0; mon_game <= 0; mon_mi <= 0; mon_bd <= 0; mon_code <= 0; mon_mem4 <= 0; mon_klo <= 0; mon_sp <= 0;
@@ -1964,21 +2003,27 @@ always_ff @(posedge clk) begin
         // ---------------------------------------------------- M -> W
         w_valid <= FAST ? m_commit_e : m_commit;
         w_lm <= m_lmiss;
+        w_pc <= m_pc;           // (every cycle: the pc that M had last cycle -- a load that took another line's word is run again from it, whether it moved on to W or not)
         if (m_commit_e) begin
-            w_c <= m_c; w_pc <= m_pc; w_insn <= m_insn; w_serial <= m_serial;
+            w_c <= m_c; w_insn <= m_insn; w_serial <= m_serial;
+            if (FAST) begin
+                w_res <= m_wres_d;
+                w_hx <= W64 ? m_whx_d : 32'd0;
+            end else begin
             if (m_c.mfc0) w_res <= c0_rd;
             else if (m_c.cop1_gpr) w_res <= fpu_gpr_out[31:0];
             else if (m_c.st == S_SC) w_res <= {31'd0, !m_sc_fail};
-            else if (FAST ? m_ldw : m_ld) w_res <= m_ld_val;
+            else if (m_ld) w_res <= m_ld_val;
             else if (XALU && m_xcmp) w_res <= {31'd0, m_xlt};
             else if (XALU && m_xshift) w_res <= sh_r[31:0];                 // (ldl, ldr: the doubleword as rotated and merged)
             else w_res <= m_res;
             w_hx <= 32'd0;
             if (W64) begin
-                if (FAST ? m_ldw : m_ld) w_hx <= m_ld_hx;
+                if (m_ld) w_hx <= m_ld_hx;
                 else if (m_c.cop1_64) w_hx <= fpu_gpr_out_hi ^ {32{fpu_gpr_out[31]}};   // dmfc1
                 else if (XALU && m_xshift) w_hx <= hx32(sh_r);
                 else if (XALU && m_c.x64 != X_NONE && !m_xcmp) w_hx <= m_xhx;
+            end
             end
         end
 
@@ -1986,12 +2031,12 @@ always_ff @(posedge clk) begin
         if (m_take_int || m_take_exc) begin
             if (m_to_mon) begin
                 // the monitor level (MON): ERL and ErrorEPC; what the game's handler may be in the middle of is not touched
-                c0_errorepc <= m_dly ? m_pc - 32'd4 : m_pc;
+                c0_errorepc <= m_epc;
                 c0_status[2] <= 1'b1;
                 mon_bd <= m_dly; mon_code <= m_take_int ? 5'd31 : m_code;
             end else begin
                 if (!c0_status[1]) begin
-                    c0_epc <= m_dly ? m_pc - 32'd4 : m_pc;
+                    c0_epc <= m_epc;
                     c0_cause[31] <= m_dly;
                 end
                 c0_cause[6:2] <= m_take_int ? 5'd0 : m_ccode;
@@ -2028,17 +2073,13 @@ always_ff @(posedge clk) begin
             if (m_st && !m_sc_fail && m_cached && m_dc_hit) begin
                 sb_valid <= 1; sb_waddr <= m_cst_idx; sb_data <= m_cst_data; sb_strb <= m_cst_strb;
             end
-            // (LLAddr: the N64's physical address >> 4, as the VR4300's -- with N64WIN the RDRAM's place in the SDRAM is not the game's)
-            if (m_c.ld == M_LL && !m_lmiss) begin ll_bit <= 1'b1; c0_lladdr <= (FLAT && N64WIN && m_pa[31:23] == N64_RDRAM[31:23]) ? {13'd0, m_pa[22:4]} : m_pa >> 4; end
+            if (m_c.ld == M_LL && !m_lmiss) ll_bit <= 1'b1;
             if (m_c.st == S_SC) ll_bit <= 1'b0;
             if (m_c.cop1 && m_c.cop1_cond) fcc <= fpu_cond;
             // mthi, mtlo: written in the next cycle, from md_ma (rs's lower word, which the multiplier's
             // operand register takes every cycle) and md_ah -- md_busy holds back whoever reads them
             if (m_c.md == MD_MTHI || m_c.md == MD_MTLO) begin md_mt <= 1'b1; md_mth <= m_c.md == MD_MTHI; md_busy <= 1'b1; end
             if (m_is_md && m_c.md != MD_MTHI && m_c.md != MD_MTLO) hilo_soft <= 1'b0;   // (a multiply or a divide: HI and LO are the core's again)
-            // A write-through cache has no dirty lines for software to write
-            // back. Report an invalid tag to cache-walking writeback code.
-            if (m_c.cache && m_insn[20:16] == 5'h05) c0_taglo <= 0;
             if (m_c.mtc0) begin
                 case (m_insn[15:11])
                 5'd1, 5'd15: ;                                      // Random, PRId: read-only
@@ -2065,9 +2106,7 @@ always_ff @(posedge clk) begin
                 5'd10: c0_entryhi <= m_st_lo & 32'hFFFFE0FF;  5'd12: c0_status <= m_st_lo & 32'hFFF7FFFF;   // (Status bit 19 is not writable)
                 5'd14: c0_epc <= m_st_lo;
                 5'd16: c0_config <= (c0_config & ~32'h0F00800F) | (m_st_lo & 32'h0F00800F);
-                5'd17: c0_lladdr <= m_st_lo;
-                5'd18: c0_watchlo <= m_st_lo & 32'hFFFFFFFB;  5'd19: c0_watchhi <= m_st_lo & 32'hF;
-                5'd28: c0_taglo <= m_st_lo & 32'h0FFFFFC0;    5'd30: c0_errorepc <= m_st_lo;
+                5'd30: c0_errorepc <= m_st_lo;
                 default: ;
                 endcase
             end
@@ -2137,6 +2176,8 @@ always_ff @(posedge clk) begin
                 m_k_md <= e_c.md != MD_NONE; m_k_fpu <= e_c.cop1 || e_c.ld == M_FL || e_c.st == S_FS;
                 m_k_sbeq <= m_cst_idx == {e_ea[DW+1:3], e_ea[2] && !e_ua};   // (it is behind the store that is at M now; its read, dc_raddr's)
                 m_k_sstrb <= e_sstrb; m_k_sfs <= e_c.st == S_FS; m_k_ssd <= e_c.st == S_SD;
+                m_s_c0 <= e_s_c0; m_s_fp <= e_s_fp; m_s_sc <= e_s_sc; m_s_ld <= e_s_ld; m_s_xc <= e_s_xc; m_s_sh <= e_s_sh; m_s_res <= e_s_res;
+                m_h_lwu <= e_h_lwu; m_h_ld <= e_h_ld; m_h_c1 <= e_h_c1; m_h_sh <= e_h_sh; m_h_al <= e_h_al; m_h_hi <= e_h_hi; m_h_lo <= e_h_lo;
             end
             m_st_lo <= FAST ? e_sdata : e_b;        // (FAST: a store's word in its lanes already)
             m_a_lo <= e_a;
@@ -2147,7 +2188,7 @@ always_ff @(posedge clk) begin
         // FAST: the load of the wrong line, and what came in behind it, go;
         // the line is read (ms, below) and the fetch made again from the load
         rp_pend <= 1'b0;
-        if (FAST && m_lmiss) begin m_valid <= 1'b0; rp_pend <= 1'b1; rp_m <= !m_adv; end
+        if (FAST && m_lmiss) begin m_valid <= 1'b0; rp_pend <= 1'b1; end
         if (FAST && (ms == MS_IDLE || (PGD && ms == MS_XLAT))) d_fill_pa <= m_pa;
         if (flush || m_adv || CK_W == 0) ck_n <= '0;
         else if (m_cache_go && ck_run) ck_n <= ck_n + 1'b1;
@@ -2447,7 +2488,6 @@ always_ff @(posedge clk) begin
         // too, four products of the operands' halves and their sum (see md_ma). The rest a
         // bit a cycle, restoring, on the magnitudes: div(u) and ddiv(u) on the divider of the declarations (XDIV), or (no
         // XDIV) div(u) on md_acc and one adder.
-        if (XMD && !md_dm) md_ac <= '0;                           // (the sum's start, with no wait for M)
         if (m_commit_e && m_is_md && m_c.md != MD_MTHI && m_c.md != MD_MTLO) begin
             logic sgn, w;
             w = XDIV && (m_c.md == MD_DDIV || m_c.md == MD_DDIVU);
@@ -2546,6 +2586,8 @@ always_ff @(posedge clk) begin
                 lo_wide <= 1'b0; hi_wide <= 1'b0;
             end
         end
+        // (the sum's start, with no wait for M: the last word of the block, as a clear)
+        if (XMD && !md_dm) md_ac <= '0;
     end
 end
 

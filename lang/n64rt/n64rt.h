@@ -300,14 +300,20 @@ void n64rt_io_init(void);
 extern u32 n64rt_yield_wait_ms;            /* a port's: a graphics task's yield held back this long (n64rt_rsp.c) */
 /* the accessories of controllers 1 and 2 (n64rt_pak.c): the game's own osPfs* and osGbpak*
  * run on these blocks */
-enum { N64RT_PAK_NONE, N64RT_PAK_CONTROLLER, N64RT_PAK_TRANSFER, N64RT_PAK_VIRTUAL };   /* (the "Controller 1 pak" setting's values: n64rt_pak.c) */
+enum { N64RT_PAK_NONE, N64RT_PAK_CONTROLLER, N64RT_PAK_TRANSFER, N64RT_PAK_VIRTUAL };   /* (the "Controller paks" setting's kinds: n64rt_pak.c) */
 void n64rt_pak_init(void);
 int  n64rt_pak_kind(int ch);
 int  n64rt_pak_rw(int ch, u32 addr, u8 *block, int write);
+/* the SNAC port's real controllers (n64rt_snac.c): where a device answers on a port it is that channel of the PIF */
+int  n64rt_snac_hw(void);                  /* the SoC has the block */
+void n64rt_snac_sync(void);                /* follow the setting, read who is there */
+int  n64rt_snac_present(int ch);
+int  n64rt_snac_xfer(int ch, const u8 *tx, u32 txlen, u8 *rx, u32 rxlen, u32 *got);
+u32  n64rt_snac_wait_take(void);           /* the SoC clocks spent on the wire since the last call */
 u8   n64rt_pak_crc(const u8 *block);
-void n64rt_pak_state_begin(void);         /* around the copy of the runtime's memory in a save state: a real Transfer Pak is unplugged in it */
+void n64rt_pak_state_begin(void);         /* around the copy of the runtime's memory in a save state: a Transfer Pak is unplugged in it */
 void n64rt_pak_state_end(void);
-void n64rt_pak_state_resumed(u64 delta);  /* after a state is put back */
+void n64rt_pak_state_resumed(void);        /* after a state is put back: the Transfer Paks look for their cartridges again */
 /* the GameShark codes (n64rt_cheat.c): read once, when the game starts, and run in every field */
 void n64rt_cheat_init(void);
 void n64rt_cheat_field(void);
@@ -320,8 +326,6 @@ void n64rt_gbv_block(int n, u32 addr);     /* before the pak reads a block of 32
 u8   n64rt_gbv_read(int n, u32 addr);     /* its bus, 0x0000 - 0xBFFF */
 void n64rt_gbv_write(int n, u32 addr, u8 value);
 void n64rt_gbv_field(void);               /* every video field: a new ROM makes its cartridge and reads its save, the RAM the game wrote and left alone for 2 s is written to the Game Boy game's save file; the only place that talks to the Pocket */
-u32  n64rt_gbv_state_bytes(int n);        /* a save state: the bytes of the cartridge's RAM (and clock) to keep, 0 with none in; the clock's footer brought up to date */
-void n64rt_gbv_resume(int n, u64 delta);   /* after a state is put back: its clock moved on by delta (the SoC's clock), and is its ROM there again (else it is not in) */
 void n64rt_gbv_make(int n);                /* the ROM in its slot is made a cartridge now, if the pak is the SD one (n64rt_pak_init), not at the next video field */
 void n64rt_gbv_restart_prep(void);         /* the game is about to start over (n64rt_restart.c): the ROMs just loaded made cartridges, the RAM written back, the cartridges power-cycled */
 void *n64rt_gbv_keep(u32 *bytes);          /* the cartridges' state, which a restart keeps */

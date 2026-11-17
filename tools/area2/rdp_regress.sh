@@ -2,8 +2,9 @@
 # RDP RTL == model: random seeds at three colour-image widths, LFSR+step mode and SDRAM timing, 8-bit and 32-bit images
 set -u
 cd "$(dirname "$0")/../../sim/rdp"
-./build_rtl.sh >/dev/null || exit 1                          # (obj_rdp: the noise LFSR stepping for each pixel with coverage, RDP_LFSR_PIXEL, as the model's)
-VDEFS= OBJ=obj_free ./build_rtl.sh >/dev/null || exit 1      # (obj_free: the default, free-running)
+# (RDP_DEFS="-DRDP_SHARE": the RTL with that macro, e.g. the 2-cycle pixels through one combiner and one blender)
+VDEFS="-DRDP_LFSR_PIXEL ${RDP_DEFS:-}" ./build_rtl.sh >/dev/null || exit 1     # (obj_rdp: the noise LFSR stepping for each pixel with coverage, RDP_LFSR_PIXEL, as the model's)
+VDEFS="${RDP_DEFS:-}" OBJ=obj_free ./build_rtl.sh >/dev/null || exit 1          # (obj_free: the default, free-running)
 fail=0; n=0
 run() { out=$("$@" 2>&1); rc=$?; n=$((n+1)); case "$out" in *"RTL == model"*) [ $rc -eq 0 ] || { echo "FAIL ($rc): $* -> $(echo "$out" | tail -2)"; fail=$((fail+1)); };; *) echo "FAIL: $* -> $(echo "$out" | tail -2)"; fail=$((fail+1));; esac; }
 for cw in 292 296 320; do
@@ -35,6 +36,8 @@ for s in 79 80; do TB_COPY=1 TB_C8=1 run ./obj_rdp/tb_rdp -r $s 200; done
 TB_COPY=1 TB_SDRAM=1 TB_CPU=30 run ./obj_rdp/tb_rdp -r 81 150
 # a texture rectangle's LOD: the next line as the console keeps it (rule 2)
 for s in 101 102 103 104 105 106; do TB_LOD=1 TB_RECT=1 run ./obj_rdp/tb_rdp -r $s 300; done
+# triangles with the LOD, a quarter of the 2-cycle ones without TEX_LOD (LOD_FRACTION reads 0 there: docs/rdp_exact.md rule 9)
+for s in 1 2 3 107; do TB_LOD=1 run ./obj_rdp/tb_rdp -r $s 300; done
 # the depth image's own dz (rule 8): planes at nearly the same depth, AA_EN, Z_CMP, IM_RD, the blender's B the memory's coverage;
 # a width whose rows share depth-hidden groups, the SoC's memory, and 32-bit images (a wide span in two halves)
 for s in 111 112 113 114 115 116; do TB_ZDZ=1 run ./obj_rdp/tb_rdp -r $s 200; done

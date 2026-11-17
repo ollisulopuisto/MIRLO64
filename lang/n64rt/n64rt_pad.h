@@ -8,7 +8,7 @@
  * and the remap table (below), five words the runtime keeps in RAM (the Pocket's menu has 16 entries at most: it edits the table one field at
  * a time, n64rt_ctrl.h; which layout the settings and the table are -- the live one, a game's own or a family's -- is picked there):
  *
- *   word 0 [4:0]    n=2  "Controller 1 pak": n64rt_pak.c
+ *   word 0 [4:0]    n=2  "Controller paks": n64rt_pak.c
  *          [9:5]    n=3  "Crop Vertical" (the video: rtl/soc/mirlo_regs.sv)
  *          [14:10]  n=4  "Modifier": which Pocket key (a button code, below; 0 none) selects the Held layer of the remap table while
  *                        it is held; that key never reaches the game (so not as any mapped button either)
