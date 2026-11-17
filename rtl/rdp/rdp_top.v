@@ -1,3 +1,18 @@
+// the console's RDP uses one combiner and one blender for both cycles of the 2-cycle mode (docs/rdp.md); RDP_NOSHARE: one of each per cycle
+`ifndef RDP_NOSHARE
+`ifndef RDP_SHARE
+`define RDP_SHARE
+`endif
+`endif
+// the console's RDRAM, not the RDP, sets the pace of a pixel that reads or writes the depth or colour image: RDP_PXGAP clocks (default 4)
+// of nothing after each such pixel; RDP_NOPXGAP: none
+`ifndef RDP_NOPXGAP
+`ifndef RDP_NOSHARE
+`ifndef RDP_PXGAP
+`define RDP_PXGAP 4
+`endif
+`endif
+`endif
 // RDP -- Mirlo's rasterizer for the N64's own command stream, as a game's
 // microcode on the RSP (rtl/rsp) gives it. The contract is the C model,
 // lang/c/rdp/rdp.c built with RDP_N64: for the same command stream the RTL
@@ -409,8 +424,10 @@ module rdp_top (
     // still to be written -- as for the second half of a 32-bit image's wide span, whose first group may be the first half's last
     wire        hz_ok = !(rq_h || rq_hz) || (!(wr_busy && wr_seti == rq_set)
                                   && ((cimg_width[3:0] == 4'd0 && !rq_half) || (!wr_busy && !wq_pend)));
-    wire [9:0]  z_have0, z_have1, c_have0, c_have1;
-    wire [9:0]  z_have = set_cur ? z_have1 : z_have0, c_have = set_cur ? c_have1 : c_have0;      // (the row being drawn's)
+    wire [9:0]  z_have, c_have;
+    wire        have_set;
+    // (the row being drawn's words in: the counts of the request taken last when that is its own; else its reads were all in before the next was taken)
+    wire        have_cur = set_cur == have_set;
     wire        h_done = set_cur ? h_done1 : h_done0;
     wire        rq_cur = rq_pend && rq_set == set_cur;          // the row being drawn's own request is still to be taken
     // a row's results in the new buffers so far, by set -- as the write engine
@@ -426,7 +443,7 @@ module rdp_top (
         .rd_valid(rq_pend && old_hold[rq_set] == 5'd0 && hz_ok), .rd_ready(rd_ready), .rd_load(rq_load), .rd_z(rq_z), .rd_c(rq_c), .rd_h(rq_h), .rd_hz(rq_hz),
         .rd_zbase(rq_zbase), .rd_cbase(rq_cbase), .rd_x0(rq_x0), .rd_x1(rq_x1), .rd_set(rq_set), .rd_c32(cimg32), .rd_sh(shadow_en && cimg_ok && !cimg8 && !cimg32 && cimg[22:3] != zimg[22:3]),
         .rd_ldst(rq_ldst), .rd_ln(rq_ln), .rd_lmode(rq_lmode), .rd_ldxt(rq_ldxt), .rd_lodd(rq_lodd),
-        .z_have0(z_have0), .z_have1(z_have1), .c_have0(c_have0), .c_have1(c_have1), .h_done0(h_done0), .h_done1(h_done1), .hlbw_we(hl_we), .hlbw_z(hl_z), .hlbw_addr(hl_wa),
+        .z_have(z_have), .c_have(c_have), .have_set(have_set), .h_done0(h_done0), .h_done1(h_done1), .hlbw_we(hl_we), .hlbw_z(hl_z), .hlbw_addr(hl_wa),
         .lbw_z_we(mw_z_we), .lbw_c_we(mw_c_we), .lbw_s_we(mw_s_we), .lbw_addr(mw_addr), .lbw_data(mw_data),
         .wr_valid(wq_pend), .wr_ready(wr_ready), .wr_fill(wq_fill), .wr_z(wq_z), .wr_c8(cimg8), .wr_c32(cimg32), .wr_fmode(cyc == 2'd3),
         .wr_cbase(wq_cbase), .wr_zbase(wq_zbase), .wr_x0(wq_x0), .wr_x1(wq_x1), .wr_fillc(fill), .wr_set(wq_set), .wr_sh(shadow_en && cimg_ok && !cimg8 && !cimg32 && cimg[22:3] != zimg[22:3]), .lbr_sdata(snew_rd),
@@ -461,10 +478,27 @@ module rdp_top (
     // memory is in the old buffers
     wire [9:0] pix_wi = ({9'd0, xsp[0]} + px_cnt) >> 1;
     // (a 32-bit image's colour span: a word a pixel)
-    wire       pix_ok = !rq_cur && h_done && (!z_cmp || z_have > pix_wi) && (!need_mem || c_have > (cimg32 ? px_cnt : pix_wi));
+`ifdef RDP_PXGAP
+    // (RDP_PXGAP clocks of nothing after each pixel that reads or writes the depth or colour image: the RDRAM's pace)
+    reg  [3:0] pxg;
+    wire       pxg_ok = pxg == 4'd0;
+`else
+    wire       pxg_ok = 1'b1;
+`endif
+    // (the gap is in pix_ok, not pix_slot: with the LOD a pixel not ready in time is a ghost, which keeps the neighbour's perspective divide on time)
+    wire       pix_ok = pxg_ok && !rq_cur && h_done && (!z_cmp || !have_cur || z_have > pix_wi) && (!need_mem || !have_cur || c_have > (cimg32 ? px_cnt : pix_wi));
     // a pixel that goes through the texture stages twice (rdp_pix two_pass), or takes the LOD, is issued every second
     // clock: pix_valid is still up the clock after an issue
+`ifdef RDP_SHARE
+    // A 2-cycle pixel goes through rdp_pix's combiner and blender twice (their one set of hardware, a pass every three clocks): its
+    // pixels are issued every second clock, all on the same parity of a free-running count, so that a first pass never meets another
+    // pixel's second
+    reg        ph_t;
+    always @(posedge clk) ph_t <= ~ph_t;
+    wire       pix_slot = !((two_pass || lod_on) && pix_valid) && (cyc != 2'd1 || ph_t);
+`else
     wire       pix_slot = !((two_pass || lod_on) && pix_valid);
+`endif
     // The LOD: a pixel's next pixel goes through the perspective divide two clocks after it when the walk goes to the
     // right (pix_fol: rdp_pix takes its step from the next pass A), so the pixel issued then is the next one, or -- its
     // memory not in, or the span ended -- a ghost of it (through the perspective divide, never drawn; the pixel itself
@@ -474,6 +508,12 @@ module rdp_top (
     wire       pix_end = pix_pos == xe;
     wire       pix_gh = lod_on && pix_slot && (pix_g0 || (pix_fol && (pix_end || !pix_ok)));
     wire       pix_go = pix_ok && pix_slot && !pix_gh && !(lod_on && pix_end);
+`ifdef RDP_PXGAP
+    always @(posedge clk)
+        if (st == S_PIX && row_wq && pix_go && (z_cmp || z_upd || need_mem)) pxg <= `RDP_PXGAP;
+        else if (pxg != 4'd0) pxg <= pxg - 4'd1;
+    initial pxg = 4'd0;
+`endif
     // nothing of the primitive is under way any more
     wire       all_quiet = !pix_busy && !pix_valid && !px_valid && !msk_we
                          && !rq_pend && !rd_busy && !wq_pend && !wr_busy;
@@ -731,8 +771,11 @@ module rdp_top (
     wire        dz_s = vs == 4'd15 && vz;            // (Z's own step: its DaDy is zdy; at step 0 of vi = 7 it is W's that arrives)
     wire [31:0] dy_c = dz_s ? zdy : {vgy_hi, vi[0] ? vr_q[31:16] : vr_q[15:0]};
     // (de - de >> 2 - dy + dy >> 2 with 32-bit wrap, as the console's: two terms that each fit, not (de - dy) >> 2)
-    wire [31:0] dq   = (vde & 32'hFFFFFE00) - (dy_c & 32'hFFFFFE00);
-    wire [31:0] dq2  = asr(vde & 32'hFFFFFE00, 5'd2) - asr(dy_c & 32'hFFFFFE00, 5'd2);
+    // (both are multiples of 512, so their quarters are exact: the difference of the quarters is the quarter of the difference, taken
+    // on 33 bits, where the difference itself wraps -- one subtractor for dq and dq2)
+    wire [32:0] dq33 = {vde[31], vde & 32'hFFFFFE00} - {dy_c[31], dy_c & 32'hFFFFFE00};
+    wire [31:0] dq   = dq33[31:0];
+    wire [31:0] dq2  = {dq33[32], dq33[32:2]};
     wire [31:0] dif_d = dq - dq2;
     wire [2:0]  dif_a = dz_s ? 3'd7 : vi - 3'd1;
     wire        dif_w = st == S_VSET && (dz_s || (vs == 4'd0 && vi != 3'd0));

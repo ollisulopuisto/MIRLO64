@@ -325,7 +325,8 @@ in D while a register it reads is on its way from a 64-bit result. E computes 32
 | `W64_UA` | yes | `ldl`, `ldr`, `sdl`, `sdr` (with `W64_SH`, `FAST`, `XWB`, `BIG`): an access to the doubleword the address is in, on the d-shifter's register, a byte a cycle. A store rotates `rt` by 8 - *n* (`sdl`) or 7 - *n* (`sdr`) bytes (*n* the address' low three bits) and writes its two words with the strobes of the bytes it covers; a load takes the doubleword through a byte at a time into `rt`'s place, 8 steps (each of the four takes about 20 CPU clocks on cached memory, back to back). Device, mapped and non-RDRAM addresses are the same address errors as `ld`'s and `sd`'s |
 
 The bitstream and `n64rt.sys` are a pair, and the shipped CPU has every level. COP0 register 7 reads the levels in its
-bits 31 (ALU), 30 (SH), 29 (MD), 28 (DIV) and 27 (UA); the runtime checks at start-up that all five are set and, if one
+bits 31 (ALU), 30 (SH), 29 (MD), 28 (DIV) and 27 (UA) (and bit 26 is the FPU's double precision, FPD64, which the shipped CPU does
+not have and the runtime does not ask for); the runtime checks at start-up that all five are set and, if one
 is not, stops with a notice on the screen (as for a missing layout mark) and starts no game. It keeps no copy of a
 register's upper half, has no soft HI and LO and does no 64-bit instruction itself. What the CPU does not have is a
 Reserved Instruction, and a Reserved Instruction stops the game with a message on the UART like any exception the
@@ -390,6 +391,20 @@ faster than the console's (they are floats). The cycles were cut by taking the s
 operands are normal numbers (add, multiply, the conversions to an integer), by starting a comparison, `abs`, `neg` and the
 conversions between S and D there, by the sum of operands of the same sign and the product (one bit to normalise at most) needing no
 count of leading zeros, and by flushing the operands as they are read. Integer instruction cycles are unchanged.
+
+**FPD64** (`mips_core`'s parameter, `MIRLO_FPD64` in `mips_sys.sv`, off by default; with `FAST`; COP0 register 7's bit 26):
+`add.d`, `sub.d`, `mul.d`, `abs.d`, `neg.d` and `c.cond.d` are computed at 53 bits by `fpu_d64.sv` instead of as floats. The rules
+are the single-precision path's: an input below the normals is a zero of its sign, arithmetic rounds to nearest even with an
+unbounded exponent (whatever FCR31's rounding mode is) and then a result below the normals is a zero and one above them
+infinity, a NaN result is the default one (`0x7FF7FFFF_FFFFFFFF`, the single's `0x7FBFFFFF` in a double's fields), no
+exceptions and no cause or flag bits; a compare is exact on the flushed values. `div.d`, `sqrt.d` and every conversion
+(`cvt.s.d`, `cvt.d.w`, `cvt.d.l`, the round / trunc / ceil / floor and `cvt` to `.w` and `.l`) stay on the datapath above, a double
+taken to a float and back. The unit is a few small pieces used over and over: one 57-bit adder, a shifter on its accumulator
+(by 8 or 1 bits, right with the shifted-out bits jammed into a sticky bit, or left), and one 26 x 26 multiplier (a DSP block)
+for the product in four pieces. The cycles the instruction is in M: `add.d` and `sub.d` 8 + a step per 8 bits (and one per bit
+of the remainder) of the exponents' difference + the same for the cancellation of a difference (a sum: none), `mul.d` 13,
+`abs.d` and `neg.d` 3, a compare 3 (6 when the exponents are equal); a special operand is the result at once (3). The VR4300's
+are 3 (add, sub) and 8 (mul). `sim/n64/fpd64.h` is the model of it (and the host's own doubles check the model: `sim/fpd64`).
 
 ### Address translation
 
@@ -956,10 +971,14 @@ loads it as slot 4, and the runtime looks the cartridge up once at boot (`lang/n
 - **rev=**: the line is only for those values of the header's version byte (ROM `0x3F`).
 
 Only the EEPROM's size is acted on: an SRAM or a FlashRAM is found from the game's accesses. A cartridge that is not in
-the file, or no file, is a 4 Kbit EEPROM. A command for block 64 or above makes the slot 2,048 bytes whatever the file
-says. No setting overrides the database; a wrong entry is corrected in the file. The lookup is bounded by the file's
-size and cannot fail on malformed input. `tools/build_savedb.py` regenerates the file from public lists (mupen64plus,
-the libretro No-Intro database, ares, micro-64.com); it contains cartridge IDs and types only.
+the file, or no file, is what the ROM's own header says if it is an [advanced homebrew
+header](https://n64brew.dev/wiki/ROM_Header#Advanced_Homebrew_ROM_Header) (`ED` at `0x3C` - `0x3D`, the save type in the
+high nibble of `0x3F`: 1 is a 4 Kbit EEPROM, 2 a 16 Kbit one; some ROM hacks, such as Mario Kart 64 Amped Up, and
+libdragon games that set a save type have one), and otherwise a 4 Kbit EEPROM. A command for block 64 or above makes the
+slot 2,048 bytes whatever the file says. No setting overrides the database; a wrong entry is corrected in the file. The
+lookup is bounded by the file's size and cannot fail on malformed input. `tools/build_savedb.py` regenerates the file
+from public lists (mupen64plus, the libretro No-Intro database, ares, micro-64.com); it contains cartridge IDs and types
+only.
 
 ### Controller 1's accessory
 
@@ -1364,8 +1383,14 @@ that acknowledges it: the interrupts come in the middle of FPU operations, which
 each). `TB_RETLOG=1` prints the cycle, the address and the word of every retired instruction, and `fpu_cycles.py [--bench
 obj_dir/Vmips_core]` runs a ROM of blocks between markers and prints what every COP1 instruction, and the multiplies, divides, loads,
 stores and branches, cost in cycles (the table in "The FPU").
+`gen_rand_fpu_rom.py SEED out.z64 N d64` writes double programs for a core with FPD64 (`TB_FPD64=1`; the model does the doubles exactly), and
+`fpd64_rom.sh <out.z64>` builds `lang/mips/test/fpu_d64_test.c` for the same (the failures in `fails`).
 
 ### Single blocks
+
+- `sim/fpd64`: `build.sh`, then `obj_dir/Vfpu_d64 [millions of operands per operation] [seed]`: the double unit alone against its
+  model (`sim/n64/fpd64.h`) and the model against the host's IEEE doubles, on a grid of the special values and random operands made to
+  cancel, tie and overflow, with the cycles each operation took.
 
 - `sim/ai`: `build.sh`, then `obj_ai/tb_ai [handler latency us]`: the AI's queue and interrupt, the third buffer
   dropped, the reader's lead, and a driver that queues its next buffer from the interrupt.
@@ -1379,7 +1404,7 @@ stores and branches, cost in cycles (the table in "The FPU").
 | Test | How it runs | What it checks |
 |---|---|---|
 | `pad_test.py` | on the host (needs gcc) | `n64rt_pad_map()` against an independent table, over every combination of settings |
-| `savedb_host.c` | on the host, with the address sanitiser (the command is in its header) | the database's lookup: its cases, the shipped file, random bytes |
+| `savedb_host.c` | on the host, with the address sanitiser (the command is in its header) | the database's lookup: its cases, the homebrew header, the shipped file, random bytes |
 | `cart_host.c` | on the host (the command is in its header) | the cartridge's byte and halfword reads (`n64rt_cart.h`) against the console's: a halfword of odd index reads the next one |
 | `tlb_insn_host.py` | on the host (needs gcc) | the runtime's TLB instructions against a model of the VR4300's registers, on random operations |
 | `rcp_bench.mk` | a ROM the released runtime runs in `sim/mips_soc` | the monitor's RCP emulation against the console's answers |

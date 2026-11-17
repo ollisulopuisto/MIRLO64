@@ -677,9 +677,10 @@ s32 n64rt_osPfsIsPlug(OSMesgQueue *mq, u8 *pattern)
  * the type their status command gets with the 4 Kbit one exactly (Pilotwings 64 shows "EEPROM CHECK FAILED", Super Mario 64,
  * Star Fox 64 and Mario Kart 64 never get past their first screen when it says 16 Kbit). So it is told from outside: by the
  * SAVE-TYPE DATABASE, a text file on the SD card (n64savedb.txt, data.json's slot 4, n64rt_savedb.h) with a line per
- * cartridge ID, looked up once at boot with the ID in the ROM's header (eep_db_init) -- no game is named here, and a game that
- * is not in the file, or no file, is a 4 Kbit chip. There is no setting to override it (the core had an "EEPROM size" one, Auto /
- * 4 Kbit / 16 Kbit, interact field 8: removed -- the database decides; fix a game's entry in the file).
+ * cartridge ID, looked up once at boot with the ID in the ROM's header (eep_db_init) -- no game is named here; a game that
+ * is not in the file, or no file, is what its homebrew header says (an ID "?ED?", n64rt_savedb_header), else a 4 Kbit chip.
+ * There is no setting to override it (the core had an "EEPROM size" one, Auto / 4 Kbit / 16 Kbit, interact field 8:
+ * removed -- the database decides; fix a game's entry in the file).
  * A block of 64 or more, which only a 16 Kbit game is asked for, makes the slot 2,048 bytes whatever the database says.
  * For tests and for trying a game, at build time only: N64RT_EEP16K forces 16 Kbit (make EEP16K=1); N64RT_EEP_FORCE (an
  * expression: 1 the 4 Kbit chip, 2 the 16 Kbit one, else the database) stands for a database in a simulation. */
@@ -706,17 +707,20 @@ static void eep_db_init(void)
     bridge_settle();
     u32 len = apf_bridge_file_size_read();
     apf_bridge_slot_id_write(prev);
-    s_eep_db_16k = 0;
-    if (len == 0) { n64rt_log("n64rt: no save-type database: the EEPROM is 4 Kbit\n"); return; }
     if (len > LAYOUT_SAVEDB_MAX) len = LAYOUT_SAVEDB_MAX;
     const u32 w = n64rt_rom_word(0x38u), v = n64rt_rom_word(0x3Cu);       /* 0x3B..0x3E: the ID, 0x3F: the version */
     const unsigned char id[4] = { (unsigned char)w, (unsigned char)(v >> 24), (unsigned char)(v >> 16), (unsigned char)(v >> 8) };
-    const int kind = n64rt_savedb_lookup((const char *)(uintptr_t)LAYOUT_SAVEDB, len, id, v & 0xFFu);
+    /* the file first (a line corrects anything), then the ROM's own homebrew header ("?ED?", n64rt_savedb.h) */
+    int kind = len ? n64rt_savedb_lookup((const char *)(uintptr_t)LAYOUT_SAVEDB, len, id, v & 0xFFu) : N64RT_SAVEDB_NONE;
+    const int from_file = kind != N64RT_SAVEDB_NONE;
+    if (!from_file) kind = n64rt_savedb_header(id, v & 0xFFu);
     s_eep_db_16k = kind == N64RT_SAVEDB_EEP16K;
     static const char *const names[] = { "not in the file", "eeprom4k", "eeprom16k", "sram", "flash", "none" };
-    n64rt_log("n64rt: save-type database of %lu bytes: %c%c%c%c version %lu is %s\n", (unsigned long)len,
+    if (!len && kind == N64RT_SAVEDB_NONE) { n64rt_log("n64rt: no save-type database: the EEPROM is 4 Kbit\n"); return; }
+    n64rt_log("n64rt: save-type database of %lu bytes: %c%c%c%c version %lu is %s%s\n", (unsigned long)len,
            id[0] >= 32 && id[0] < 127 ? id[0] : '?', id[1] >= 32 && id[1] < 127 ? id[1] : '?', id[2] >= 32 && id[2] < 127 ? id[2] : '?',
-           id[3] >= 32 && id[3] < 127 ? id[3] : '?', (unsigned long)(v & 0xFFu), names[kind]);
+           id[3] >= 32 && id[3] < 127 ? id[3] : '?', (unsigned long)(v & 0xFFu), names[kind],
+           from_file || kind == N64RT_SAVEDB_NONE ? "" : " (the ROM's homebrew header)");
 }
 static u32 s_eep_bytes;                 /* the EEPROM's part of the slot in use (0: the game has not spoken to one) */
 static void eep_use(u32 bytes)
@@ -1335,7 +1339,7 @@ void n64rt_mi_init(void)
     /* (bit 10, written with bit 11: the game's RDRAM is 4 MiB -- the console without its Expansion Pak, the core's setting:
      * the game's accesses to the upper half come here, and are answered as RDRAM that is not there, n64rt_os.c emulate_hw) */
     /* (bit 12, written with bit 13: 0x2000_0000 - 0x4FFF_FFFF are the game's mapped addresses while it runs -- not the monitor
-     * level, not a helper of the runtime's with Status bit 4, n64rt_boot.c ul_patch --, as the rest of the VR4300's KUSEG: a game
+     * level, not code of the runtime's with Status bit 4 --, as the rest of the VR4300's KUSEG: a game
      * can map an overlay at 0x4000_0000 and run it there. A core without it reads the bit 0 and keeps them physical) */
     /* (bit 14, written with bit 15: the game's word accesses to the SP's registers, SP_PC and the DPC's -- but its stores of
      * DPC_STATUS, whose CLR_CLOCK_CTR keeps DPC_CLOCK here -- are the RSP's host port's, no trap: rcp_read_ / rcp_write_ pass
