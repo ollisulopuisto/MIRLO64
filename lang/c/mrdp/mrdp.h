@@ -243,6 +243,6 @@ void mrdp_push(mrdp_t *r, uint32_t word);
 
 /* building blocks, exported for unit tests and the RTL testbenches */
 uint32_t mrdp_rcp(uint32_t w, int *shift);   /* see mrdp.c */
-int32_t mrdp_persp(int32_t s, uint32_t w);   /* S/W as s10.5 */
+int32_t mrdp_persp(int32_t s, uint32_t w);   /* S/W as s10.5; W is 2.30 (mrdp_slope30's output) */
 
 #endif
