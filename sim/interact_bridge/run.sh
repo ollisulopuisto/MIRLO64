@@ -9,14 +9,34 @@ trap 'rm -rf "$B"' EXIT HUP INT TERM
 # (the readable variant of the menu: the shipped one is writeonly, so the Pocket never reads it back -- tools/gen_interact.py)
 python3 "$R/tools/gen_interact.py" --readable "$B/interact_readable.json" > /dev/null
 python3 "$H/gen_elements.py" "$B/interact_readable.json" > "$B/elements.svh"
+# The sweep's combos are independent compile+run pairs, and the vvp run is
+# the sweep's cost (the compiles are sub-second), so the combos run in
+# parallel, each into its own files; the results are printed below in the
+# original serial order, and the pass/fail gate is unchanged.
+for order in 0 1; do
+ for mode in 0 1; do
+  for s in ${SPACINGS:-6 10 16 24 32 40 60 100}; do
+    (
+      iverilog -g2012 -I "$R/rtl/soc" -I "$B" -P interact_bridge_test.S=$s -P interact_bridge_test.MODE=$mode -P interact_bridge_test.ORDER=$order -s interact_bridge_test -o "$B/sim.$order.$mode.$s" \
+        "$R/rtl/soc/mirlo_regs.sv" "$R/rtl/soc/fifo_fwft.sv" "$R/sim/interact/rcp_mi_stub.sv" "$R/target/pocket/sync_fifo.sv" \
+        "$H/dcfifo_model.sv" "$H/interact_bridge_test.sv" > "$B/err.$order.$mode.$s" 2>&1 &&
+      vvp -N "$B/sim.$order.$mode.$s" | grep -v 'sorry\|finish' > "$B/out.$order.$mode.$s"
+    ) &
+  done
+ done
+done
+wait
 fail=0
 for order in 0 1; do
  for mode in 0 1; do
   for s in ${SPACINGS:-6 10 16 24 32 40 60 100}; do
-    iverilog -g2012 -I "$R/rtl/soc" -I "$B" -P interact_bridge_test.S=$s -P interact_bridge_test.MODE=$mode -P interact_bridge_test.ORDER=$order -s interact_bridge_test -o "$B/sim" \
-        "$R/rtl/soc/mirlo_regs.sv" "$R/rtl/soc/fifo_fwft.sv" "$R/sim/interact/rcp_mi_stub.sv" "$R/target/pocket/sync_fifo.sv" \
-        "$H/dcfifo_model.sv" "$H/interact_bridge_test.sv" 2>&1 | grep -E 'error|Error' || true
-    out=$(vvp -N "$B/sim" | grep -v 'sorry\|finish')
+    grep -E 'error|Error' "$B/err.$order.$mode.$s" || true
+    if [ ! -s "$B/out.$order.$mode.$s" ]; then
+      echo "interact_bridge S=$s MODE=$mode ORDER=$order: no simulation output (compile or run failed)" >&2
+      cat "$B/err.$order.$mode.$s" >&2
+      exit 1
+    fi
+    out=$(cat "$B/out.$order.$mode.$s")
     echo "$out" | grep 'interact_bridge'
     echo "$out" | grep -v 'interact_bridge S=' || true
     # (the shuffled order, ORDER=1, is a stress that shows a hazard of the template's read path: reported, not gated)
