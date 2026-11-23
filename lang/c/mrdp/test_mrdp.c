@@ -84,8 +84,10 @@ int main(void)
     }
     printf("rcp worst relative error %.2e (%.1f bits)\n", worst, -log2(worst));
     CHECK(worst < 1.0 / 8192, "reciprocal less than 13 bits");
-    CHECK(mrdp_persp(100 << 16, 0x10000) == 100 * 32, "persp at W=1");
-    CHECK(mrdp_persp(50 << 16, 0x8000) == 100 * 32, "persp at W=0.5: %d", mrdp_persp(50 << 16, 0x8000));
+    /* W is 2.30 here, as the triangle setup produces it (mrdp_slope30), not 16.16:
+     * 1.0 is 0x40000000, 0.5 is 0x20000000. */
+    CHECK(mrdp_persp(100 << 16, 0x40000000) == 100 * 32, "persp at W=1");
+    CHECK(mrdp_persp(50 << 16, 0x20000000) == 100 * 32, "persp at W=0.5: %d", mrdp_persp(50 << 16, 0x20000000));
 
     g_mem = calloc(MEM_SIZE / 2, 2);
     if (getenv("TEST_MRDP_CAPTURE")) g_cap = fopen(getenv("TEST_MRDP_CAPTURE"), "wb");
