@@ -8,12 +8,20 @@ ASSETS_TAG=${ASSETS_TAG:-q25.1}
 DL=$HOME/quartus-dl
 mkdir -p "$DL"
 cd "$DL"
+# The two installers download in parallel: a single stream is throttled well
+# below what two streams pull, so the small .run comes down for free while the
+# 1.4 GB .qdz transfers.
+pids=""
 for f in qinst-lite-linux-25.1std-1129.run cyclonev-25.1std.0.1129.qdz; do
   if [ ! -s "$f" ]; then
     : "${ASSETS_TOKEN:?ASSETS_TOKEN secret is not set}"
-    GH_TOKEN=$ASSETS_TOKEN gh release download "$ASSETS_TAG" -R "$ASSETS_REPO" -p "$f"
+    GH_TOKEN=$ASSETS_TOKEN gh release download "$ASSETS_TAG" -R "$ASSETS_REPO" -p "$f" &
+    pids="$pids $!"
   fi
 done
+rc=0
+for p in $pids; do wait "$p" || rc=1; done
+[ "$rc" -eq 0 ]
 # refuse an HTML error page posing as an installer
 head -c 2 qinst-lite-linux-25.1std-1129.run | grep -q '#!'
 unzip -tq cyclonev-25.1std.0.1129.qdz >/dev/null
